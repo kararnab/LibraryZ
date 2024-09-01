@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: common-config
+  namespace: book-library
+data:
+  JWT_SECRET: "your_jwt_secret"

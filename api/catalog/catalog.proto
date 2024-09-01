@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package catalog;
+
+option go_package = "./catalogpb";
+
+// Book message defines the structure of a book in the catalog.
+message Book {
+    string id = 1;         // Unique identifier for the book
+    string title = 2;      // Title of the book
+    string author = 3;     // Author of the book
+    string genre = 4;      // Genre of the book
+    repeated string keywords = 5; // List of keywords for the book
+}
+
+// GetBookRequest message is used to request a book by its ID.
+message GetBookRequest {
+    string id = 1; // ID of the book to retrieve
+}
+
+// GetBookResponse message is used to return a single book.
+message GetBookResponse {
+    Book book = 1; // The retrieved book
+}
+
+// ListBooksRequest message is used to request a list of all books.
+message ListBooksRequest {}
+
+// ListBooksResponse message is used to return a list of all books.
+message ListBooksResponse {
+    repeated Book books = 1; // List of books in the catalog
+}
+
+// AddBookRequest message is used to add a new book to the catalog.
+message AddBookRequest {
+    Book book = 1; // The book to add
+}
+
+// AddBookResponse message is used to return the added book.
+message AddBookResponse {
+    Book book = 1; // The added book
+}
+
+// UpdateBookRequest message is used to update an existing book.
+message UpdateBookRequest {
+    Book book = 1; // The updated book
+}
+
+// UpdateBookResponse message is used to return the updated book.
+message UpdateBookResponse {
+    Book book = 1; // The updated book
+}
+
+// DeleteBookRequest message is used to delete a book by its ID.
+message DeleteBookRequest {
+    string id = 1; // ID of the book to delete
+}
+
+// DeleteBookResponse message is used to confirm the deletion.
+message DeleteBookResponse {
+    string message = 1; // Confirmation message
+}
+
+// CatalogService defines the gRPC service for the catalog.
+service CatalogService {
+    rpc GetBook(GetBookRequest) returns (GetBookResponse);
+    rpc ListBooks(ListBooksRequest) returns (ListBooksResponse);
+    rpc AddBook(AddBookRequest) returns (AddBookResponse);
+    rpc UpdateBook(UpdateBookRequest) returns (UpdateBookResponse);
+    rpc DeleteBook(DeleteBookRequest) returns (DeleteBookResponse);
+}

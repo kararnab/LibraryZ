@@ -1,0 +1,108 @@
+package catalog
+
+import (
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/kararnab/libraryZ/api/catalog/catalogpb"
+)
+
+// BookCatalog is an in-memory data structure for storing books.
+type BookCatalog struct {
+	mu    sync.RWMutex
+	books map[string]*catalogpb.Book
+}
+
+// NewBookCatalog initializes a new in-memory book catalog.
+func NewBookCatalog() *BookCatalog {
+	return &BookCatalog{
+		books: make(map[string]*catalogpb.Book),
+	}
+}
+
+// ServiceServerImpl is the implementation of the gRPC CatalogService.
+type ServiceServerImpl struct {
+	// catalogpb.UnimplementedCatalogServiceServer
+	catalog *BookCatalog
+}
+
+// NewCatalogServiceServer creates a new CatalogServiceServerImpl.
+func NewCatalogServiceServer() *ServiceServerImpl {
+	return &ServiceServerImpl{
+		catalog: NewBookCatalog(),
+	}
+}
+
+// GetBook retrieves a book by ID.
+func (s *ServiceServerImpl) GetBook(req *catalogpb.GetBookRequest) (*catalogpb.GetBookResponse, error) {
+	s.catalog.mu.RLock()
+	defer s.catalog.mu.RUnlock()
+
+	book, exists := s.catalog.books[req.Id]
+	if !exists {
+		return nil, fmt.Errorf("book with ID %s not found", req.Id)
+	}
+
+	return &catalogpb.GetBookResponse{Book: book}, nil
+}
+
+// ListBooks lists all books in the catalog.
+func (s *ServiceServerImpl) ListBooks() (*catalogpb.ListBooksResponse, error) {
+	s.catalog.mu.RLock()
+	defer s.catalog.mu.RUnlock()
+
+	var books []*catalogpb.Book
+	for _, book := range s.catalog.books {
+		books = append(books, book)
+	}
+
+	return &catalogpb.ListBooksResponse{Books: books}, nil
+}
+
+// AddBook adds a new book to the catalog.
+func (s *ServiceServerImpl) AddBook(req *catalogpb.AddBookRequest) (*catalogpb.AddBookResponse, error) {
+	s.catalog.mu.Lock()
+	defer s.catalog.mu.Unlock()
+
+	book := req.Book
+	if _, exists := s.catalog.books[book.Id]; exists {
+		return nil, fmt.Errorf("book with ID %s already exists", book.Id)
+	}
+
+	s.catalog.books[book.Id] = book
+	log.Printf("Book with ID %s added", book.Id)
+
+	return &catalogpb.AddBookResponse{Book: book}, nil
+}
+
+// UpdateBook updates an existing book in the catalog.
+func (s *ServiceServerImpl) UpdateBook(req *catalogpb.UpdateBookRequest) (*catalogpb.UpdateBookResponse, error) {
+	s.catalog.mu.Lock()
+	defer s.catalog.mu.Unlock()
+
+	book := req.Book
+	if _, exists := s.catalog.books[book.Id]; !exists {
+		return nil, fmt.Errorf("book with ID %s not found", book.Id)
+	}
+
+	s.catalog.books[book.Id] = book
+	log.Printf("Book with ID %s updated", book.Id)
+
+	return &catalogpb.UpdateBookResponse{Book: book}, nil
+}
+
+// DeleteBook deletes a book from the catalog.
+func (s *ServiceServerImpl) DeleteBook(req *catalogpb.DeleteBookRequest) (*catalogpb.DeleteBookResponse, error) {
+	s.catalog.mu.Lock()
+	defer s.catalog.mu.Unlock()
+
+	if _, exists := s.catalog.books[req.Id]; !exists {
+		return nil, fmt.Errorf("book with ID %s not found", req.Id)
+	}
+
+	delete(s.catalog.books, req.Id)
+	log.Printf("Book with ID %s deleted", req.Id)
+
+	return &catalogpb.DeleteBookResponse{Message: fmt.Sprintf("Book with ID %s deleted successfully", req.Id)}, nil
+}
