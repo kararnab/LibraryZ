@@ -1,0 +1,44 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Editor Specific
+.idea/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Runtime data dir for the Go server (LIBRARYZ_STORAGE_DIR default)
+data/
+
+# File-backed sqlite (tests use :memory:, but defensive)
+*.db
+*.sqlite
+*.sqlite3
+
+# Android Studio per-machine config (also covered by frontend/.gitignore,
+# duplicated here defensively for any future top-level appearance)
+local.properties

@@ -1,0 +1,311 @@
+openapi: 3.1.0
+info:
+  title: LibraryZ API
+  version: 0.1.0
+  description: |
+    Phase 1 surface for LibraryZ: auth, catalog (works + editions), and
+    content-addressable file storage. See PLAN.md in the repo root.
+servers:
+  - url: http://localhost:8080
+    description: Local dev
+
+tags:
+  - name: health
+  - name: auth
+  - name: catalog
+  - name: editions
+
+security: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /auth/signup:
+    post:
+      tags: [auth]
+      summary: Create a new user account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignUpRequest"
+      responses:
+        "201":
+          description: Created
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Exchange credentials for a JWT (returned in Authorization header)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated. JWT is returned in the `Authorization` response header.
+          headers:
+            Authorization:
+              description: "`Bearer <jwt>`"
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /works:
+    get:
+      tags: [catalog]
+      summary: List works
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Work" }
+    post:
+      tags: [catalog]
+      summary: Create a new work
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /works/{id}:
+    get:
+      tags: [catalog]
+      summary: Get a single work with its editions and tags
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /works/{id}/editions:
+    post:
+      tags: [editions]
+      summary: Upload a new edition (file) for a work
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [format, file]
+              properties:
+                format:
+                  type: string
+                  description: "pdf | epub | mobi | azw3 | djvu | cbz | txt | ..."
+                language:
+                  type: string
+                  description: BCP-47 language tag (optional)
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Edition" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /editions/{id}:
+    get:
+      tags: [editions]
+      summary: Get edition metadata
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Edition" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /editions/{id}/download:
+    get:
+      tags: [editions]
+      summary: Download the edition bytes
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      responses:
+        "200":
+          description: File stream
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            X-Content-SHA256:
+              schema: { type: string, description: "Hex sha256 of the bytes (matches Edition.sha256)" }
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    UUIDPathId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        text/plain:
+          schema: { type: string }
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        text/plain:
+          schema: { type: string }
+    NotFound:
+      description: Resource not found
+      content:
+        text/plain:
+          schema: { type: string }
+    InternalError:
+      description: Server error
+      content:
+        text/plain:
+          schema: { type: string }
+
+  schemas:
+    Health:
+      type: object
+      properties:
+        status: { type: string, example: Healthy }
+        time:   { type: string, format: date-time }
+
+    SignUpRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string, minLength: 1 }
+        name:     { type: string }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string }
+
+    CreateWorkRequest:
+      type: object
+      required: [title]
+      properties:
+        title:            { type: string }
+        subtitle:         { type: string }
+        authors:          { type: string, description: "Phase 1: semicolon-separated. Normalized in Phase 2." }
+        description:      { type: string }
+        language:         { type: string }
+        publication_year: { type: integer }
+        isbn:             { type: string }
+        openlibrary_id:   { type: string }
+
+    Work:
+      type: object
+      properties:
+        id:               { type: string, format: uuid }
+        title:            { type: string }
+        subtitle:         { type: string }
+        authors:          { type: string }
+        description:      { type: string }
+        language:         { type: string }
+        publication_year: { type: integer }
+        isbn:             { type: string }
+        openlibrary_id:   { type: string }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+        editions:
+          type: array
+          items: { $ref: "#/components/schemas/Edition" }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/Tag" }
+
+    Edition:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        work_id:     { type: string, format: uuid }
+        format:      { type: string }
+        language:    { type: string }
+        size_bytes:  { type: integer, format: int64 }
+        sha256:      { type: string }
+        uploaded_by: { type: integer }
+        created_at:  { type: string, format: date-time }
+
+    Tag:
+      type: object
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string }

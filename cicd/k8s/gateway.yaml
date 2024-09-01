@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: book-library
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      containers:
+        - name: gateway
+          image: gateway:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: GATEWAY_PORT
+              value: "8080"
+            - name: RECOMMENDATION_SERVICE_URL
+              value: "http://recommendation:5000"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth:4000"
+            - name: CATALOG_SERVICE_URL
+              value: "http://catalog:3000"
+            - name: JWT_SECRET
+              valueFrom:
+                configMapKeyRef:
+                  name: common-config
+                  key: JWT_SECRET
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: book-library
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: gateway
