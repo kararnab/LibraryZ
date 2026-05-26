@@ -20,7 +20,11 @@ type Storage interface {
 	// by content hash. Returns the resulting Object whose Key can be used
 	// with Get.
 	Put(ctx context.Context, r io.Reader) (Object, error)
-	Get(ctx context.Context, key string) (io.ReadCloser, error)
+	// Get opens the object for key and reports its size in bytes, so callers
+	// can set a Content-Length that matches the bytes they're about to stream
+	// rather than trusting a separately-stored size that may have drifted.
+	// Returns fs.ErrNotExist if the key is absent.
+	Get(ctx context.Context, key string) (io.ReadCloser, int64, error)
 	Delete(ctx context.Context, key string) error
 	Exists(ctx context.Context, key string) (bool, error)
 }

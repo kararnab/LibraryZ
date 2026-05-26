@@ -28,10 +28,12 @@ import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,18 +41,27 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.libraryz.data.api.ApiClient
+import com.libraryz.data.api.ApiException
+import com.libraryz.data.api.LoginRequest
+import com.libraryz.data.api.Session
+import com.libraryz.data.api.SignUpRequest
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AuthGateScreen(
-    onAuthenticated: () -> Unit,
+    api: ApiClient,
+    onAuthenticated: suspend (Session) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(0) }
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var inFlight by remember { mutableStateOf(false) }
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -151,18 +162,52 @@ fun AuthGateScreen(
                     Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            // Stub: backend wiring lands in the next pass. Demonstrates
-                            // the error path on Log in when password is short.
-                            if (tab == 0 && password.length < 6) {
-                                error = "Incorrect email or password"
-                            } else {
-                                onAuthenticated()
+                            if (inFlight) return@Button
+                            val e = email.trim()
+                            val p = password
+                            val n = name.trim()
+                            if (e.isEmpty() || p.isEmpty() || (tab == 1 && n.isEmpty())) {
+                                error = "Please fill all fields."
+                                return@Button
+                            }
+                            error = null
+                            inFlight = true
+                            scope.launch {
+                                try {
+                                    if (tab == 1) {
+                                        api.signUp(SignUpRequest(email = e, password = p, name = n))
+                                    }
+                                    val session = api.login(LoginRequest(email = e, password = p))
+                                    onAuthenticated(session)
+                                } catch (ex: ApiException) {
+                                    error = when (ex.status) {
+                                        401 -> "Incorrect email or password"
+                                        409, 500 -> if (tab == 1)
+                                            "Could not create account — email may already exist."
+                                        else
+                                            "Login failed (${ex.status})."
+                                        else -> "Login failed (${ex.status})."
+                                    }
+                                } catch (ex: Throwable) {
+                                    error = "Network error: ${ex.message ?: "unknown"}"
+                                } finally {
+                                    inFlight = false
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         colors = ButtonDefaults.buttonColors(),
+                        enabled = !inFlight,
                     ) {
-                        Text(if (tab == 0) "Log in" else "Create account")
+                        if (inFlight) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            Text(if (tab == 0) "Log in" else "Create account")
+                        }
                     }
 
                     Text(

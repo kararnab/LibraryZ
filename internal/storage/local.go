@@ -70,8 +70,17 @@ func (l *Local) Put(_ context.Context, r io.Reader) (Object, error) {
 	return Object{Key: sum, Size: size, SHA256: sum}, nil
 }
 
-func (l *Local) Get(_ context.Context, key string) (io.ReadCloser, error) {
-	return os.Open(l.path(key))
+func (l *Local) Get(_ context.Context, key string) (io.ReadCloser, int64, error) {
+	f, err := os.Open(l.path(key))
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, err
+	}
+	return f, info.Size(), nil
 }
 
 func (l *Local) Delete(_ context.Context, key string) error {

@@ -50,5 +50,8 @@ type Tag struct {
 }
 
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&Work{}, &Edition{}, &Tag{})
+	if err := db.AutoMigrate(&Work{}, &Edition{}, &Tag{}); err != nil {
+		return err
+	}
+	return migratePostgresSearchExtras(db)
 }

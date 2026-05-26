@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/kararnab/libraryZ/discussions
+    about: For general questions, ideas, or "how do I ...?" use Discussions.

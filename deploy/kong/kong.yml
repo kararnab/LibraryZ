@@ -1,0 +1,109 @@
+_format_version: "3.0"
+_transform: true
+
+# Declarative config for Kong's DB-less mode (PLAN.md Slice 6.2). Kong is the
+# edge gateway: all client traffic enters here, gets rate-limited / size-checked,
+# and is proxied to the libraryz service on the compose network. The libraryz
+# container is no longer exposed on the host.
+#
+# Rate-limit policy is `redis` so counters are shared across libraryz instances
+# (a `local` policy would reset per replica). All limits are per-IP for now —
+# per-user requires Kong consumers + an `iss`/`kid` claim in our JWT (PLAN.md
+# item 93); revisit if abuse warrants it.
+#
+# Plugin precedence is route > service > global, so the upload route's larger
+# request-size-limiting config overrides the service-wide 5 MB ceiling, and
+# per-route rate limits override the service-wide 60/min fallback.
+
+services:
+  - name: libraryz
+    url: http://libraryz:8080
+    # Service-level fallbacks. Anything not matched by a more specific route
+    # below still goes through these.
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 60
+          policy: redis
+          redis:
+            host: redis
+            port: 6379
+          limit_by: ip
+          fault_tolerant: true
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 5
+          size_unit: megabytes
+    routes:
+      # POST /auth/login — credential stuffing / brute force.
+      - name: auth-login
+        paths: ["~/auth/login$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 5
+              hour: 30
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+
+      # POST /auth/signup — account farming.
+      - name: auth-signup
+        paths: ["~/auth/signup$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 3
+              hour: 10
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+
+      # POST /works/{id}/editions — large multipart upload (≤500 MiB).
+      # request_buffering off so the body streams to libraryz instead of being
+      # spooled in Kong. allowed_payload_size is slightly above the app cap
+      # (LIBRARYZ_MAX_UPLOAD_BYTES = 500 MiB ≈ 524 MB) so libraryz enforces the
+      # precise byte cap and Kong is the coarse outer guard.
+      - name: edition-upload
+        paths: ["~/works/[^/]+/editions$"]
+        methods: [POST]
+        strip_path: false
+        request_buffering: false
+        plugins:
+          - name: rate-limiting
+            config:
+              hour: 10
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+          - name: request-size-limiting
+            config:
+              allowed_payload_size: 550
+              size_unit: megabytes
+
+      # GET /editions/{id}/download — large streaming download.
+      - name: edition-download
+        paths: ["~/editions/[^/]+/download$"]
+        methods: [GET]
+        strip_path: false
+        response_buffering: false
+
+      # Catch-all so the service's fallback plugins still get attached to
+      # everything else (Kong only runs service-level plugins on requests that
+      # match at least one route on that service).
+      - name: libraryz-default
+        paths: ["/"]
+        strip_path: false

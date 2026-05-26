@@ -32,7 +32,7 @@ go.work.sum
 Thumbs.db
 
 # Runtime data dir for the Go server (LIBRARYZ_STORAGE_DIR default)
-data/
+/data/
 
 # File-backed sqlite (tests use :memory:, but defensive)
 *.db
@@ -41,4 +41,4 @@ data/
 
 # Android Studio per-machine config (also covered by frontend/.gitignore,
 # duplicated here defensively for any future top-level appearance)
-local.properties
+# local.properties

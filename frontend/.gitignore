@@ -3,5 +3,4 @@ build/
 local.properties
 *.iml
 .kotlin/
-captures/
 .cxx/

@@ -29,11 +29,14 @@ func TestLocalPutGetRoundTrip(t *testing.T) {
 		t.Fatalf("size mismatch: got %d want %d", obj.Size, len(payload))
 	}
 
-	rc, err := store.Get(context.Background(), obj.Key)
+	rc, size, err := store.Get(context.Background(), obj.Key)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	defer rc.Close()
+	if size != int64(len(payload)) {
+		t.Fatalf("get size mismatch: got %d want %d", size, len(payload))
+	}
 	got, _ := io.ReadAll(rc)
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("bytes mismatch")
