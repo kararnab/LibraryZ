@@ -12,7 +12,11 @@ sealed interface Screen {
     data object Browse : Screen
     data class WorkDetail(val workId: String) : Screen
     data class Upload(val workId: String? = null) : Screen
-    data class PdfPreview(val editionId: String) : Screen
+    data class Preview(val editionId: String, val format: String) : Screen
+    data class EditWork(val workId: String) : Screen
+    data object ContributionQueue : Screen
+    data object Library : Screen
+    data object ForYou : Screen
 }
 
 @Stable

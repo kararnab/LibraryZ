@@ -15,6 +15,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,8 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
 import com.libraryz.data.Work
-import com.libraryz.data.isPdf
-import com.libraryz.data.sizeMb
+import com.libraryz.data.isPreviewable
+import com.libraryz.data.prettySize
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +43,7 @@ fun WorkCard(
     work: Work,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    highlight: String? = null,
 ) {
     Surface(
         onClick = onClick,
@@ -67,8 +73,9 @@ fun WorkCard(
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
+                    val highlightTint = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
                     Text(
-                        text = work.title,
+                        text = highlightMatches(work.title, highlight, highlightTint),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -87,6 +94,33 @@ fun WorkCard(
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+/**
+ * Build an AnnotatedString that tints every (case-insensitive) occurrence
+ * of [query] inside [text] with [tint] as a background. Returns [text]
+ * unchanged when [query] is null/blank — typical no-search-active state.
+ */
+private fun highlightMatches(text: String, query: String?, tint: androidx.compose.ui.graphics.Color): AnnotatedString {
+    if (query.isNullOrBlank()) return AnnotatedString(text)
+    val q = query.trim()
+    return buildAnnotatedString {
+        val lower = text.lowercase()
+        val needle = q.lowercase()
+        var idx = 0
+        while (idx < text.length) {
+            val match = lower.indexOf(needle, idx)
+            if (match < 0) {
+                append(text.substring(idx))
+                break
+            }
+            append(text.substring(idx, match))
+            withStyle(SpanStyle(background = tint)) {
+                append(text.substring(match, match + needle.length))
+            }
+            idx = match + needle.length
         }
     }
 }
@@ -128,12 +162,12 @@ fun EditionRow(
         ) {
             FormatBadge(edition.format)
             Text(
-                text = edition.sizeMb,
+                text = edition.prettySize,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            if (edition.isPdf) {
+            if (edition.isPreviewable) {
                 TextButton(onClick = onPreview) { Text("Preview") }
             }
             TextButton(onClick = onDownload) { Text("Download") }
@@ -167,6 +201,7 @@ fun EmptyState(
     title: String,
     body: String,
     action: (@Composable () -> Unit)? = null,
+    icon: ImageVector = Icons.Outlined.Book,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -182,7 +217,7 @@ fun EmptyState(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Outlined.Book,
+                imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(28.dp),

@@ -1,0 +1,12 @@
+# Keep the build context small + the image deterministic. The Go build only
+# needs go.mod/go.sum + the cmd/ internal/ pkg/ sources.
+.git/
+frontend/
+cicd/
+data/
+.claude/
+*.md
+*.html
+Dockerfile
+docker-compose.yml
+.dockerignore

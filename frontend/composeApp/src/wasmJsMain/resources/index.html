@@ -7,6 +7,15 @@
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #FEF7FF; }
   </style>
+  <!-- pdf.js v3.11.x is the last build that exposes a UMD global
+       (pdfjsLib). v4 went ESM-only and is harder to wire from @JsFun.
+       Loaded synchronously so window.pdfjsLib is ready by the time
+       composeApp.js calls into it. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  </script>
 </head>
 <body>
   <script src="composeApp.js"></script>

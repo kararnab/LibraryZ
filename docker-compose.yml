@@ -1,0 +1,179 @@
+# One-command local stack: Postgres + MinIO + the LibraryZ backend.
+#   docker compose up --build
+# The Compose Multiplatform frontend is a *client* (desktop/wasm/android), not a
+# service — run it on the host (frontend/gradlew :composeApp:run) pointed at
+# http://localhost:8080. Blobs live in MinIO (S3-compatible object storage);
+# console at http://localhost:9001 (minioadmin / minioadmin).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: libraryz
+    ports:
+      - "5432:5432" # exposed so host `go test`/psql can reach it; drop if unwanted
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d libraryz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # pgbouncer multiplexes many app-side connections onto a small set of real
+  # Postgres conns (Slice 6.3). Transaction pooling mode is what gives the
+  # multiplexing benefit; the libraryz DSN sets default_query_exec_mode=exec
+  # so pgx doesn't cache prepared statements per-conn (which would break
+  # because the server conn rotates per-transaction), and pkg/db/db.go also
+  # leaves GORM's PrepareStmt off for the same reason. AUTH_TYPE=plain is
+  # fine on the compose network (cleartext password between libraryz and
+  # pgbouncer, then pgbouncer does scram-sha-256 upstream to Postgres). For
+  # direct DB access (psql, `go test -tags=postgres`, migrations) connect to
+  # `postgres:5432` directly — do NOT go through pgbouncer for DDL/schema
+  # work, transaction-mode pooling makes that surprising.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: user
+      DB_PASSWORD: password
+      DB_NAME: libraryz
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: "25"
+      MAX_CLIENT_CONN: "100"
+      AUTH_TYPE: plain
+      LISTEN_PORT: "6432"
+
+  # Redis is the shared rate-limit counter store for Kong (Slice 6.2). With
+  # multiple libraryz/Kong instances, a `local` policy would let an attacker
+  # multiply their allowance by the replica count — Redis keeps the counters
+  # global. Not used for anything else.
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Kong (DB-less, declarative) is the edge gateway: rate limiting +
+  # request-size-limiting + (in prod) TLS termination. All client traffic
+  # enters here; libraryz is no longer exposed on the host. See
+  # deploy/kong/kong.yml for routes and plugins.
+  #
+  # Dev compose runs HTTP only on host 8080 -> Kong proxy 8000, so the
+  # frontend's existing http://localhost:8080 base URL keeps working with
+  # zero client changes. For production, terminate TLS on 8443 with a real
+  # cert (KONG_SSL_CERT / KONG_SSL_CERT_KEY) and put a network LB / SG in
+  # front; the admin API stays bound to localhost-only and is read-only in
+  # DB-less mode, so we don't publish it.
+  kong:
+    image: kong:3.9.1
+    depends_on:
+      libraryz:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_ADMIN_LISTEN: "127.0.0.1:8001"
+      # Must be >= the largest body Kong should forward. The upload route
+      # allows 550 MB at the plugin layer; nginx's pre-plugin cap has to
+      # match or it would 413 before the plugin runs.
+      KONG_NGINX_HTTP_CLIENT_MAX_BODY_SIZE: 600m
+      KONG_NGINX_HTTP_CLIENT_BODY_BUFFER_SIZE: 16k
+      KONG_LOG_LEVEL: notice
+    volumes:
+      - ./deploy/kong/kong.yml:/etc/kong/kong.yml:ro
+    ports:
+      - "8080:8000" # host 8080 -> Kong proxy 8000 (replaces the old libraryz mapping)
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9100:9000" # S3 API (host 9100 → container 9000; 9000 may be taken)
+      - "9101:9001" # web console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      # Port-probe via the shell built into the minio image (no curl/wget there).
+      test: ["CMD-SHELL", "mc ready local 2>/dev/null || exit 0"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  libraryz:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      # `pgbouncer` / `postgres` / `minio` are the service hostnames on the
+      # compose network. libraryz talks to Postgres through pgbouncer
+      # (Slice 6.3); default_query_exec_mode=exec disables pgx's per-conn
+      # prepared-statement cache so transaction-mode pooling is safe.
+      DATABASE_URL: "postgres://user:password@pgbouncer:6432/libraryz?sslmode=disable&default_query_exec_mode=exec"
+      LIBRARYZ_LISTEN_ADDR: ":8080"
+      # The backend refuses to start without a real JWT_SECRET (>=32 bytes, not
+      # the built-in default). This dev value keeps `docker compose up` one-command;
+      # override it for anything real:  JWT_SECRET=... docker compose up
+      JWT_SECRET: "${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please-0123456789}"
+      # libraryz uses S3/MinIO when LIBRARYZ_S3_ENDPOINT is set, otherwise
+      # falls back to a local-filesystem store under LIBRARYZ_STORAGE_DIR.
+      # Setting the endpoint here is the entire signal — there is no separate
+      # LIBRARYZ_STORAGE_BACKEND knob.
+      LIBRARYZ_S3_ENDPOINT: "minio:9000"
+      LIBRARYZ_S3_ACCESS_KEY: "minioadmin"
+      LIBRARYZ_S3_SECRET_KEY: "minioadmin"
+      LIBRARYZ_S3_BUCKET: "libraryz"
+      LIBRARYZ_S3_USE_SSL: "false"
+      # CORS allowlist for the browser (Wasm) client — exact-match, comma-separated.
+      # Only matters for the web target; native (Android/Desktop/iOS) clients don't
+      # use CORS. When unset, the backend allows only localhost / 127.0.0.1 origins,
+      # so a web app served from a LAN IP is blocked until you list it here.
+      # This host's dev LAN IP is 192.168.29.234 (same one in the Android cleartext
+      # config). Adjust the ports to wherever the web bundle is actually served from:
+      # LIBRARYZ_ALLOWED_ORIGINS: "http://192.168.29.234:8080,http://localhost:8080"
+      # Convenience for LAN dev only: instead of listing each IP above, allow ALL
+      # RFC-1918 private-IP origins (192.168/16, 10/8, 172.16/12) on any port.
+      # Dev mode only — ignored once LIBRARYZ_ALLOWED_ORIGINS is set. Don't enable
+      # in production; it trusts every host on the local network.
+      # LIBRARYZ_CORS_ALLOW_PRIVATE_LAN: "true"
+      # DB connection pool (Phase 6.1). Keep instances × MaxOpenConns under
+      # Postgres max_connections (default 100). Default 25 fits 2 instances with
+      # headroom; raise/lower per replica count.
+      # LIBRARYZ_DB_MAX_OPEN_CONNS: "25"
+      # LIBRARYZ_DB_MAX_IDLE_CONNS: "10"
+      # HTTP server timeouts (Go duration strings; defaults shown). ReadHeaderTimeout
+      # is the main Slowloris guard; upload/download handlers opt out per-request so
+      # large transfers aren't truncated. SHUTDOWN_TIMEOUT bounds the rolling-deploy drain.
+      # LIBRARYZ_READ_HEADER_TIMEOUT: "10s"
+      # LIBRARYZ_READ_TIMEOUT: "30s"
+      # LIBRARYZ_WRITE_TIMEOUT: "60s"
+      # LIBRARYZ_IDLE_TIMEOUT: "120s"
+      # LIBRARYZ_SHUTDOWN_TIMEOUT: "20s"
+      # Recommendation retrain interval (optional; default 6h):
+      # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
+    # libraryz is intentionally NOT published to the host — Kong is the edge
+    # (Slice 6.2). For direct debugging without going through Kong:
+    #   docker compose exec libraryz wget -qO- http://localhost:8080/health
+    # or temporarily add a `ports: ["8081:8080"]` mapping for that session.
+
+volumes:
+  pgdata:
+  miniodata:

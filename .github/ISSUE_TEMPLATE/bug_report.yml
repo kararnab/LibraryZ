@@ -1,0 +1,73 @@
+name: Bug report
+description: Something is broken or not behaving as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. A short reproducer beats
+        a long description — please include one if you can.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what did you see instead?
+      placeholder: |
+        Steps:
+        1. ...
+        2. ...
+
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      multiple: true
+      options:
+        - Backend (Go API)
+        - Frontend - Android
+        - Frontend - Desktop
+        - Frontend - Web (Wasm)
+        - Frontend - iOS
+        - Storage (local / S3 / MinIO)
+        - Recommendations
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `git rev-parse --short HEAD`, or a release tag.
+      placeholder: e.g. 5e44eb9 or v0.3.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version, JDK version, browser, anything relevant.
+      placeholder: |
+        OS: Ubuntu 24.04
+        Go: 1.25.0
+        JDK: Temurin 21
+        Running via: docker compose up
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      description: Paste relevant logs. Use code fences.
+      render: shell
+    validations:
+      required: false

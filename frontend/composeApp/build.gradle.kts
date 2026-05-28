@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsCompose)
     alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.kotlinxSerialization)
 }
 
 kotlin {
@@ -47,26 +48,46 @@ kotlin {
                 implementation(compose.ui)
                 implementation(compose.components.resources)
                 implementation(compose.materialIconsExtended)
+                implementation(libs.kotlinx.serialization.json)
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.content.negotiation)
+                implementation(libs.ktor.serialization.kotlinx.json)
+                implementation(libs.ktor.client.logging)
+            }
+        }
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(libs.kotlinx.coroutines.test)
+                implementation(libs.ktor.client.mock)
             }
         }
         val androidMain by getting {
             dependencies {
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.lifecycle.runtime)
+                implementation(libs.ktor.client.cio)
             }
         }
         val desktopMain by getting {
             dependencies {
                 implementation(compose.desktop.currentOs)
+                implementation(libs.ktor.client.cio)
+                implementation(libs.pdfbox)
             }
         }
         val wasmJsMain by getting {
             dependencies {
                 implementation(libs.kotlinx.browser)
+                implementation(libs.ktor.client.js)
             }
         }
-        // iosMain is created automatically by the default hierarchy template
-        // (Kotlin 2.0+) and shares code across iosX64/Arm64/SimulatorArm64.
+        // iosMain only exists when iOS targets are buildable (macOS host).
+        // On Linux/Windows the targets are disabled and the source set
+        // isn't created, so guard the lookup.
+        findByName("iosMain")?.dependencies {
+            implementation(libs.ktor.client.darwin)
+        }
     }
 }
 
