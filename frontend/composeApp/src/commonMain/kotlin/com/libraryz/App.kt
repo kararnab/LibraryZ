@@ -414,14 +414,19 @@ private fun Root(
                                         publicationYear = submission.publicationYear,
                                     )
                                 )
-                                api.uploadEdition(
-                                    workId = created.id,
-                                    format = inferFormatFromName(submission.file.name),
-                                    language = submission.language,
-                                    fileName = submission.file.name,
-                                    bytes = submission.file.bytes,
-                                )
-                                works.refresh()
+                                try {
+                                    api.uploadEdition(
+                                        workId = created.id,
+                                        format = inferFormatFromName(submission.file.name),
+                                        language = submission.language,
+                                        fileName = submission.file.name,
+                                        bytes = submission.file.bytes,
+                                    )
+                                } finally {
+                                    // The work exists even if the upload was
+                                    // rejected (e.g. duplicate file), so show it.
+                                    works.refresh()
+                                }
                             }
                             is UploadSubmission.AddEdition -> {
                                 val wid = s.workId

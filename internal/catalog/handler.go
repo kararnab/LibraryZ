@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,15 +80,40 @@ func (h *Handler) GetWork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, work)
 }
 
+// CreateWorkRequest is the client-settable subset of Work (matches the
+// OpenAPI CreateWorkRequest schema). Decoding into this rather than Work
+// keeps server-owned fields — id, timestamps, editions, tags — out of the
+// client's reach; unknown JSON keys are ignored.
+type CreateWorkRequest struct {
+	Title           string `json:"title"`
+	Subtitle        string `json:"subtitle"`
+	Authors         string `json:"authors"`
+	Description     string `json:"description"`
+	Language        string `json:"language"`
+	PublicationYear int    `json:"publication_year"`
+	ISBN            string `json:"isbn"`
+	OpenLibraryID   string `json:"openlibrary_id"`
+}
+
 func (h *Handler) CreateWork(w http.ResponseWriter, r *http.Request) {
-	var work Work
-	if err := json.NewDecoder(r.Body).Decode(&work); err != nil {
+	var req CreateWorkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if work.Title == "" {
+	if strings.TrimSpace(req.Title) == "" {
 		http.Error(w, "title is required", http.StatusBadRequest)
 		return
+	}
+	work := Work{
+		Title:           strings.TrimSpace(req.Title),
+		Subtitle:        req.Subtitle,
+		Authors:         req.Authors,
+		Description:     req.Description,
+		Language:        req.Language,
+		PublicationYear: req.PublicationYear,
+		ISBN:            req.ISBN,
+		OpenLibraryID:   req.OpenLibraryID,
 	}
 	if err := h.service.CreateWork(r.Context(), &work); err != nil {
 		httpx.ServerError(w, r, "create work", err)
@@ -136,6 +163,16 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Hash the upload as received, before sanitizing: that's what duplicate
+	// detection keys on, since sanitized PDFs differ byte-wise every time.
+	// sanitize.Validate seeks back to the start itself.
+	h256 := sha256.New()
+	if _, err := io.Copy(h256, file); err != nil {
+		http.Error(w, "upload too large or malformed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	sourceSHA := hex.EncodeToString(h256.Sum(nil))
+
 	// L1 sanitize: declared format must match the bytes' magic, EPUB must not
 	// be a zip bomb, TXT must be valid UTF-8. Anything off the allowlist
 	// (currently PDF/EPUB/TXT) is rejected at this layer. multipart.File is
@@ -162,9 +199,18 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, clean)
+	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, sourceSHA, clean)
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "work not found", http.StatusNotFound)
+		return
+	}
+	var dup *DuplicateEditionError
+	if errors.As(err, &dup) {
+		writeJSON(w, http.StatusConflict, DuplicateEditionResponse{
+			Error:     "this file is already in the library",
+			EditionID: dup.Existing.ID,
+			WorkID:    dup.Existing.WorkID,
+		})
 		return
 	}
 	if err != nil {
@@ -172,6 +218,14 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, ed)
+}
+
+// DuplicateEditionResponse is the 409 body for an upload whose content is
+// already stored as an edition, naming that edition and its work.
+type DuplicateEditionResponse struct {
+	Error     string    `json:"error"`
+	EditionID uuid.UUID `json:"edition_id"`
+	WorkID    uuid.UUID `json:"work_id"`
 }
 
 func (h *Handler) GetEdition(w http.ResponseWriter, r *http.Request) {

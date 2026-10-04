@@ -106,6 +106,9 @@ func (s *S3) Put(ctx context.Context, r io.Reader) (Object, error) {
 }
 
 func (s *S3) Get(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	if !validKey(key) {
+		return nil, 0, ErrInvalidKey
+	}
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, 0, err
@@ -125,10 +128,16 @@ func (s *S3) Get(ctx context.Context, key string) (io.ReadCloser, int64, error) 
 }
 
 func (s *S3) Delete(ctx context.Context, key string) error {
+	if !validKey(key) {
+		return ErrInvalidKey
+	}
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
 func (s *S3) Exists(ctx context.Context, key string) (bool, error) {
+	if !validKey(key) {
+		return false, ErrInvalidKey
+	}
 	_, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
 		if minio.ToErrorResponse(err).Code == "NoSuchKey" {

@@ -106,6 +106,13 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
 
 ## Conventions
 
+- **Pre-alpha: data loss is OK until the first production deployment.**
+  Don't spend effort on schema migrations, backfills, or backward
+  compatibility (API or data) for existing rows. AutoMigrate's additive
+  changes are enough. For anything else, wipe with `docker compose down -v`
+  and re-seed with `scripts/seed.sh`. Versioned migrations
+  ([#16](https://github.com/kararnab/LibraryZ/issues/16)) are deferred until
+  prod. See "Pre-alpha data policy" in PLAN.md Phase 7.
 - **Don't reintroduce** the old microservice split (separate `cmd/auth`,
   `cmd/catalog`, etc.), the gateway, or the gRPC `api/` protos. They were
   removed deliberately in Phase 1 — the project is a modular monolith now.

@@ -76,6 +76,18 @@ data class Session(val token: String)
 class ApiException(val status: Int, val body: String, message: String) :
     RuntimeException("$message [HTTP $status]: $body")
 
+// 409 body from POST /works/{id}/editions when the file is already stored as
+// an edition (on this work or another one).
+@Serializable
+internal data class DuplicateEditionBody(val editionId: String? = null, val workId: String? = null)
+
+/**
+ * The uploaded file is already in the library as [editionId] on [workId].
+ * The message is user-facing — UploadSheet shows it verbatim.
+ */
+class DuplicateEditionException(val editionId: String?, val workId: String?) :
+    RuntimeException("This file is already in the library.")
+
 /**
  * Tiny HTTP client wrapping the LibraryZ backend. Engine is auto-selected
  * from whichever ktor-client-<engine> dep is on the source set's classpath.
@@ -344,6 +356,12 @@ class ApiClient(
             },
         ) {
             maybeAuth()
+        }
+        if (resp.status == HttpStatusCode.Conflict) {
+            val dup = runCatching {
+                json.decodeFromString(DuplicateEditionBody.serializer(), resp.bodyAsText())
+            }.getOrNull()
+            throw DuplicateEditionException(dup?.editionId, dup?.workId)
         }
         if (resp.status != HttpStatusCode.Created) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "upload edition failed")

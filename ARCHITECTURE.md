@@ -131,9 +131,13 @@ Notable choices:
 
 - **Authors as a semicolon-separated string** on `Work`. Cheap, queryable
   with `LIKE`, good enough until we genuinely need an `authors` table.
-- **`Edition.SHA256` has a unique index.** Identical bytes uploaded twice
-  collapse to one row and one stored blob. Re-uploading a file you already
-  own is a no-op at the storage layer.
+- **`Edition.SHA256` and `Edition.SourceSHA256` have unique indexes.**
+  `SHA256` is the hash of the stored (sanitized) bytes; `SourceSHA256` is the
+  hash of the bytes as uploaded. Uploading a file that matches either on any
+  existing edition returns `409 Conflict` naming that edition. Both are
+  needed because sanitizing a PDF writes a fresh timestamp and file ID, so
+  the same PDF never produces the same stored bytes twice. Storage itself
+  still dedups by content address.
 - **`Edition.UploadedByUserID` is recorded** but not exposed in any
   list/detail JSON yet — privacy default.
 - **Factor vectors stored as `datatypes.JSON` (`[]float64`).** Works on

@@ -40,6 +40,17 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   modal. Optimized with pngquant (~75% size reduction).
 
 ### Changed
+- **Duplicate edition uploads now return `409 Conflict`** with
+  `{error, edition_id, work_id}` instead of `201` and the existing edition
+  ([#2](https://github.com/kararnab/LibraryZ/issues/2)). Before, re-uploading
+  a file that belonged to another work silently returned *that* work's
+  edition. Duplicates are matched on the uploaded bytes' hash as well as
+  the stored bytes' hash (new `editions.source_sha256` column), so
+  re-uploaded PDFs are caught too. The upload sheet shows "This file is
+  already in the library."
+- **`POST /works` only reads the `CreateWorkRequest` fields.** `id`,
+  timestamps, `editions` and `tags` in the request body are ignored; the
+  ID is always server-generated. Whitespace-only titles are rejected.
 - **`PdfBackend` renamed to `PagedReader`** (sealed under `Reader`).
   `openPdf(bytes)` is now `openPdfReader(bytes)`; the screen entry point
   is the format-aware `openReader(bytes, format)`. Behavior unchanged for
@@ -53,6 +64,12 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   render gets a Preview button.
 
 ### Fixed
+- `storage.Local` panicked on object keys shorter than two characters.
+  Both backends now reject any key that isn't a sha256 hex digest with
+  `storage.ErrInvalidKey` ([#3](https://github.com/kararnab/LibraryZ/issues/3)).
+- Re-uploading the same PDF created a new edition and stored a new blob each
+  time, because sanitized PDFs never hash the same twice. It's now detected
+  as a duplicate.
 - TXT editions previously couldn't be previewed even after the Reader
   refactor — `EditionRow` was still gating the Preview button on
   `isPdf`. Fixed alongside the rename to `isPreviewable`.

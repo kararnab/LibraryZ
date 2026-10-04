@@ -163,6 +163,31 @@ class ApiClientTest {
     }
 
     @Test
+    fun uploadEditionConflictThrowsDuplicateEditionException() = runTest {
+        val engine = MockEngine {
+            val (s, body, h) = json(
+                """{"error":"this file is already in the library",
+                    "edition_id":"e0","work_id":"w0"}""",
+                HttpStatusCode.Conflict,
+            )
+            respond(body, s, h)
+        }
+        val api = ApiClient(BASE, tokenProvider = { "t" }, engine = engine)
+        val ex = assertFailsWith<DuplicateEditionException> {
+            api.uploadEdition(
+                workId = "w1",
+                format = "PDF",
+                language = null,
+                fileName = "x.pdf",
+                bytes = byteArrayOf(1),
+            )
+        }
+        assertEquals("e0", ex.editionId)
+        assertEquals("w0", ex.workId)
+        assertEquals("This file is already in the library.", ex.message)
+    }
+
+    @Test
     fun downloadEditionReturnsExactBytes() = runTest {
         val payload = ByteArray(64) { it.toByte() }
         val engine = MockEngine {

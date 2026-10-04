@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,5 +102,40 @@ func TestLocalExistsAndDelete(t *testing.T) {
 	// Deleting a missing key is a no-op.
 	if err := store.Delete(context.Background(), obj.Key); err != nil {
 		t.Fatalf("delete-missing should be nil: %v", err)
+	}
+}
+
+// Keys that aren't a sha256 hex digest must fail with ErrInvalidKey rather
+// than panicking (path() shards on key[:2]) or escaping the storage root.
+func TestInvalidKeysRejected(t *testing.T) {
+	l, err := NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A zero S3 has no client: validation must short-circuit before it's used.
+	backends := map[string]Storage{"local": l, "s3": &S3{}}
+	bad := []string{
+		"",
+		"a",
+		"ab",
+		strings.Repeat("A", 64),         // uppercase hex
+		strings.Repeat("g", 64),         // not hex
+		strings.Repeat("a", 63),         // too short
+		strings.Repeat("a", 65),         // too long
+		"../" + strings.Repeat("a", 61), // path traversal
+	}
+	ctx := context.Background()
+	for name, s := range backends {
+		for _, key := range bad {
+			if _, _, err := s.Get(ctx, key); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("%s Get(%q): want ErrInvalidKey, got %v", name, key, err)
+			}
+			if _, err := s.Exists(ctx, key); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("%s Exists(%q): want ErrInvalidKey, got %v", name, key, err)
+			}
+			if err := s.Delete(ctx, key); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("%s Delete(%q): want ErrInvalidKey, got %v", name, key, err)
+			}
+		}
 	}
 }
