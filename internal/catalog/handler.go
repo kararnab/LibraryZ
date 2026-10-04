@@ -193,11 +193,20 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 	// event handler, or javascript: URL are rejected; TXTs pass through.
 	// The returned reader is what we store — for PDFs its bytes (and sha)
 	// differ from the upload, which is intentional (canonical safe blob).
-	clean, err := sanitize.Sanitize(format, file, header.Size)
-	if err != nil {
+	clean, err := sanitize.SanitizeContext(r.Context(), format, file, header.Size)
+	switch {
+	case errors.Is(err, sanitize.ErrTooComplex):
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	case errors.Is(err, sanitize.ErrInvalidContent), errors.Is(err, sanitize.ErrActiveContent),
+		errors.Is(err, sanitize.ErrFormatMismatch), errors.Is(err, sanitize.ErrUnsupportedFormat):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	case err != nil:
+		httpx.ServerError(w, r, "sanitize", err)
+		return
 	}
+	defer clean.Close()
 
 	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, sourceSHA, clean)
 	if errors.Is(err, ErrNotFound) {

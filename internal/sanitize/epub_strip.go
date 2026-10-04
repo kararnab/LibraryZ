@@ -2,6 +2,7 @@ package sanitize
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -49,7 +50,9 @@ func scanEPUBForScripts(rs io.ReadSeeker, size int64) error {
 		switch {
 		case strings.HasSuffix(lower, ".xhtml"),
 			strings.HasSuffix(lower, ".html"),
-			strings.HasSuffix(lower, ".htm"):
+			strings.HasSuffix(lower, ".htm"),
+			// SVG documents can carry <script> and on* handlers too.
+			strings.HasSuffix(lower, ".svg"):
 			if err := checkEPUBHTMLEntry(f, name); err != nil {
 				return err
 			}
@@ -62,15 +65,42 @@ func scanEPUBForScripts(rs io.ReadSeeker, size int64) error {
 	return nil
 }
 
-func checkEPUBHTMLEntry(f *zip.File, name string) error {
+// Scan caps per entry. Way more than any legitimate chapter or manifest,
+// but they bound memory. An entry over its cap is rejected, never
+// truncated: a truncated parse would miss anything past the cap.
+const (
+	epubMaxHTMLEntry = 16 << 20
+	epubMaxOPFEntry  = 1 << 20
+)
+
+// readEPUBEntry returns f's decompressed bytes, or ErrInvalidContent if they
+// exceed max. The header's declared size is checked first, but it can lie,
+// so the read itself is bounded too.
+func readEPUBEntry(f *zip.File, name string, max int64) ([]byte, error) {
+	if f.UncompressedSize64 > uint64(max) {
+		return nil, fmt.Errorf("%w: %q is too large to scan (limit %d bytes)", ErrInvalidContent, name, max)
+	}
 	rc, err := f.Open()
 	if err != nil {
-		return fmt.Errorf("%w: open %q: %v", ErrInvalidContent, name, err)
+		return nil, fmt.Errorf("%w: open %q: %v", ErrInvalidContent, name, err)
 	}
 	defer rc.Close()
-	// Cap parsing at 16 MiB per file — way more than any legitimate XHTML
-	// chapter, but bounds memory if a malicious EPUB ships a giant entry.
-	root, err := html.Parse(io.LimitReader(rc, 16<<20))
+	b, err := io.ReadAll(io.LimitReader(rc, max+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read %q: %v", ErrInvalidContent, name, err)
+	}
+	if int64(len(b)) > max {
+		return nil, fmt.Errorf("%w: %q is too large to scan (limit %d bytes)", ErrInvalidContent, name, max)
+	}
+	return b, nil
+}
+
+func checkEPUBHTMLEntry(f *zip.File, name string) error {
+	b, err := readEPUBEntry(f, name, epubMaxHTMLEntry)
+	if err != nil {
+		return err
+	}
+	root, err := html.Parse(bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("%w: parse %q: %v", ErrInvalidContent, name, err)
 	}
@@ -117,13 +147,11 @@ func isURLAttr(lowerKey string) bool {
 // media-type declares JavaScript / ECMAScript. This catches scripts that
 // don't end in .js (rare but valid per spec — e.g. .es or no extension).
 func checkEPUBOPFEntry(f *zip.File, name string) error {
-	rc, err := f.Open()
+	b, err := readEPUBEntry(f, name, epubMaxOPFEntry)
 	if err != nil {
-		return fmt.Errorf("%w: open %q: %v", ErrInvalidContent, name, err)
+		return err
 	}
-	defer rc.Close()
-	// OPFs are typically small (<100 KiB); cap to be safe.
-	root, err := html.Parse(io.LimitReader(rc, 1<<20))
+	root, err := html.Parse(bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("%w: parse %q: %v", ErrInvalidContent, name, err)
 	}

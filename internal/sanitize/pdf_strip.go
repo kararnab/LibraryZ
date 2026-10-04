@@ -34,14 +34,29 @@ var dangerousPDFKeys = []string{
 	"AlternatePresentations", "Renditions",
 }
 
-func sanitizePDF(rs io.ReadSeeker) (cleaned io.Reader, retErr error) {
+// sanitizePDF runs sanitizePDFTo in-process, buffering the output. Peak
+// memory is roughly the parsed object graph plus the output, and a small
+// PDF with compressed object streams can inflate to gigabytes while
+// parsing. That's why the server runs this out of process (see isolate.go);
+// in-process is only for tests and library callers that haven't called
+// EnableIsolation.
+func sanitizePDF(rs io.ReadSeeker) (io.Reader, error) {
+	var buf bytes.Buffer
+	if err := sanitizePDFTo(rs, &buf); err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(buf.Bytes()), nil
+}
+
+// sanitizePDFTo parses rs, strips active content, and writes the
+// re-serialized PDF to w.
+func sanitizePDFTo(rs io.ReadSeeker, w io.Writer) (retErr error) {
 	// pdfcpu can panic deep inside its parser/writer on malformed PDFs
 	// (saw a nil-pointer in writeRootObject for a header-only PDF with no
 	// object graph). A malformed upload should never crash the server, so
 	// recover and surface as ErrInvalidContent.
 	defer func() {
 		if r := recover(); r != nil {
-			cleaned = nil
 			retErr = fmt.Errorf("%w: pdfcpu panic: %v", ErrInvalidContent, r)
 		}
 	}()
@@ -50,19 +65,19 @@ func sanitizePDF(rs io.ReadSeeker) (cleaned io.Reader, retErr error) {
 	conf.ValidationMode = model.ValidationRelaxed
 
 	if _, err := rs.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("seek: %w", err)
+		return fmt.Errorf("seek: %w", err)
 	}
 	ctx, err := api.ReadContext(rs, conf)
 	if err != nil {
-		return nil, fmt.Errorf("%w: pdfcpu parse: %v", ErrInvalidContent, err)
+		return fmt.Errorf("%w: pdfcpu parse: %v", ErrInvalidContent, err)
 	}
 	if ctx == nil || ctx.XRefTable == nil {
-		return nil, fmt.Errorf("%w: PDF parsed to empty context", ErrInvalidContent)
+		return fmt.Errorf("%w: PDF parsed to empty context", ErrInvalidContent)
 	}
 	// A PDF without a resolvable catalog can't be safely re-serialized —
 	// pdfcpu will panic on Write. Reject before we get there.
 	if _, err := ctx.XRefTable.Catalog(); err != nil {
-		return nil, fmt.Errorf("%w: PDF has no catalog: %v", ErrInvalidContent, err)
+		return fmt.Errorf("%w: PDF has no catalog: %v", ErrInvalidContent, err)
 	}
 
 	// Walk every object in the cross-reference table. Each XRef entry is a
@@ -84,11 +99,10 @@ func sanitizePDF(rs io.ReadSeeker) (cleaned io.Reader, retErr error) {
 		stripDict(ctx.XRefTable.RootDict)
 	}
 
-	var buf bytes.Buffer
-	if err := api.WriteContext(ctx, &buf); err != nil {
-		return nil, fmt.Errorf("%w: pdfcpu serialize: %v", ErrInvalidContent, err)
+	if err := api.WriteContext(ctx, w); err != nil {
+		return fmt.Errorf("%w: pdfcpu serialize: %v", ErrInvalidContent, err)
 	}
-	return bytes.NewReader(buf.Bytes()), nil
+	return nil
 }
 
 // stripObject removes dangerous keys from an Object and recurses into any

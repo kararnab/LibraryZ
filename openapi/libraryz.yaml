@@ -226,6 +226,14 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DuplicateEdition" }
+        "413":
+          description: >
+            The file couldn't be sanitized within the server's memory or time
+            budget (for example, a PDF whose compressed object streams
+            inflate to gigabytes). Nothing is recorded.
+          content:
+            text/plain:
+              schema: { type: string }
 
   /editions/{id}:
     get:

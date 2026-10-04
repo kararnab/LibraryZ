@@ -10,6 +10,7 @@
 package sanitize
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -69,6 +70,24 @@ func Validate(format string, rs io.ReadSeeker, size int64) error {
 		return fmt.Errorf("seek to start after validation: %w", err)
 	}
 	return nil
+}
+
+// SanitizeContext is Sanitize for the upload path. It returns a ReadCloser
+// the caller must Close, since the cleaned bytes may live in a temp file.
+// When EnableIsolation has been called, PDFs are sanitized in a child
+// process under its memory, time and concurrency limits; ctx cancels the
+// wait for a slot and the child itself.
+func SanitizeContext(ctx context.Context, format string, rs io.ReadSeeker, size int64) (io.ReadCloser, error) {
+	if strings.EqualFold(strings.TrimSpace(format), "PDF") {
+		if iso := currentIsolation(); iso != nil {
+			return iso.sanitizePDF(ctx, rs)
+		}
+	}
+	r, err := Sanitize(format, rs, size)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(r), nil
 }
 
 // Sanitize is L2: produce a safe-to-store version of an already-Validated

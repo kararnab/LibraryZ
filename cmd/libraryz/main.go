@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kararnab/libraryZ/internal/recommendation"
+	"github.com/kararnab/libraryZ/internal/sanitize"
 	"github.com/kararnab/libraryZ/internal/server"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"github.com/kararnab/libraryZ/pkg/config"
@@ -19,6 +20,10 @@ import (
 )
 
 func main() {
+	// When re-run as a PDF sanitizer child (see internal/sanitize
+	// EnableIsolation), do that and exit before any server setup.
+	sanitize.RunChildIfRequested()
+
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
@@ -34,6 +39,16 @@ func main() {
 	}
 	if err := server.Migrate(dbConn); err != nil {
 		log.Fatalf("migrate: %v", err)
+	}
+
+	// Hostile PDFs can inflate to gigabytes inside pdfcpu; sanitize them in a
+	// memory-capped child so only the child dies.
+	if err := sanitize.EnableIsolation(sanitize.IsolationConfig{
+		MemoryLimit:   int64(cfg.PDFSanitizeMemoryMB) << 20,
+		Timeout:       cfg.PDFSanitizeTimeout,
+		MaxConcurrent: cfg.PDFSanitizeConcurrency,
+	}); err != nil {
+		log.Fatalf("sanitize: %v", err)
 	}
 
 	store, err := newStorage(cfg)

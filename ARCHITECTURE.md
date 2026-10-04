@@ -177,6 +177,35 @@ downloads, 500 MiB upload cap) that's fine, and it keeps the trust model
 simple — the backend can enforce policy on every byte if it ever needs
 to. Adding presigning is a future option, not a regression.
 
+## Upload sanitization
+
+`internal/sanitize` runs on every edition upload, in two layers:
+
+- **L1 (`Validate`)** is cheap and in-process: magic bytes, zip-bomb limits
+  for EPUB, UTF-8 for TXT.
+- **L2 (`SanitizeContext`)** makes the stored bytes safe. PDFs are
+  re-serialized by pdfcpu with active content stripped. EPUBs are rejected if
+  any (X)HTML or SVG entry carries scripts, on* handlers or `javascript:`
+  URLs; an entry too large to scan fully is rejected, never truncated. TXT
+  passes through.
+
+**PDFs are sanitized out of process.** pdfcpu fully inflates compressed
+object streams while parsing, so a ~300 KiB PDF can demand gigabytes of heap.
+`cmd/libraryz` calls `sanitize.EnableIsolation`. Each PDF is then handled by
+re-running the same binary in child mode (`sanitize.RunChildIfRequested`
+runs first thing in `main`), with:
+
+- a minimal environment, so no DB URL, JWT secret or S3 keys reach it;
+- the upload on stdin and stdout going to a temp file;
+- a hard address-space cap on Linux (`RLIMIT_AS` = starting size +
+  `LIBRARYZ_PDF_SANITIZE_MEMORY_MB`);
+- a timeout and a concurrency semaphore.
+
+A child that runs out of memory or time makes the upload fail with `413`;
+the server itself never holds the parsed PDF. Test binaries that enable
+isolation call `RunChildIfRequested` from `TestMain` (see
+`internal/server/upload_test.go`).
+
 ## Full-text search
 
 Search is dialect-gated. The Postgres path is the production path:
