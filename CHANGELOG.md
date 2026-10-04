@@ -12,6 +12,22 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 
 ## [Unreleased]
 
+### Security
+- **PDF sanitization runs in a memory-capped child process.** pdfcpu
+  inflates compressed object streams in full while parsing, so a ~300 KiB
+  PDF could drive the server to gigabytes of heap and an OOM kill. PDFs are
+  now sanitized by re-running the binary in child mode under a hard memory
+  cap (Linux `RLIMIT_AS`), a timeout and a concurrency limit, with a minimal
+  environment. Over-budget files get `413`. New knobs:
+  `LIBRARYZ_PDF_SANITIZE_{MEMORY_MB,TIMEOUT,CONCURRENCY}`. As a side effect,
+  the server no longer buffers each sanitized PDF in memory (it used to
+  hold about 2× the file size).
+- **EPUB script scanning gaps closed.** Chapters were parsed through a 16 MiB
+  `LimitReader` (1 MiB for the OPF manifest), so a `<script>` placed after
+  that point was never seen. Oversized entries are now rejected instead.
+  `.svg` entries, which can carry scripts, were not scanned at all; they now
+  get the same check as (X)HTML.
+
 ### Added
 - **`TextReader`** (commonMain) — renders `.txt` editions natively with
   Compose `Text`. No per-platform actual needed; UTF-8 decoded once via

@@ -167,6 +167,11 @@ services:
       # LIBRARYZ_WRITE_TIMEOUT: "60s"
       # LIBRARYZ_IDLE_TIMEOUT: "120s"
       # LIBRARYZ_SHUTDOWN_TIMEOUT: "20s"
+      # PDF uploads are sanitized in a memory-capped child process. Worst case is
+      # CONCURRENCY × MEMORY_MB; the default budget fits a 500 MiB upload.
+      # LIBRARYZ_PDF_SANITIZE_MEMORY_MB: "1024"
+      # LIBRARYZ_PDF_SANITIZE_TIMEOUT: "2m"
+      # LIBRARYZ_PDF_SANITIZE_CONCURRENCY: "2"
       # Recommendation retrain interval (optional; default 6h):
       # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
     # libraryz is intentionally NOT published to the host — Kong is the edge

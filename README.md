@@ -182,6 +182,9 @@ All via environment variables. Defaults work for `docker compose up`.
 | `LIBRARYZ_S3_BUCKET`                      | `libraryz`                                                         |
 | `LIBRARYZ_S3_USE_SSL`                     | `false`                                                            |
 | `LIBRARYZ_MAX_UPLOAD_BYTES`               | `524288000` (500 MiB)                                              |
+| `LIBRARYZ_PDF_SANITIZE_MEMORY_MB`         | `1024` — memory budget of each out-of-process PDF sanitizer        |
+| `LIBRARYZ_PDF_SANITIZE_TIMEOUT`           | `2m`                                                               |
+| `LIBRARYZ_PDF_SANITIZE_CONCURRENCY`       | `2` — worst case is concurrency × memory budget                    |
 | `LIBRARYZ_REC_RETRAIN_INTERVAL`           | `6h`                                                               |
 | `LIBRARYZ_REC_FACTORS`                    | `32`                                                               |
 | `LIBRARYZ_REC_ALPHA`                      | `40`                                                               |

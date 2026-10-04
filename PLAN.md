@@ -812,7 +812,22 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      Use `pg_try_advisory_xact_lock`, which is safe under pgbouncer
      transaction pooling. Instances that don't get the lock skip the tick.
      No-op on sqlite.
-106. **S2** — bound resource use during upload sanitization (tracked privately).
+106. **S2 — bound resource use during upload sanitization.** (DONE
+     2026-10-04; was tracked privately until the fix landed.) pdfcpu fully
+     inflates compressed object streams while parsing, and it has no limit
+     or hook for this. A ~300 KiB PDF took the heap to ~1 GiB; a slightly
+     bigger one would OOM-kill the server. A plain size cap doesn't help
+     because the file is tiny. Fix: `sanitize.EnableIsolation`, where PDFs
+     are sanitized by re-running the binary in child mode under a hard
+     `RLIMIT_AS` (Linux), a timeout and a concurrency semaphore, with a
+     minimal environment. Over budget → `413`. We rejected pre-scanning the
+     raw PDF for object streams: name escapes (`/Obj#53tm`), encryption and
+     filter chains defeat it. Measured: 100 MiB and 450 MiB PDFs pass under
+     the 1 GiB default; the parent's heap stays ~1 MiB (it was ~2× the file).
+     **Found alongside (S3):** the EPUB script scan truncated entries at
+     16 MiB (OPF: 1 MiB) instead of rejecting them, so a `<script>` past
+     the cap was never seen. `.svg` entries weren't scanned at all. Both
+     fixed. ✓
 107. **Liveness vs readiness** ([#11](https://github.com/kararnab/LibraryZ/issues/11)).
      `/health` stays shallow. A new `/ready` pings the DB and storage and
      backs the docker-compose healthcheck and Kong's upstream health checks.

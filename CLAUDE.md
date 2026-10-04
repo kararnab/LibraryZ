@@ -113,6 +113,15 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   and re-seed with `scripts/seed.sh`. Versioned migrations
   ([#16](https://github.com/kararnab/LibraryZ/issues/16)) are deferred until
   prod. See "Pre-alpha data policy" in PLAN.md Phase 7.
+- **PDF sanitization is out of process.** `cmd/libraryz` calls
+  `sanitize.EnableIsolation`, and PDFs are then sanitized by re-running the
+  binary in child mode under a hard memory cap. `sanitize.RunChildIfRequested()`
+  must stay the **first line of `main`**, and any test binary that enables
+  isolation must call it from `TestMain` (see `internal/server/upload_test.go`).
+  Handlers use `sanitize.SanitizeContext` (returns a `ReadCloser`; always
+  `Close` it). Don't parse PDFs with pdfcpu in the server process. Hostile
+  object streams inflate to gigabytes (see ARCHITECTURE "Upload
+  sanitization").
 - **Don't reintroduce** the old microservice split (separate `cmd/auth`,
   `cmd/catalog`, etc.), the gateway, or the gRPC `api/` protos. They were
   removed deliberately in Phase 1 — the project is a modular monolith now.
