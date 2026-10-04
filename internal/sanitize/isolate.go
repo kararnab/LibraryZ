@@ -188,12 +188,7 @@ func (iso *isolation) sanitizePDF(ctx context.Context, rs io.ReadSeeker) (io.Rea
 			return nil, fmt.Errorf("%w: %s", ErrInvalidContent,
 				strings.TrimPrefix(strings.TrimPrefix(msg, ErrInvalidContent.Error()), ": "))
 		}
-		// Go runtime OOM under RLIMIT_AS ("fatal error: out of memory"), a
-		// failed thread/stack mmap under the same cap, or the container's OOM
-		// killer if the budget is set above what the container can give.
-		if strings.Contains(msg, "out of memory") ||
-			strings.Contains(msg, "cannot allocate memory") ||
-			strings.Contains(runErr.Error(), "signal: killed") {
+		if childOutOfMemory(msg, runErr) {
 			return nil, fmt.Errorf("%w: sanitizer exceeded its memory budget", ErrTooComplex)
 		}
 		return nil, fmt.Errorf("sanitize child: %v: %s", runErr, msg)
@@ -204,6 +199,29 @@ func (iso *isolation) sanitizePDF(ctx context.Context, rs io.ReadSeeker) (io.Rea
 	}
 	keep = true
 	return &removeOnClose{File: out}, nil
+}
+
+// childOutOfMemory reports whether a failed child ran out of its memory
+// budget, judging by its stderr and exit. The signatures:
+//   - Go runtime under RLIMIT_AS: "fatal error: out of memory", or a failed
+//     mmap for a thread or stack ("cannot allocate memory").
+//   - Race-detector builds (tests under -race), where ThreadSanitizer fails
+//     first: "failed to allocate ... (errno: 12)" (ENOMEM), or "too many
+//     address space collisions for -race mode".
+//   - The container's OOM killer, if the budget is set above what the
+//     container can give: SIGKILL.
+func childOutOfMemory(stderr string, runErr error) bool {
+	for _, sig := range []string{
+		"out of memory",
+		"cannot allocate memory",
+		"errno: 12",
+		"address space collisions",
+	} {
+		if strings.Contains(stderr, sig) {
+			return true
+		}
+	}
+	return strings.Contains(runErr.Error(), "signal: killed")
 }
 
 // seekableFile returns rs as an *os.File positioned at 0, copying it to a
