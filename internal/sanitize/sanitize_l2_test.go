@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -170,6 +171,18 @@ func TestSanitize_EPUBActiveContent(t *testing.T) {
 			},
 		},
 		{
+			"script tag in svg",
+			map[string][]byte{
+				"OEBPS/img.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`),
+			},
+		},
+		{
+			"onload on svg",
+			map[string][]byte{
+				"OEBPS/img.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="evil()"></svg>`),
+			},
+		},
+		{
 			"js file in archive",
 			map[string][]byte{
 				"OEBPS/c.xhtml": []byte(`<html><body>clean</body></html>`),
@@ -306,3 +319,25 @@ func min(a, b int) int {
 // silence unused import warnings if a test gets removed
 var _ = strings.HasPrefix
 var _ = zip.Store
+
+// An HTML entry larger than the scan cap must be rejected, not truncated:
+// truncating would let a <script> placed after the cap through unscanned.
+// The padding is random letters so the entry stays under the zip-bomb
+// compression-ratio limit.
+func TestSanitize_EPUBOversizedEntryRejected(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	pad := make([]byte, epubMaxHTMLEntry+1)
+	for i := range pad {
+		pad[i] = byte('a' + r.Intn(26))
+	}
+	ch := append([]byte("<html><body><p>"), pad...)
+	ch = append(ch, "</p><script>alert(1)</script></body></html>"...)
+	body := buildEPUB(t, map[string][]byte{"OEBPS/c.xhtml": ch})
+	if err := Validate("epub", bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	_, err := Sanitize("epub", bytes.NewReader(body), int64(len(body)))
+	if !errors.Is(err, ErrInvalidContent) {
+		t.Fatalf("want ErrInvalidContent for an oversized entry, got %v", err)
+	}
+}
