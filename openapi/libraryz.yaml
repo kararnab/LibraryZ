@@ -218,6 +218,14 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            The file is already in the library as an edition, on this work or
+            another one. Matched on the sha256 of the uploaded bytes, or of the
+            bytes after sanitization. Nothing is recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DuplicateEdition" }
 
   /editions/{id}:
     get:
@@ -606,8 +614,20 @@ components:
         email:    { type: string, format: email }
         password: { type: string }
 
+    DuplicateEdition:
+      type: object
+      required: [error, edition_id, work_id]
+      properties:
+        error:      { type: string, example: this file is already in the library }
+        edition_id: { type: string, format: uuid, description: The existing edition }
+        work_id:    { type: string, format: uuid, description: The work the existing edition belongs to }
+
     CreateWorkRequest:
       type: object
+      description: >
+        Only these fields are read. Server-owned fields sent in the body
+        (id, created_at, updated_at, editions, tags) are ignored; editions
+        are only created by uploading a file.
       required: [title]
       properties:
         title:            { type: string }

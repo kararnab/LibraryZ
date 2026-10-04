@@ -39,6 +39,12 @@ type Edition struct {
 	FileKey          string    `gorm:"not null;index" json:"-"`
 	SizeBytes        int64     `json:"size_bytes"`
 	SHA256           string    `gorm:"size:64;uniqueIndex" json:"sha256"`
+	// SourceSHA256 is the sha256 of the bytes as uploaded, before
+	// sanitization. Sanitizing a PDF re-serializes it with a fresh timestamp
+	// and file ID, so SHA256 (of the stored bytes) differs on every upload of
+	// the same PDF; duplicate detection keys on this instead. NULL for
+	// editions uploaded before it existed (unique index allows many NULLs).
+	SourceSHA256 *string `gorm:"size:64;uniqueIndex" json:"-"`
 	UploadedByUserID uint      `gorm:"not null;index" json:"uploaded_by"`
 	CreatedAt        time.Time `json:"created_at"`
 }

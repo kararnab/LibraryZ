@@ -10,9 +10,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var ErrNotFound = errors.New("not found")
+
+// DuplicateEditionError is returned by AddEdition when the uploaded bytes
+// (after sanitization) are already stored as an edition, on this work or
+// another one. Existing is that edition, so callers can point at it.
+type DuplicateEditionError struct {
+	Existing *Edition
+}
+
+func (e *DuplicateEditionError) Error() string {
+	return "edition with identical content already exists: " + e.Existing.ID.String()
+}
 
 type Service struct {
 	db    *gorm.DB
@@ -23,11 +35,15 @@ func NewService(db *gorm.DB, store storage.Storage) *Service {
 	return &Service{db: db, store: store}
 }
 
+// CreateWork inserts w as a new work. The ID is always server-generated and
+// associations (editions, tags) are never written from here: editions only
+// come into existence through AddEdition, which is what ties a row to bytes
+// actually in storage.
 func (s *Service) CreateWork(ctx context.Context, w *Work) error {
-	if w.ID == uuid.Nil {
-		w.ID = uuid.New()
-	}
-	return s.db.WithContext(ctx).Create(w).Error
+	w.ID = uuid.New()
+	w.Editions = nil
+	w.Tags = nil
+	return s.db.WithContext(ctx).Omit(clause.Associations).Create(w).Error
 }
 
 func (s *Service) GetWork(ctx context.Context, id uuid.UUID) (*Work, error) {
@@ -62,11 +78,22 @@ func (s *Service) GetEdition(ctx context.Context, id uuid.UUID) (*Edition, error
 	return &e, err
 }
 
-// AddEdition streams r into storage, then records the edition. If the bytes
-// match an existing edition (same sha256), the existing one is returned.
-func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, r io.Reader) (*Edition, error) {
+// AddEdition streams r (the sanitized bytes) into storage, then records the
+// edition. sourceSHA is the sha256 of the bytes as uploaded, before
+// sanitization ("" if unknown). If either the uploaded bytes or the stored
+// bytes match an existing edition on any work, it returns a
+// *DuplicateEditionError carrying that edition and records nothing.
+func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, sourceSHA string, r io.Reader) (*Edition, error) {
 	if _, err := s.GetWork(ctx, workID); err != nil {
 		return nil, err
+	}
+
+	// Checked before Put so a duplicate PDF doesn't leave a freshly
+	// re-serialized (and therefore never-deduped) blob behind in storage.
+	if dup, err := s.findDuplicate(ctx, "", sourceSHA); err != nil {
+		return nil, err
+	} else if dup != nil {
+		return nil, &DuplicateEditionError{Existing: dup}
 	}
 
 	obj, err := s.store.Put(ctx, r)
@@ -74,13 +101,15 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		return nil, err
 	}
 
-	var existing Edition
-	err = s.db.WithContext(ctx).Where("sha256 = ?", obj.SHA256).First(&existing).Error
-	if err == nil {
-		return &existing, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if dup, err := s.findDuplicate(ctx, obj.SHA256, ""); err != nil {
 		return nil, err
+	} else if dup != nil {
+		return nil, &DuplicateEditionError{Existing: dup}
+	}
+
+	var src *string
+	if sourceSHA != "" {
+		src = &sourceSHA
 	}
 
 	ed := Edition{
@@ -91,13 +120,46 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		FileKey:          obj.Key,
 		SizeBytes:        obj.Size,
 		SHA256:           obj.SHA256,
+		SourceSHA256:     src,
 		UploadedByUserID: uploadedBy,
 		CreatedAt:        time.Now(),
 	}
 	if err := s.db.WithContext(ctx).Create(&ed).Error; err != nil {
+		// A concurrent upload of the same bytes can win the race between the
+		// lookups above and this insert; a unique index then rejects ours.
+		// Re-check instead of parsing dialect-specific errors.
+		if dup, findErr := s.findDuplicate(ctx, obj.SHA256, sourceSHA); findErr == nil && dup != nil {
+			return nil, &DuplicateEditionError{Existing: dup}
+		}
 		return nil, err
 	}
 	return &ed, nil
+}
+
+// findDuplicate returns an edition whose stored-bytes hash equals sha or
+// whose uploaded-bytes hash equals sourceSHA, or nil if none. An empty
+// argument is not matched.
+func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Edition, error) {
+	q := s.db.WithContext(ctx)
+	switch {
+	case sha != "" && sourceSHA != "":
+		q = q.Where("sha256 = ? OR source_sha256 = ?", sha, sourceSHA)
+	case sha != "":
+		q = q.Where("sha256 = ?", sha)
+	case sourceSHA != "":
+		q = q.Where("source_sha256 = ?", sourceSHA)
+	default:
+		return nil, nil
+	}
+	var e Edition
+	err := q.First(&e).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
 }
 
 // SearchWorks finds works whose title/authors/description match q.

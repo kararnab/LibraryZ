@@ -763,19 +763,29 @@ Every item has a GitHub issue. Two security findings are **tracked privately**
 per [SECURITY.md](SECURITY.md) (no public issue); they're listed here as S1/S2
 without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
 
-**Slice 7.1 — security + data integrity (do first).**
+**Slice 7.1 — security + data integrity (DONE 2026-10-04).**
 96. **S1** — security hardening of work creation (tracked privately). Fix
-    lands with a regression test in `internal/server/smoke_test.go`.
+    lands with a regression test in `internal/server/smoke_test.go`. ✓
 97. **Duplicate edition upload → 409** ([#2](https://github.com/kararnab/LibraryZ/issues/2)).
     **Decision (2026-10-04): reject, don't share.** Identical bytes already
     stored as *any* edition return `409 Conflict`, naming the existing edition
     and work. This replaces the Phase 1 "Dedup → yes, return the existing
     edition" behaviour (see Decisions below), which handed back another work's
     edition on a cross-work upload. A concurrent duplicate that loses the race
-    on the unique index also maps to 409, not 500.
+    on the unique index also maps to 409, not 500. **Found while
+    implementing:** pdfcpu stamps the current time and a time-based file ID
+    into every PDF it writes, so the sanitized bytes of the same PDF never
+    hash the same twice. PDF dedup had never worked: each re-upload stored
+    a new blob and a new edition. Fix: hash the upload *before*
+    sanitization into a new `editions.source_sha256` column (unique,
+    nullable; existing rows stay NULL because their original bytes are
+    gone), and match a duplicate on either hash. pdfcpu has no option to
+    make its output deterministic. Known gap: the NewWork upload flow creates
+    the work before uploading, so a 409 there leaves an empty work behind;
+    cleanup is part of #13. ✓
 98. **`storage.Local` key validation** ([#3](https://github.com/kararnab/LibraryZ/issues/3)).
     Keys must be 64-char lowercase hex. On a bad key, return `ErrInvalidKey`
-    instead of panicking in `path()`. Apply the same check in `S3`.
+    instead of panicking in `path()`. Apply the same check in `S3`. ✓
 
 **Slice 7.2 — correctness.**
 99. **Atomic contribution decisions** ([#4](https://github.com/kararnab/LibraryZ/issues/4)).
