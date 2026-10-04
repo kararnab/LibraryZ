@@ -778,8 +778,9 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
     hash the same twice. PDF dedup had never worked: each re-upload stored
     a new blob and a new edition. Fix: hash the upload *before*
     sanitization into a new `editions.source_sha256` column (unique,
-    nullable; existing rows stay NULL because their original bytes are
-    gone), and match a duplicate on either hash. pdfcpu has no option to
+    nullable; rows from before the column existed stay NULL, which is fine
+    under the pre-alpha data policy below), and match a duplicate on either
+    hash. pdfcpu has no option to
     make its output deterministic. Known gap: the NewWork upload flow creates
     the work before uploading, so a 409 there leaves an empty work behind;
     cleanup is part of #13. ✓
@@ -822,8 +823,10 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      blobs ([#13](https://github.com/kararnab/LibraryZ/issues/13)).
 110. Weighted `ts_rank` relevance ordering on Postgres search ([#14](https://github.com/kararnab/LibraryZ/issues/14)).
 111. Short-lived access tokens + refresh + revocation ([#15](https://github.com/kararnab/LibraryZ/issues/15)).
-112. Versioned migrations (sqlite + Postgres), run under a lock, before
-     `v0.1.0` ([#16](https://github.com/kararnab/LibraryZ/issues/16)).
+112. Versioned migrations (sqlite + Postgres), run under a lock
+     ([#16](https://github.com/kararnab/LibraryZ/issues/16)). **Deferred
+     until the first production deployment** under the pre-alpha data policy
+     below. Not a blocker for `v0.1.0`.
 113. Unit tests for `catalog`, `auth`, `middleware`, `config`
      ([#17](https://github.com/kararnab/LibraryZ/issues/17)). Each slice above
      adds its own regression tests as it lands; this item covers the rest.
@@ -831,8 +834,17 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      dated section).
 
 **Sequencing.** 7.1 → 7.2 → 7.3 are each one PR-sized slice and land in
-order. 7.4 items are independent and can go in any order after that. #16
-(migrations) should land before #13 and #15, since both add schema.
+order. 7.4 items are independent and can go in any order after that. Schema
+changes (#13, #15) go straight in through AutoMigrate. #16 waits for prod.
+
+**Pre-alpha data policy (decided 2026-10-04).** LibraryZ is not even alpha,
+and there is no deployment whose data matters. **Data loss is acceptable
+until the first production deployment.** So schema changes don't need
+migration, backfill or compatibility work: if a change doesn't fit
+AutoMigrate's additive model, drop the database and blob volume
+(`docker compose down -v`) and re-run `scripts/seed.sh`. The same goes for
+API contract changes: old clients aren't supported. This ends when there's a
+prod deployment; #16 (versioned migrations) is the gate for that.
 
 **Non-goals (Phase 7):** no new product surface beyond takedown, and no
 change to the storage backend or to Kong's per-IP rate-limit decision (item 93).

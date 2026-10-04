@@ -42,8 +42,9 @@ type Edition struct {
 	// SourceSHA256 is the sha256 of the bytes as uploaded, before
 	// sanitization. Sanitizing a PDF re-serializes it with a fresh timestamp
 	// and file ID, so SHA256 (of the stored bytes) differs on every upload of
-	// the same PDF; duplicate detection keys on this instead. NULL for
-	// editions uploaded before it existed (unique index allows many NULLs).
+	// the same PDF; duplicate detection keys on this instead. Nullable so
+	// AutoMigrate can add it to an existing table (unique index allows many
+	// NULLs); pre-alpha, old rows aren't backfilled.
 	SourceSHA256 *string `gorm:"size:64;uniqueIndex" json:"-"`
 	UploadedByUserID uint      `gorm:"not null;index" json:"uploaded_by"`
 	CreatedAt        time.Time `json:"created_at"`
