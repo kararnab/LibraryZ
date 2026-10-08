@@ -586,7 +586,10 @@ moved 1.23 → 1.24, gonum's minimum).
     sets strength). Per-iteration `YᵀY`/`XᵀX` precompute + per-row gonum Cholesky
     solve (`SolveVec`). Builds top-N item-item cosine neighbors. **Atomic swap**:
     all tables rewritten in one transaction so readers never see a half-trained
-    model. `Config{Factors=32, Iterations=15, Lambda=0.1, Alpha=40, Seed=42}`. ✓
+    model. `Config{Factors=32, Iterations=15, Lambda=10, Alpha=40, Seed=42}`. ✓
+    (Lambda was 0.1 until 2026-10-08: too weak against α=40 confidences, so
+    the model memorized each user's row and the eval gate passed only by
+    luck on ~half of holdout draws.)
 81. Tests: clustering (intra-cluster work-vector cosine > cross; a cluster user
     scores its cluster's works higher) + empty-corpus clears tables. ✓
 

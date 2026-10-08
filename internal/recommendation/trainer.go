@@ -31,8 +31,14 @@ type Config struct {
 	MinRetrainAge time.Duration
 }
 
+// DefaultConfig's Lambda is sized against Alpha: observed confidences reach
+// 1+40·5 = 201, and with λ=0.1 that left the model effectively
+// unregularized — with more factors than items it reproduced each user's
+// training row exactly and scored every unseen work ≈0, so held-out items
+// ranked no better than popularity (TestMFBeatsPopularityBaseline lost on
+// ~half of seeds). λ=10 recovers held-out items reliably at k=8..32.
 func DefaultConfig() Config {
-	return Config{Factors: 32, Iterations: 15, Lambda: 0.1, Alpha: 40, NeighborsTopN: 20, Seed: 42}
+	return Config{Factors: 32, Iterations: 15, Lambda: 10, Alpha: 40, NeighborsTopN: 20, Seed: 42}
 }
 
 // Trainer fits an implicit-feedback ALS model (Hu–Koren–Volinsky) over the

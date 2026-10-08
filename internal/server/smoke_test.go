@@ -1051,7 +1051,6 @@ func TestRecommendationsReturnsContentMatch(t *testing.T) {
 
 func TestRecommendationsMatrixFactorizationPersonalized(t *testing.T) {
 	ts, db := newTestServer(t)
-	// First signup → user id 1; that's the user we fetch recommendations for.
 	auth := signupAndLogin(t, ts.URL, "mfmain@x.com", "hunter22", "Main")
 
 	// Cluster A (3 works) and cluster B (3 works).
@@ -1070,14 +1069,17 @@ func TestRecommendationsMatrixFactorizationPersonalized(t *testing.T) {
 	putLibrary(t, ts.URL, auth, a[0], map[string]any{"status": "read", "rating": 5})
 	putLibrary(t, ts.URL, auth, a[1], map[string]any{"status": "read", "rating": 5})
 
-	// Synthetic co-users establish the collaborative pattern: 2–7 like all of
-	// A, 8–13 like all of B. Seeded directly (the trainer only reads user_books).
-	for u := uint(2); u <= 7; u++ {
+	// Synthetic co-users establish the collaborative pattern: six like all of
+	// A, six like all of B. Seeded directly (the trainer only reads
+	// user_books) under ids far above any real signup — the smoke tests share
+	// one database, so the main user's id depends on which tests ran first.
+	const coUser = uint(1_000_000)
+	for u := coUser; u < coUser+6; u++ {
 		for _, w := range a {
 			seedUserBook(t, db, u, w, "read", 5)
 		}
 	}
-	for u := uint(8); u <= 13; u++ {
+	for u := coUser + 6; u < coUser+12; u++ {
 		for _, w := range b {
 			seedUserBook(t, db, u, w, "read", 5)
 		}

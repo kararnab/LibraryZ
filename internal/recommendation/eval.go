@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"sort"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -46,10 +47,21 @@ func Evaluate(ctx context.Context, db *gorm.DB, cfg Config, k int, holdoutFrac f
 		}
 	}
 
+	// Iterate users and their items in a fixed order: ranging over the map
+	// directly would feed the seeded RNG in Go's randomized map order, so the
+	// same seed would pick a different holdout set on every run.
+	users := make([]uint, 0, len(likedByUser))
+	for u := range likedByUser {
+		users = append(users, u)
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i] < users[j] })
+
 	rng := rand.New(rand.NewSource(seed))
 	heldout := map[uint]map[uuid.UUID]bool{}
 	var evalUsers []uint
-	for u, items := range likedByUser {
+	for _, u := range users {
+		items := likedByUser[u]
+		sort.Slice(items, func(i, j int) bool { return items[i].String() < items[j].String() })
 		if len(items) < 2 {
 			continue
 		}
