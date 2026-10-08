@@ -1,9 +1,9 @@
-# One-command local stack: Postgres + MinIO + the LibraryZ backend.
+# One-command local stack: Postgres + RustFS (S3) + the LibraryZ backend.
 #   docker compose up --build
 # The Compose Multiplatform frontend is a *client* (desktop/wasm/android), not a
 # service — run it on the host (frontend/gradlew :composeApp:run) pointed at
-# http://localhost:8080. Blobs live in MinIO (S3-compatible object storage);
-# console at http://localhost:9001 (minioadmin / minioadmin).
+# http://localhost:8080. Blobs live in RustFS (S3-compatible object storage);
+# console at http://localhost:9101 (rustfsadmin / rustfsadmin).
 services:
   postgres:
     image: postgres:16-alpine
@@ -95,20 +95,27 @@ services:
     ports:
       - "8080:8000" # host 8080 -> Kong proxy 8000 (replaces the old libraryz mapping)
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  # S3-compatible blob store. This used to be MinIO, but MinIO stopped
+  # publishing container images and archived its repository (2026), so
+  # `minio/minio` no longer pulls. RustFS is an Apache-2.0, actively
+  # maintained S3 server; libraryz only speaks the S3 API (via minio-go),
+  # so any S3-compatible store — AWS S3, R2, B2, SeaweedFS — works the same.
+  # Pinned: bump deliberately.
+  rustfs:
+    image: rustfs/rustfs:1.0.1
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_VOLUMES: /data
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
     ports:
       - "9100:9000" # S3 API (host 9100 → container 9000; 9000 may be taken)
       - "9101:9001" # web console
     volumes:
-      - miniodata:/data
+      - s3data:/data
     healthcheck:
-      # Port-probe via the shell built into the minio image (no curl/wget there).
-      test: ["CMD-SHELL", "mc ready local 2>/dev/null || exit 0"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -120,10 +127,10 @@ services:
         condition: service_healthy
       pgbouncer:
         condition: service_started
-      minio:
-        condition: service_started
+      rustfs:
+        condition: service_healthy
     environment:
-      # `pgbouncer` / `postgres` / `minio` are the service hostnames on the
+      # `pgbouncer` / `postgres` / `rustfs` are the service hostnames on the
       # compose network. libraryz talks to Postgres through pgbouncer
       # (Slice 6.3); default_query_exec_mode=exec disables pgx's per-conn
       # prepared-statement cache so transaction-mode pooling is safe.
@@ -146,13 +153,13 @@ services:
       # Token lifetimes (Go durations; defaults shown).
       # LIBRARYZ_ACCESS_TOKEN_TTL: "15m"
       # LIBRARYZ_REFRESH_TOKEN_TTL: "720h"
-      # libraryz uses S3/MinIO when LIBRARYZ_S3_ENDPOINT is set, otherwise
+      # libraryz uses S3 when LIBRARYZ_S3_ENDPOINT is set, otherwise
       # falls back to a local-filesystem store under LIBRARYZ_STORAGE_DIR.
       # Setting the endpoint here is the entire signal — there is no separate
       # LIBRARYZ_STORAGE_BACKEND knob.
-      LIBRARYZ_S3_ENDPOINT: "minio:9000"
-      LIBRARYZ_S3_ACCESS_KEY: "minioadmin"
-      LIBRARYZ_S3_SECRET_KEY: "minioadmin"
+      LIBRARYZ_S3_ENDPOINT: "rustfs:9000"
+      LIBRARYZ_S3_ACCESS_KEY: "rustfsadmin"
+      LIBRARYZ_S3_SECRET_KEY: "rustfsadmin"
       LIBRARYZ_S3_BUCKET: "libraryz"
       LIBRARYZ_S3_USE_SSL: "false"
       # CORS allowlist for the browser (Wasm) client — exact-match, comma-separated.
@@ -187,7 +194,7 @@ services:
       # LIBRARYZ_BLOB_GC_RETENTION: "720h"
       # Recommendation retrain interval (optional; default 6h):
       # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
-    # /ready checks Postgres + MinIO (503 if either is unreachable); /health is
+    # /ready checks Postgres + the S3 store (503 if either is unreachable); /health is
     # liveness only. busybox wget ships in the alpine runtime image.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
@@ -202,4 +209,4 @@ services:
 
 volumes:
   pgdata:
-  miniodata:
+  s3data:

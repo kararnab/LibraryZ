@@ -122,7 +122,7 @@ func migrate(cfg *config.Config) error {
 	return migrations.Up(context.Background(), conn)
 }
 
-// newStorage picks the blob backend implicitly from config: S3/MinIO when
+// newStorage picks the blob backend implicitly from config: S3 when
 // LIBRARYZ_S3_ENDPOINT is set (production path — docker-compose, real envs),
 // else the local filesystem under LIBRARYZ_STORAGE_DIR (host-mode dev
 // fallback; also the backend used by smoke tests via storage.NewLocal). There
@@ -138,7 +138,7 @@ func newStorage(cfg *config.Config) (storage.Storage, error) {
 			UseSSL:    cfg.S3UseSSL,
 		})
 	}
-	log.Printf("storage: local backend (dir=%s; set LIBRARYZ_S3_ENDPOINT to use S3/MinIO)", cfg.StorageDir)
+	log.Printf("storage: local backend (dir=%s; set LIBRARYZ_S3_ENDPOINT to use S3)", cfg.StorageDir)
 	return storage.NewLocal(cfg.StorageDir)
 }
 

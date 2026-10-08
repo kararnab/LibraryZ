@@ -77,7 +77,8 @@ That's it. The stack comes up with:
 
 - **API** on <http://localhost:8080> (Go backend)
 - **Postgres** on `:5432` (metadata)
-- **MinIO** on `:9000` / console `:9001` (S3-compatible blob store)
+- **RustFS** on `:9100` / console `:9101` (S3-compatible blob store;
+  MinIO no longer publishes images — any S3-compatible store works)
 
 Smoke-test it:
 
@@ -124,7 +125,7 @@ state the screenshot grid above expects.
 └──────────────────────────────────────────────────────────────┘
          │                       │                       │
          ▼                       ▼                       ▼
-   PostgreSQL            Local FS  or  S3 / MinIO       (no
+   PostgreSQL            Local FS  or  S3-compatible    (no
    (metadata, FTS,    (file blobs, sha256-addressed,    external
     rec_* tables)     content-deduped, streamed)        ML svc)
 ```
@@ -134,8 +135,9 @@ Design notes worth knowing before you contribute:
 - **Modular monolith.** One Go binary, domain packages under `internal/`.
   Add new functionality as a package there, not a new `cmd/`.
 - **Two storage backends, one interface.** `internal/storage.Storage` is
-  implemented by `Local` (filesystem) and `S3` (MinIO / any S3-compatible
-  store via minio-go). Selected by `LIBRARYZ_STORAGE_BACKEND=local|s3`.
+  implemented by `Local` (filesystem) and `S3` (any S3-compatible store
+  via minio-go — RustFS in compose, AWS S3, R2, B2, …). Selected implicitly:
+  `S3` when `LIBRARYZ_S3_ENDPOINT` is set, else `Local`.
 - **Downloads stream through the backend** (`GET /editions/{id}/download`
   → `store.Get` → `io.Copy`). No presigned URLs.
 - **Recommendations are a trained model.** Implicit ALS trains in-process
@@ -166,7 +168,7 @@ via `glebarez/sqlite`) · golang-jwt · bcrypt · minio-go · gonum (for ALS).
 kotlinx.serialization · AGP 8.7.3 · PDFBox (Desktop) / `PdfRenderer`
 (Android) / pdf.js (Wasm) / PDFKit (iOS).
 
-**Ops** — Docker / docker-compose · MinIO · OpenAPI 3.1 spec at
+**Ops** — Docker / docker-compose · RustFS (S3) · Kong · OpenAPI 3.1 spec at
 [openapi/libraryz.yaml](openapi/libraryz.yaml).
 
 ## Configuration
@@ -177,9 +179,8 @@ All via environment variables. Defaults work for `docker compose up`.
 |-------------------------------------------|--------------------------------------------------------------------|
 | `DATABASE_URL`                            | `postgres://user:password@localhost:5432/libraryz?sslmode=disable` |
 | `LIBRARYZ_LISTEN_ADDR`                    | `:8080`                                                            |
-| `LIBRARYZ_STORAGE_BACKEND`                | `local` (`s3` for MinIO / S3-compatible)                           |
-| `LIBRARYZ_STORAGE_DIR`                    | `./data/blobs` (local backend only)                                |
-| `LIBRARYZ_S3_ENDPOINT`                    | _(unset)_ — e.g. `minio:9000`, `s3.amazonaws.com`                  |
+| `LIBRARYZ_STORAGE_DIR`                    | `./data/blobs` (local backend, used when no S3 endpoint is set)    |
+| `LIBRARYZ_S3_ENDPOINT`                    | _(unset)_ — e.g. `rustfs:9000`, `s3.amazonaws.com`; setting it selects S3 |
 | `LIBRARYZ_S3_ACCESS_KEY` / `_SECRET_KEY`  | _(unset)_                                                          |
 | `LIBRARYZ_S3_BUCKET`                      | `libraryz`                                                         |
 | `LIBRARYZ_S3_USE_SSL`                     | `false`                                                            |

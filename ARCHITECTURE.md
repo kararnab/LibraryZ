@@ -57,7 +57,7 @@ build / run commands, see [README.md](README.md) and
        ┌──────────────────────────────────┐
        │  internal/storage.Storage iface  │   sha256-addressed
        │  ── Local (filesystem)           │   content-deduped
-       │  ── S3   (MinIO / S3-compatible) │   streamed I/O
+       │  ── S3   (any S3-compatible)     │   streamed I/O
        └──────────────────────────────────┘
 ```
 
@@ -162,7 +162,8 @@ Two implementations:
   sharded by the first two hex chars of the sha256 (`ab/cd/abcd…`). Default
   for host runs and for `go test ./...`.
 - **`S3`** — any S3-compatible store via `minio-go`. Used by
-  `docker compose up` (against the `minio` service in the compose file).
+  `docker compose up` (against the `rustfs` service in the compose file;
+  MinIO stopped publishing images in 2026).
 
 The interface is content-addressed: callers pass the sha256 they computed
 while reading the upload stream, and the storage backend either writes the

@@ -129,13 +129,13 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   **direct** connection (`LIBRARYZ_MIGRATE_DATABASE_URL`, compose points it
   at `postgres:5432`, not pgbouncer). Runs on startup unless
   `LIBRARYZ_AUTO_MIGRATE=false`; `libraryz migrate` runs it one-shot.
-- **Storage: S3/MinIO is the production backend; `Local` is the test seam.**
+- **Storage: S3 is the production backend; `Local` is the test seam.**
   `internal/storage.Storage` (Put/Get/Delete/Exists, content-addressed by
   sha256) is implemented by `S3` (`s3.go` via `minio-go`, used by
-  docker-compose against MinIO and by every real deployment) and `Local`
+  docker-compose against RustFS and by every real deployment) and `Local`
   (`local.go`, filesystem under `LIBRARYZ_STORAGE_DIR`). `Local` exists so
   `internal/server/smoke_test.go` can do a full HTTP-level round-trip
-  without needing MinIO running — that's what preserves the "no Docker
+  without needing an S3 server running — that's what preserves the "no Docker
   for `go test`" property. It's also the fallback when running
   `go run ./cmd/libraryz` on the host without S3 env. **Selection is
   implicit**: if `LIBRARYZ_S3_ENDPOINT` is set the S3 backend is used
@@ -147,6 +147,11 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   500 MiB cap). Adding minio-go pulled newer `golang.org/x/*` deps that
   require **go 1.25** (go.mod directive + the `golang:1.25-alpine`
   builder).
+  **Compose runs RustFS, not MinIO** (`rustfs/rustfs`, pinned): MinIO stopped
+  publishing images and archived its repo in 2026, so `minio/minio` doesn't
+  pull. The client library is still `minio-go` — it's a generic S3 client.
+  `go test ./internal/storage -run S3` runs against any S3 endpoint via
+  `LIBRARYZ_S3_{ENDPOINT,ACCESS_KEY,SECRET_KEY}`.
 - **Recommendations are a trained model, not a pure query.** `cmd/libraryz`
   trains implicit-ALS in-process (goroutine on startup + `time.Ticker`), writing
   the `rec_*` factor/neighbor tables; `Recommend` reads those. Factor vectors are

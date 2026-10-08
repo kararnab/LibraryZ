@@ -38,7 +38,7 @@ body:
         - Frontend - Desktop
         - Frontend - Web (Wasm)
         - Frontend - iOS
-        - Storage (local / S3 / MinIO)
+        - Storage (local / S3)
         - Recommendations
         - Docs
         - Other

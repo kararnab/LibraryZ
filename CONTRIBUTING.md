@@ -38,7 +38,7 @@ docker compose up postgres            # just the DB
 go run ./cmd/libraryz                 # API on :8080
 ```
 
-Or run the whole stack (API + Postgres + MinIO):
+Or run the whole stack (API + Postgres + RustFS for S3):
 
 ```bash
 docker compose up --build
