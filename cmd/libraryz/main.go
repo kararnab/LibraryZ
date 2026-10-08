@@ -12,6 +12,7 @@ import (
 
 	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
+	"github.com/kararnab/libraryZ/internal/runlock"
 	"github.com/kararnab/libraryZ/internal/server"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"github.com/kararnab/libraryZ/pkg/config"
@@ -139,7 +140,7 @@ func newStorage(cfg *config.Config) (storage.Storage, error) {
 
 // startRecommendationTraining trains the MF model once on startup (non-blocking
 // — serving falls back to content/popularity until the first model lands) and
-// re-trains on a ticker. In-process is fine until the matrix outgrows one pass;
+// re-trains on a ticker. Safe to run on every replica (see Trainer.Train). In-process is fine until the matrix outgrows one pass;
 // the scale path is a separate cmd/rectrain job.
 func startRecommendationTraining(dbConn *gorm.DB, cfg *config.Config) {
 	recCfg := recommendation.DefaultConfig()
@@ -149,13 +150,23 @@ func startRecommendationTraining(dbConn *gorm.DB, cfg *config.Config) {
 	if cfg.RecAlpha > 0 {
 		recCfg.Alpha = cfg.RecAlpha
 	}
+	// Every instance runs this loop, but Train holds a cluster-wide lock and
+	// skips if another instance trained within half an interval — so with N
+	// replicas the model is still trained ~once per interval, by whichever
+	// instance gets there first, with no single designated trainer to lose.
+	recCfg.MinRetrainAge = cfg.RecRetrainInterval / 2
 	trainer := recommendation.NewTrainer(dbConn, recCfg)
 
 	train := func() {
-		if err := trainer.Train(context.Background()); err != nil {
-			log.Printf("rec: train failed: %v", err)
-		} else {
+		switch err := trainer.Train(context.Background()); {
+		case err == nil:
 			log.Printf("rec: model retrained")
+		case errors.Is(err, runlock.ErrBusy):
+			log.Printf("rec: another instance is training; skipped")
+		case errors.Is(err, recommendation.ErrFresh):
+			log.Printf("rec: model is fresh; skipped")
+		default:
+			log.Printf("rec: train failed: %v", err)
 		}
 	}
 	go func() {

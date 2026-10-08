@@ -151,7 +151,10 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   trains implicit-ALS in-process (goroutine on startup + `time.Ticker`), writing
   the `rec_*` factor/neighbor tables; `Recommend` reads those. Factor vectors are
   `datatypes.JSON` (`[]float64`) for sqlite/Postgres parity — **don't** switch to
-  pgvector without a test-DB plan. The Phase 4 content+popularity scorer is
+  pgvector without a test-DB plan. Every replica runs the ticker, but
+  `Trainer.Train` holds `runlock.KeyRecTrainer` (`pg_try_advisory_xact_lock`
+  — pgbouncer-safe) and skips if another instance is training or the model
+  is younger than half the interval. The Phase 4 content+popularity scorer is
   **kept on purpose** as the cold-start fallback (user with no trained vector) —
   don't delete it. Knobs: `LIBRARYZ_REC_{RETRAIN_INTERVAL,FACTORS,ALPHA}`.
   Whether MF actually helps is gated by `go test -tags=eval` (above).
