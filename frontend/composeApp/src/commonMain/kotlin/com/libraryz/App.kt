@@ -640,6 +640,10 @@ private fun DataDrivenBrowse(
             onForYouClick = onForYouClick,
             onSearch = { q -> works.search(q) },
             activeSearchQuery = works.searchQuery,
+            onLoadMore = { scope.launch { works.loadMore() } },
+            loadingMore = works.loadingMore,
+            endReached = works.endReached,
+            loadMoreError = works.loadMoreError,
         )
     }
 }

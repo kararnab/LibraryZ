@@ -7,6 +7,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -225,5 +226,133 @@ class WorksStateTest {
         val ex = kotlin.test.assertFailsWith<ApiException> { state.removeWork("a", "x") }
         assertEquals(403, ex.status)
         assertEquals(listOf("a"), state.items?.map { it.id })
+    }
+
+    // --- Pagination (#7) ---
+
+    private fun worksJson(ids: IntRange) =
+        ids.joinToString(",", "[", "]") { """{"id":"w$it","title":"Work $it"}""" }
+
+    /** Serves `total` works in created order, honouring limit/offset like the backend. */
+    private fun pagedEngine(total: Int, path: String = "/works") = MockEngine { req ->
+        assertEquals(path, req.url.encodedPath)
+        val limit = req.url.parameters["limit"]!!.toInt()
+        val offset = req.url.parameters["offset"]!!.toInt()
+        val end = minOf(offset + limit, total)
+        val (s, body, h) = jsonRespond(if (offset >= end) "[]" else worksJson(offset until end))
+        respond(body, s, h)
+    }
+
+    @Test
+    fun loadMoreAppendsPagesUntilAShortPage() = runTest {
+        val engine = pagedEngine(total = 5)
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 2)
+
+        state.refresh()
+        assertEquals(listOf("w0", "w1"), state.items?.map { it.id })
+        assertTrue(!state.endReached)
+
+        state.loadMore()
+        assertEquals(listOf("w0", "w1", "w2", "w3"), state.items?.map { it.id })
+        assertEquals("2", engine.requestHistory.last().url.parameters["offset"])
+
+        state.loadMore()
+        assertEquals(5, state.items?.size)
+        assertTrue(state.endReached)
+
+        // At the end: no more requests.
+        val requests = engine.requestHistory.size
+        state.loadMore()
+        assertEquals(requests, engine.requestHistory.size)
+    }
+
+    @Test
+    fun exactMultipleOfPageSizeEndsOnEmptyPage() = runTest {
+        val state = WorksState(ApiClient("http://t", engine = pagedEngine(total = 4)), pageSize = 2)
+        state.refresh()
+        state.loadMore()
+        assertTrue(!state.endReached)
+        state.loadMore()
+        assertTrue(state.endReached)
+        assertEquals(4, state.items?.size)
+    }
+
+    @Test
+    fun loadMoreDeduplicatesShiftedRows() = runTest {
+        // A work inserted at the head between page loads shifts offsets by one,
+        // so the next page repeats the previous page's last row.
+        var shifted = false
+        val engine = MockEngine { req ->
+            val offset = req.url.parameters["offset"]!!.toInt()
+            val ids = if (!shifted) 0..1 else (offset - 1) until (offset + 1)
+            shifted = true
+            val (s, body, h) = jsonRespond(worksJson(ids))
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 2)
+        state.refresh()
+        state.loadMore()
+        assertEquals(listOf("w0", "w1", "w2"), state.items?.map { it.id })
+    }
+
+    @Test
+    fun searchPaginatesTheSearchEndpoint() = runTest {
+        val engine = pagedEngine(total = 3, path = "/works/search")
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 2)
+
+        state.search("work")
+        state.loadMore()
+
+        assertEquals(3, state.items?.size)
+        assertTrue(state.endReached)
+        assertTrue(engine.requestHistory.all { it.url.parameters["q"] == "work" })
+    }
+
+    @Test
+    fun newSearchResetsPagingAndDiscardsStalePages() = runTest {
+        val page2Requested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val offset = req.url.parameters["offset"]!!.toInt()
+            if (req.url.encodedPath == "/works" && offset > 0) {
+                page2Requested.complete(Unit)
+                gate.await() // hold page 2 in flight
+            }
+            val ids = if (req.url.encodedPath == "/works") offset..offset + 1 else 100..100
+            val (s, body, h) = jsonRespond(worksJson(ids))
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 2)
+        state.refresh()
+
+        val pending = async { state.loadMore() }
+        page2Requested.await()
+        state.search("x") // replaces the list while page 2 is in flight
+        gate.complete(Unit)
+        pending.await()
+
+        assertEquals(listOf("w100"), state.items?.map { it.id })
+        assertTrue(state.endReached)
+        assertTrue(!state.loadingMore)
+    }
+
+    @Test
+    fun loadMoreFailureKeepsItemsAndReportsError() = runTest {
+        val engine = MockEngine { req ->
+            if (req.url.parameters["offset"] == "0") {
+                val (s, body, h) = jsonRespond(worksJson(0..1))
+                respond(body, s, h)
+            } else {
+                respondError(HttpStatusCode.InternalServerError, "boom")
+            }
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 2)
+        state.refresh()
+        state.loadMore()
+
+        assertEquals(2, state.items?.size)
+        assertNotNull(state.loadMoreError)
+        assertNull(state.error)
+        assertTrue(!state.loadingMore)
     }
 }

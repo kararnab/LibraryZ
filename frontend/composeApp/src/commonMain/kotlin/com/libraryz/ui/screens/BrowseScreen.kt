@@ -6,21 +6,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Bookmarks
 import androidx.compose.material.icons.outlined.RateReview
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Badge
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -41,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -51,6 +56,11 @@ import com.libraryz.data.Work
 import com.libraryz.ui.components.EmptyState
 import com.libraryz.ui.components.WorkCard
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+
+// How many rows before the end of the loaded list to start fetching the next page.
+private const val LOAD_MORE_THRESHOLD = 5
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,8 +77,30 @@ fun BrowseScreen(
     onForYouClick: (() -> Unit)? = null,
     onSearch: (suspend (String) -> Unit)? = null,
     activeSearchQuery: String? = null,
+    // Infinite scroll: called when the user nears the end of the loaded
+    // works, unless [endReached]. [loadMoreError] shows a retry footer.
+    onLoadMore: (() -> Unit)? = null,
+    loadingMore: Boolean = false,
+    endReached: Boolean = true,
+    loadMoreError: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val listState = rememberLazyListState()
+    // Ask for the next page once the last visible row is within a few rows
+    // of the end. snapshotFlow + distinctUntilChanged fires once per
+    // threshold crossing rather than on every scroll frame; keying on the
+    // list size re-arms it after each page lands.
+    if (onLoadMore != null && !endReached && loadMoreError == null) {
+        LaunchedEffect(listState, works.size) {
+            snapshotFlow {
+                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                last >= listState.layoutInfo.totalItemsCount - LOAD_MORE_THRESHOLD
+            }
+                .distinctUntilChanged()
+                .filter { it }
+                .collect { onLoadMore() }
+        }
+    }
     var menuOpen by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(activeSearchQuery != null) }
     var queryText by remember { mutableStateOf(activeSearchQuery ?: "") }
@@ -210,6 +242,7 @@ fun BrowseScreen(
                 EmptyState(title = "No works yet", body = "Tap + to add one")
             }
             else -> LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     top = padding.calculateTopPadding(),
@@ -219,7 +252,7 @@ fun BrowseScreen(
                 if (searching) {
                     item(key = "result-count") {
                         Text(
-                            text = "${works.size} result${if (works.size == 1) "" else "s"}",
+                            text = "${works.size}${if (endReached) "" else "+"} result${if (works.size == 1 && endReached) "" else "s"}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -232,6 +265,22 @@ fun BrowseScreen(
                         onClick = { onWorkClick(w) },
                         highlight = activeSearchQuery,
                     )
+                }
+                if (loadingMore || loadMoreError != null) {
+                    item(key = "load-more") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (loadMoreError != null) {
+                                TextButton(onClick = { onLoadMore?.invoke() }) {
+                                    Text("Couldn't load more — retry")
+                                }
+                            } else {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                    }
                 }
             }
         }
