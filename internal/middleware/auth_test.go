@@ -139,21 +139,21 @@ func TestAuthRejects(t *testing.T) {
 		return c
 	}
 	cases := map[string]string{
-		"missing header":       "",
-		"wrong scheme":         "Basic " + bearer(t, 2, 0)[len("Bearer "):],
-		"embedded bearer":      "xyz" + bearer(t, 2, 0),
-		"garbage token":        "Bearer not.a.jwt",
-		"expired":              "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"exp": time.Now().Add(-time.Minute).Unix()}), kid, secret),
-		"no exp claim":         "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"exp": nil}), kid, secret),
-		"wrong alg HS512":      "Bearer " + sign(t, jwt.SigningMethodHS512, claims(nil), kid, secret),
-		"alg none":             "Bearer " + sign(t, jwt.SigningMethodNone, claims(nil), kid, jwt.UnsafeAllowNoneSignatureType),
-		"wrong secret":         "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), kid, []byte("some-other-secret")),
-		"missing kid":          "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), "", secret),
-		"unknown kid":          "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), "deadbeef", secret),
-		"missing user_id":      "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"user_id": nil}), kid, secret),
-		"string user_id":       "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"user_id": "2"}), kid, secret),
+		"missing header":        "",
+		"wrong scheme":          "Basic " + bearer(t, 2, 0)[len("Bearer "):],
+		"embedded bearer":       "xyz" + bearer(t, 2, 0),
+		"garbage token":         "Bearer not.a.jwt",
+		"expired":               "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"exp": time.Now().Add(-time.Minute).Unix()}), kid, secret),
+		"no exp claim":          "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"exp": nil}), kid, secret),
+		"wrong alg HS512":       "Bearer " + sign(t, jwt.SigningMethodHS512, claims(nil), kid, secret),
+		"alg none":              "Bearer " + sign(t, jwt.SigningMethodNone, claims(nil), kid, jwt.UnsafeAllowNoneSignatureType),
+		"wrong secret":          "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), kid, []byte("some-other-secret")),
+		"missing kid":           "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), "", secret),
+		"unknown kid":           "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), "deadbeef", secret),
+		"missing user_id":       "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"user_id": nil}), kid, secret),
+		"string user_id":        "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"user_id": "2"}), kid, secret),
 		"revoked token_version": bearer(t, 3, 0),
-		"unknown user":         bearer(t, 99, 0),
+		"unknown user":          bearer(t, 99, 0),
 	}
 	db := testDB(t)
 	for name, header := range cases {

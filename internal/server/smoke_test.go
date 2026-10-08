@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -137,14 +138,18 @@ func TestSmokeHappyPath(t *testing.T) {
 		t.Fatalf("bad edition meta: %+v", ed)
 	}
 
-	// Dedup: re-upload identical bytes -> same edition id, 201 still
+	// Duplicate: re-upload identical bytes -> 409 naming the existing edition
 	dupResp := uploadEdition(t, ts.URL, auth, work.ID, "txt", "en", fileBytes)
+	if dupResp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate upload: want 409, got %d body=%s", dupResp.StatusCode, readBody(dupResp))
+	}
 	var dup struct {
-		ID string `json:"id"`
+		EditionID string `json:"edition_id"`
+		WorkID    string `json:"work_id"`
 	}
 	_ = json.NewDecoder(dupResp.Body).Decode(&dup)
-	if dup.ID != ed.ID {
-		t.Fatalf("dedup failed: first=%s second=%s", ed.ID, dup.ID)
+	if dup.EditionID != ed.ID || dup.WorkID != work.ID {
+		t.Fatalf("duplicate upload: want edition %s on work %s, got %+v", ed.ID, work.ID, dup)
 	}
 
 	// GET edition metadata
@@ -233,6 +238,127 @@ func TestReadyReturns503WhenADependencyIsDown(t *testing.T) {
 	resp, _ = http.Get(ts.URL + "/ready")
 	if body := readBody(resp); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"database":"unavailable"`) {
 		t.Fatalf("db down: got %d %s", resp.StatusCode, body)
+	}
+}
+
+// signupLogin creates a user and returns its "Bearer …" Authorization value.
+func signupLogin(t *testing.T, base, email string) string {
+	t.Helper()
+	body := map[string]string{"email": email, "password": "hunter22", "name": "T"}
+	if resp, err := http.Post(base+"/auth/signup", "application/json", mustJSON(t, body)); err != nil || resp.StatusCode != 201 {
+		t.Fatalf("signup: err=%v code=%d", err, statusOf(resp))
+	}
+	resp, err := http.Post(base+"/auth/login", "application/json", mustJSON(t, body))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("login: err=%v code=%d", err, statusOf(resp))
+	}
+	return resp.Header.Get("Authorization")
+}
+
+// postWork creates a work from an arbitrary JSON body and returns the
+// response, decoded into a map.
+func postWork(t *testing.T, base, auth string, body map[string]any) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, base+"/works", mustJSON(t, body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", auth)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+// Server-owned fields in a create-work body (id, editions, tags, timestamps)
+// must be ignored: editions only come from real uploads.
+func TestCreateWorkIgnoresServerOwnedFields(t *testing.T) {
+	ts, db := newTestServer(t)
+	auth := signupLogin(t, ts.URL, "creatework-fields@b.com")
+
+	const forcedID = "11111111-1111-1111-1111-111111111111"
+	code, work := postWork(t, ts.URL, auth, map[string]any{
+		"title":      "  Moby-Dick  ",
+		"id":         forcedID,
+		"created_at": "2000-01-01T00:00:00Z",
+		"editions": []map[string]any{{
+			"id": "22222222-2222-2222-2222-222222222222", "format": "txt",
+			"sha256": strings.Repeat("a", 64), "size_bytes": 1, "uploaded_by": 999,
+		}},
+		"tags": []map[string]any{{"id": "33333333-3333-3333-3333-333333333333", "name": "x"}},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create work: want 201, got %d %v", code, work)
+	}
+	if work["id"] == forcedID {
+		t.Fatalf("client-supplied id was honored")
+	}
+	if work["title"] != "Moby-Dick" {
+		t.Fatalf("title not trimmed: %q", work["title"])
+	}
+	if strings.HasPrefix(fmt.Sprint(work["created_at"]), "2000") {
+		t.Fatalf("client-supplied created_at was honored: %v", work["created_at"])
+	}
+	// The test DB is shared across tests, so count only rows this request
+	// could have written.
+	checks := map[string]*gorm.DB{
+		"editions":  db.Table("editions").Where("work_id = ? OR id = ?", work["id"], "22222222-2222-2222-2222-222222222222"),
+		"tags":      db.Table("tags").Where("id = ?", "33333333-3333-3333-3333-333333333333"),
+		"work_tags": db.Table("work_tags").Where("work_id = ?", work["id"]),
+	}
+	for tbl, q := range checks {
+		var n int64
+		if err := q.Count(&n).Error; err != nil {
+			t.Fatalf("count %s: %v", tbl, err)
+		}
+		if n != 0 {
+			t.Fatalf("create work wrote %d %s row(s) from the request body", n, tbl)
+		}
+	}
+
+	if code, _ := postWork(t, ts.URL, auth, map[string]any{"title": "   "}); code != http.StatusBadRequest {
+		t.Fatalf("blank title: want 400, got %d", code)
+	}
+}
+
+// Uploading bytes that already back an edition of a different work is a 409
+// naming the existing edition; the second work gains nothing.
+func TestUploadDuplicateAcrossWorksReturns409(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupLogin(t, ts.URL, "dup-across-works@b.com")
+	_, a := postWork(t, ts.URL, auth, map[string]any{"title": "A"})
+	_, b := postWork(t, ts.URL, auth, map[string]any{"title": "B"})
+	aID, bID := a["id"].(string), b["id"].(string)
+
+	content := []byte("TestUploadDuplicateAcrossWorksReturns409: same bytes twice\n")
+	first := uploadEdition(t, ts.URL, auth, aID, "txt", "en", content)
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first upload: want 201, got %d %s", first.StatusCode, readBody(first))
+	}
+	var ed struct{ ID string }
+	_ = json.NewDecoder(first.Body).Decode(&ed)
+
+	second := uploadEdition(t, ts.URL, auth, bID, "txt", "en", content)
+	if second.StatusCode != http.StatusConflict {
+		t.Fatalf("cross-work duplicate: want 409, got %d %s", second.StatusCode, readBody(second))
+	}
+	var dup struct {
+		EditionID string `json:"edition_id"`
+		WorkID    string `json:"work_id"`
+	}
+	_ = json.NewDecoder(second.Body).Decode(&dup)
+	if dup.EditionID != ed.ID || dup.WorkID != aID {
+		t.Fatalf("409 body: want edition %s on work %s, got %+v", ed.ID, aID, dup)
+	}
+
+	resp, _ := http.Get(ts.URL + "/works/" + bID)
+	var got struct {
+		Editions []struct{ ID string } `json:"editions"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	if len(got.Editions) != 0 {
+		t.Fatalf("work B gained editions after a rejected duplicate: %+v", got.Editions)
 	}
 }
 
@@ -1434,5 +1560,31 @@ func TestRefreshLogoutAndLogoutAll(t *testing.T) {
 	}
 	if code := getMe(t, ts.URL, loginPair(t, ts.URL, "session1@x.com", "hunter22").AccessToken); code != http.StatusOK {
 		t.Fatalf("fresh login after logout-all: %d", code)
+	}
+}
+
+// A non-moderator may remove only a work they created that has no editions —
+// what the new-work upload flow does when its first upload is rejected.
+func TestCreatorCanRemoveOwnEmptyWorkOnly(t *testing.T) {
+	ts, _ := newTestServer(t)
+	creator := signupAndLogin(t, ts.URL, "creator1@x.com", "hunter22", "C")
+	other := signupAndLogin(t, ts.URL, "creator2@x.com", "hunter22", "O")
+	reason := map[string]string{"reason": "upload failed"}
+
+	empty := createWork(t, ts.URL, creator, "Empty Work", "")
+	if r := deleteAuthed(t, ts.URL+"/works/"+empty, other, reason); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("someone else's work: want 403, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, ts.URL+"/works/"+empty, creator, reason); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("own empty work: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+
+	withEdition := createWork(t, ts.URL, creator, "Has Edition", "")
+	editionID(t, uploadEdition(t, ts.URL, creator, withEdition, "txt", "en", []byte("creator1 content\n")))
+	if r := deleteAuthed(t, ts.URL+"/works/"+withEdition, creator, reason); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("own work with an edition: want 403, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, ts.URL+"/works/"+uuid.NewString(), creator, reason); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown work: want 404, got %d", r.StatusCode)
 	}
 }

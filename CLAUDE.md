@@ -106,6 +106,23 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
 
 ## Conventions
 
+- **Pre-alpha: data loss is OK until the first production deployment.**
+  Don't spend effort on backfills or backward compatibility (API or data)
+  for existing rows. The versioned-migration framework (#16,
+  `internal/migrations`) is in place, but until the first production
+  deployment schema changes **edit the baseline snapshot in place** rather
+  than adding numbered migrations; an existing dev DB then needs a wipe
+  (`docker compose down -v`) and re-seed (`scripts/seed.sh`). See
+  "Pre-alpha data policy" in PLAN.md Phase 7.
+- **PDF sanitization is out of process.** `cmd/libraryz` calls
+  `sanitize.EnableIsolation`, and PDFs are then sanitized by re-running the
+  binary in child mode under a hard memory cap. `sanitize.RunChildIfRequested()`
+  must stay the **first line of `main`**, and any test binary that enables
+  isolation must call it from `TestMain` (see `internal/server/upload_test.go`).
+  Handlers use `sanitize.SanitizeContext` (returns a `ReadCloser`; always
+  `Close` it). Don't parse PDFs with pdfcpu in the server process. Hostile
+  object streams inflate to gigabytes (see ARCHITECTURE "Upload
+  sanitization").
 - **Don't reintroduce** the old microservice split (separate `cmd/auth`,
   `cmd/catalog`, etc.), the gateway, or the gRPC `api/` protos. They were
   removed deliberately in Phase 1 — the project is a modular monolith now.

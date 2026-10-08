@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/kararnab/libraryZ/internal/middleware"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -22,6 +23,17 @@ var (
 	ErrRemoved = errors.New("this file was removed by a moderator and can't be re-uploaded")
 )
 
+// DuplicateEditionError is returned by AddEdition when the uploaded bytes
+// (after sanitization) are already stored as an edition, on this work or
+// another one. Existing is that edition, so callers can point at it.
+type DuplicateEditionError struct {
+	Existing *Edition
+}
+
+func (e *DuplicateEditionError) Error() string {
+	return "edition with identical content already exists: " + e.Existing.ID.String()
+}
+
 type Service struct {
 	db    *gorm.DB
 	store storage.Storage
@@ -31,11 +43,15 @@ func NewService(db *gorm.DB, store storage.Storage) *Service {
 	return &Service{db: db, store: store}
 }
 
+// CreateWork inserts w as a new work. The ID is always server-generated and
+// associations (editions, tags) are never written from here: editions only
+// come into existence through AddEdition, which is what ties a row to bytes
+// actually in storage.
 func (s *Service) CreateWork(ctx context.Context, w *Work) error {
-	if w.ID == uuid.Nil {
-		w.ID = uuid.New()
-	}
-	return s.db.WithContext(ctx).Create(w).Error
+	w.ID = uuid.New()
+	w.Editions = nil
+	w.Tags = nil
+	return s.db.WithContext(ctx).Omit(clause.Associations).Create(w).Error
 }
 
 func (s *Service) GetWork(ctx context.Context, id uuid.UUID) (*Work, error) {
@@ -70,11 +86,22 @@ func (s *Service) GetEdition(ctx context.Context, id uuid.UUID) (*Edition, error
 	return &e, err
 }
 
-// AddEdition streams r into storage, then records the edition. If the bytes
-// match an existing edition (same sha256), the existing one is returned.
-func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, r io.Reader) (*Edition, error) {
+// AddEdition streams r (the sanitized bytes) into storage, then records the
+// edition. sourceSHA is the sha256 of the bytes as uploaded, before
+// sanitization ("" if unknown). If either the uploaded bytes or the stored
+// bytes match an existing edition on any work, it returns a
+// *DuplicateEditionError carrying that edition and records nothing.
+func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, sourceSHA string, r io.Reader) (*Edition, error) {
 	if _, err := s.GetWork(ctx, workID); err != nil {
 		return nil, err
+	}
+
+	// Checked before Put so a duplicate PDF doesn't leave a freshly
+	// re-serialized (and therefore never-deduped) blob behind in storage.
+	if dup, err := s.findDuplicate(ctx, "", sourceSHA); err != nil {
+		return nil, err
+	} else if dup != nil {
+		return nil, asDuplicate(dup)
 	}
 
 	obj, err := s.store.Put(ctx, r)
@@ -82,18 +109,15 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		return nil, err
 	}
 
-	// Unscoped: sha256 is unique across removed rows too, so a removed
-	// edition must be found here rather than tripping the unique index.
-	var existing Edition
-	err = s.db.WithContext(ctx).Unscoped().Where("sha256 = ?", obj.SHA256).First(&existing).Error
-	if err == nil {
-		if existing.DeletedAt.Valid {
-			return nil, ErrRemoved
-		}
-		return &existing, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if dup, err := s.findDuplicate(ctx, obj.SHA256, ""); err != nil {
 		return nil, err
+	} else if dup != nil {
+		return nil, asDuplicate(dup)
+	}
+
+	var src *string
+	if sourceSHA != "" {
+		src = &sourceSHA
 	}
 
 	ed := Edition{
@@ -104,13 +128,58 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		FileKey:          obj.Key,
 		SizeBytes:        obj.Size,
 		SHA256:           obj.SHA256,
+		SourceSHA256:     src,
 		UploadedByUserID: uploadedBy,
 		CreatedAt:        time.Now(),
 	}
 	if err := s.db.WithContext(ctx).Create(&ed).Error; err != nil {
+		// A concurrent upload of the same bytes can win the race between the
+		// lookups above and this insert; a unique index then rejects ours.
+		// Re-check instead of parsing dialect-specific errors.
+		if dup, findErr := s.findDuplicate(ctx, obj.SHA256, sourceSHA); findErr == nil && dup != nil {
+			return nil, asDuplicate(dup)
+		}
 		return nil, err
 	}
 	return &ed, nil
+}
+
+// asDuplicate maps a matching edition to the error AddEdition returns: a
+// takedown can't be undone by re-uploading the same file.
+func asDuplicate(dup *Edition) error {
+	if dup.DeletedAt.Valid {
+		return ErrRemoved
+	}
+	return &DuplicateEditionError{Existing: dup}
+}
+
+// findDuplicate returns an edition whose stored-bytes hash equals sha or
+// whose uploaded-bytes hash equals sourceSHA, or nil if none. An empty
+// argument is not matched.
+func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Edition, error) {
+	q := s.db.WithContext(ctx)
+	switch {
+	case sha != "" && sourceSHA != "":
+		q = q.Where("sha256 = ? OR source_sha256 = ?", sha, sourceSHA)
+	case sha != "":
+		q = q.Where("sha256 = ?", sha)
+	case sourceSHA != "":
+		q = q.Where("source_sha256 = ?", sourceSHA)
+	default:
+		return nil, nil
+	}
+	// Unscoped: hashes stay unique across removed editions too, so a removed
+	// one must be found here (and reported as ErrRemoved by asDuplicate)
+	// rather than tripping the unique index.
+	var e Edition
+	err := q.Unscoped().First(&e).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
 }
 
 // SearchWorks finds works whose title/subtitle/authors/description match q,
@@ -205,6 +274,9 @@ func (s *Service) OpenEdition(ctx context.Context, id uuid.UUID) (*Download, err
 // maxDeleteReasonRunes caps the takedown note moderators attach.
 const maxDeleteReasonRunes = 1000
 
+// ErrForbidden is returned when the caller may not remove the work.
+var ErrForbidden = errors.New("only a moderator, or the creator of a work with no editions, can remove it")
+
 // ErrReasonRequired is returned when a takedown has no (or an over-long)
 // reason; the audit trail is the point of soft deletion.
 var ErrReasonRequired = fmt.Errorf("a reason (1-%d characters) is required", maxDeleteReasonRunes)
@@ -225,9 +297,33 @@ func removal(by uint, reason string) map[string]any {
 // DeleteWork takes a work down along with all its editions. The rows are
 // soft-deleted (hidden from list/search/get/download, library and
 // recommendations) and the blobs are purged later by CollectGarbage.
+//
+// Moderators can remove any work. Anyone else can only remove a work they
+// created that has no editions at all — which is how the new-work upload
+// flow cleans up after its first upload is rejected (e.g. a duplicate).
 func (s *Service) DeleteWork(ctx context.Context, id uuid.UUID, by uint, reason string) error {
 	if !validReason(reason) {
 		return ErrReasonRequired
+	}
+	isMod, err := middleware.IsModerator(ctx, s.db, by)
+	if err != nil {
+		return err
+	}
+	if !isMod {
+		var w Work
+		if err := s.db.WithContext(ctx).Select("id", "created_by_user_id").First(&w, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		var editions int64
+		if err := s.db.WithContext(ctx).Unscoped().Model(&Edition{}).Where("work_id = ?", id).Count(&editions).Error; err != nil {
+			return err
+		}
+		if w.CreatedByUserID == nil || *w.CreatedByUserID != by || editions > 0 {
+			return ErrForbidden
+		}
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Model(&Work{}) scopes to deleted_at IS NULL, so removing an

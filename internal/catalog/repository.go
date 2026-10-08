@@ -23,6 +23,9 @@ type Work struct {
 	OpenLibraryID   string    `gorm:"index" json:"openlibrary_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+	// CreatedByUserID lets a creator remove their own work while it has no
+	// editions (e.g. its first upload was rejected) — see DeleteWork.
+	CreatedByUserID *uint `gorm:"index" json:"-"`
 	Removal
 
 	Editions []Edition `gorm:"foreignKey:WorkID;constraint:OnDelete:CASCADE" json:"editions,omitempty"`
@@ -33,13 +36,20 @@ type Work struct {
 // editions (pdf, epub, mobi, translations, etc.). SHA256 is unique so
 // identical bytes uploaded twice collapse to one storage object.
 type Edition struct {
-	ID               uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	WorkID           uuid.UUID `gorm:"type:uuid;not null;index" json:"work_id"`
-	Format           string    `gorm:"not null" json:"format"`
-	Language         string    `json:"language,omitempty"`
-	FileKey          string    `gorm:"not null;index" json:"-"`
-	SizeBytes        int64     `json:"size_bytes"`
-	SHA256           string    `gorm:"size:64;uniqueIndex" json:"sha256"`
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	WorkID    uuid.UUID `gorm:"type:uuid;not null;index" json:"work_id"`
+	Format    string    `gorm:"not null" json:"format"`
+	Language  string    `json:"language,omitempty"`
+	FileKey   string    `gorm:"not null;index" json:"-"`
+	SizeBytes int64     `json:"size_bytes"`
+	SHA256    string    `gorm:"size:64;uniqueIndex" json:"sha256"`
+	// SourceSHA256 is the sha256 of the bytes as uploaded, before
+	// sanitization. Sanitizing a PDF re-serializes it with a fresh timestamp
+	// and file ID, so SHA256 (of the stored bytes) differs on every upload of
+	// the same PDF; duplicate detection keys on this instead. Nullable
+	// (the unique index allows many NULLs) for editions recorded without
+	// the original upload's hash.
+	SourceSHA256     *string   `gorm:"size:64;uniqueIndex" json:"-"`
 	UploadedByUserID uint      `gorm:"not null;index" json:"uploaded_by"`
 	CreatedAt        time.Time `json:"created_at"`
 	Removal

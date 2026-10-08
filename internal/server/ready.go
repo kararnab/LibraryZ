@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kararnab/libraryZ/internal/storage"
@@ -15,10 +16,12 @@ import (
 // probe fail fast instead of piling up probe requests.
 const readyTimeout = 2 * time.Second
 
-// readinessSentinelKey is probed with Storage.Exists. It never exists; the
-// point is that the call reaches the backend (for S3 a missing bucket or bad
-// credentials error out, while a missing key is a clean false).
-const readinessSentinelKey = "00-readiness-probe"
+// readinessSentinelKey is probed with Storage.Exists. It must be a valid
+// sha256-shaped key (backends reject anything else with ErrInvalidKey) but is
+// all zeros, so it never actually exists; the point is that the call reaches
+// the backend (for S3 a missing bucket or bad credentials error out, while a
+// missing key is a clean false).
+var readinessSentinelKey = strings.Repeat("0", 64)
 
 // ReadyResponse is the body of GET /ready.
 type ReadyResponse struct {

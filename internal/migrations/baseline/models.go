@@ -50,6 +50,7 @@ type Work struct {
 	OpenLibraryID   string `gorm:"index"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	CreatedByUserID *uint          `gorm:"index"`
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
 	DeletedBy       *uint
 	DeleteReason    string
@@ -65,8 +66,9 @@ type Edition struct {
 	Language         string
 	FileKey          string `gorm:"not null;index"`
 	SizeBytes        int64
-	SHA256           string `gorm:"size:64;uniqueIndex"`
-	UploadedByUserID uint   `gorm:"not null;index"`
+	SHA256           string  `gorm:"size:64;uniqueIndex"`
+	SourceSHA256     *string `gorm:"size:64;uniqueIndex"`
+	UploadedByUserID uint    `gorm:"not null;index"`
 	CreatedAt        time.Time
 	DeletedAt        gorm.DeletedAt `gorm:"index"`
 	DeletedBy        *uint

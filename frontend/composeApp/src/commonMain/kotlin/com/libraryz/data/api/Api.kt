@@ -154,6 +154,25 @@ class ApiException(val status: Int, val body: String, message: String) :
         get() = body.trim().takeIf { status in 400..499 && it.isNotEmpty() } ?: (message ?: "Request failed")
 }
 
+// 409 body from POST /works/{id}/editions when the file is already stored as
+// an edition (on this work or another one).
+@Serializable
+internal data class DuplicateEditionBody(
+    val editionId: String? = null,
+    val workId: String? = null,
+    val error: String? = null,
+)
+
+/**
+ * The uploaded file is already in the library as [editionId] on [workId].
+ * The message is user-facing — UploadSheet shows it verbatim.
+ */
+class DuplicateEditionException(
+    val editionId: String?,
+    val workId: String?,
+    message: String = "This file is already in the library.",
+) : RuntimeException(message)
+
 /**
  * Tiny HTTP client wrapping the LibraryZ backend. Engine is auto-selected
  * from whichever ktor-client-<engine> dep is on the source set's classpath.
@@ -384,7 +403,10 @@ class ApiClient(
         return resp.body()
     }
 
-    /** Moderator-only. Takes a work and all its editions down (soft delete). */
+    /**
+     * Removes a work and its editions (soft delete). Moderators can remove any
+     * work; anyone else only a work they created that has no editions.
+     */
     suspend fun deleteWork(id: String, reason: String) {
         val resp = authed {
             client.delete("$baseUrl/works/$id") {
@@ -548,6 +570,17 @@ class ApiClient(
             ) {
                 maybeAuth()
             }
+        }
+        if (resp.status == HttpStatusCode.Conflict) {
+            val dup = runCatching {
+                json.decodeFromString(DuplicateEditionBody.serializer(), resp.bodyAsText())
+            }.getOrNull()
+            // No edition to point at means the match was taken down by a
+            // moderator; the server's message explains that.
+            val removedMessage = dup?.error?.takeIf { dup.editionId == null }
+                ?.replaceFirstChar { it.uppercase() }?.let { "$it." }
+            if (removedMessage != null) throw DuplicateEditionException(null, null, removedMessage)
+            throw DuplicateEditionException(dup?.editionId, dup?.workId)
         }
         if (resp.status != HttpStatusCode.Created) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "upload edition failed")

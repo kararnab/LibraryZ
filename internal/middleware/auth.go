@@ -104,28 +104,28 @@ func Moderator(db *gorm.DB) func(http.Handler) http.Handler {
 				http.Error(w, "unauthenticated", http.StatusUnauthorized)
 				return
 			}
-			var row struct {
-				IsModerator bool
-			}
-			err := db.WithContext(r.Context()).
-				Table("users").
-				Select("is_moderator").
-				Where("id = ?", uid).
-				Take(&row).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
+			isMod, err := IsModerator(r.Context(), db, uid)
 			if err != nil {
 				log.Printf("%s %s: moderator check failed: %v", r.Method, r.URL.Path, err)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
-			if !row.IsModerator {
+			if !isMod {
 				http.Error(w, "moderator required", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// IsModerator reports whether the user has the moderator flag. An unknown
+// user is simply not a moderator.
+func IsModerator(ctx context.Context, db *gorm.DB, userID uint) (bool, error) {
+	var row struct{ IsModerator bool }
+	err := db.WithContext(ctx).Table("users").Select("is_moderator").Where("id = ?", userID).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return row.IsModerator, err
 }

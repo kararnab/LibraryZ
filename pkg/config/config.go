@@ -68,40 +68,51 @@ type Config struct {
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
 	DBConnMaxLifetime time.Duration
+	// PDF sanitization runs in a child process (internal/sanitize
+	// EnableIsolation). Worst-case memory for sanitization is
+	// PDFSanitizeConcurrency × PDFSanitizeMemoryMB. The default budget fits
+	// the largest allowed upload (LIBRARYZ_MAX_UPLOAD_BYTES, 500 MiB);
+	// raise both together.
+	PDFSanitizeMemoryMB    int
+	PDFSanitizeTimeout     time.Duration
+	PDFSanitizeConcurrency int
 }
 
 func Load() *Config {
 	return &Config{
-		DatabaseURL:         GetDatabaseUrl(),
-		MigrateDatabaseURL:  getEnv("LIBRARYZ_MIGRATE_DATABASE_URL", GetDatabaseUrl()),
-		AutoMigrate:         os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
-		ListenAddr:          GetListenAddr(),
-		StorageDir:          GetStorageDir(),
-		JWTSecret:           GetJWTSecret(),
-		JWTPreviousSecret:   GetJWTPreviousSecret(),
-		AccessTokenTTL:      getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTokenTTL:     getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		MaxUploadBytes:      GetMaxUploadBytes(),
-		AllowedOrigins:      GetAllowedOrigins(),
-		CORSAllowPrivateLAN: os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
-		S3Endpoint:          os.Getenv("LIBRARYZ_S3_ENDPOINT"),
-		S3AccessKey:         os.Getenv("LIBRARYZ_S3_ACCESS_KEY"),
-		S3SecretKey:         os.Getenv("LIBRARYZ_S3_SECRET_KEY"),
-		S3Bucket:            getEnv("LIBRARYZ_S3_BUCKET", "libraryz"),
-		S3UseSSL:            os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
-		BlobGCInterval:      getDurationEnv("LIBRARYZ_BLOB_GC_INTERVAL", 24*time.Hour),
-		BlobGCRetention:     getDurationEnv("LIBRARYZ_BLOB_GC_RETENTION", 30*24*time.Hour),
-		RecRetrainInterval:  GetRecRetrainInterval(),
-		RecFactors:          GetRecFactors(),
-		RecAlpha:            GetRecAlpha(),
-		ReadHeaderTimeout:   getDurationEnv("LIBRARYZ_READ_HEADER_TIMEOUT", 10*time.Second),
-		ReadTimeout:         getDurationEnv("LIBRARYZ_READ_TIMEOUT", 30*time.Second),
-		WriteTimeout:        getDurationEnv("LIBRARYZ_WRITE_TIMEOUT", 60*time.Second),
-		IdleTimeout:         getDurationEnv("LIBRARYZ_IDLE_TIMEOUT", 120*time.Second),
-		ShutdownTimeout:     getDurationEnv("LIBRARYZ_SHUTDOWN_TIMEOUT", 20*time.Second),
-		DBMaxOpenConns:      getIntEnv("LIBRARYZ_DB_MAX_OPEN_CONNS", 25),
-		DBMaxIdleConns:      getIntEnv("LIBRARYZ_DB_MAX_IDLE_CONNS", 10),
-		DBConnMaxLifetime:   getDurationEnv("LIBRARYZ_DB_CONN_MAX_LIFETIME", time.Hour),
+		DatabaseURL:            GetDatabaseUrl(),
+		MigrateDatabaseURL:     getEnv("LIBRARYZ_MIGRATE_DATABASE_URL", GetDatabaseUrl()),
+		AutoMigrate:            os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
+		ListenAddr:             GetListenAddr(),
+		StorageDir:             GetStorageDir(),
+		JWTSecret:              GetJWTSecret(),
+		JWTPreviousSecret:      GetJWTPreviousSecret(),
+		AccessTokenTTL:         getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:        getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		MaxUploadBytes:         GetMaxUploadBytes(),
+		AllowedOrigins:         GetAllowedOrigins(),
+		CORSAllowPrivateLAN:    os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
+		S3Endpoint:             os.Getenv("LIBRARYZ_S3_ENDPOINT"),
+		S3AccessKey:            os.Getenv("LIBRARYZ_S3_ACCESS_KEY"),
+		S3SecretKey:            os.Getenv("LIBRARYZ_S3_SECRET_KEY"),
+		S3Bucket:               getEnv("LIBRARYZ_S3_BUCKET", "libraryz"),
+		S3UseSSL:               os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
+		BlobGCInterval:         getDurationEnv("LIBRARYZ_BLOB_GC_INTERVAL", 24*time.Hour),
+		BlobGCRetention:        getDurationEnv("LIBRARYZ_BLOB_GC_RETENTION", 30*24*time.Hour),
+		RecRetrainInterval:     GetRecRetrainInterval(),
+		RecFactors:             GetRecFactors(),
+		RecAlpha:               GetRecAlpha(),
+		ReadHeaderTimeout:      getDurationEnv("LIBRARYZ_READ_HEADER_TIMEOUT", 10*time.Second),
+		ReadTimeout:            getDurationEnv("LIBRARYZ_READ_TIMEOUT", 30*time.Second),
+		WriteTimeout:           getDurationEnv("LIBRARYZ_WRITE_TIMEOUT", 60*time.Second),
+		IdleTimeout:            getDurationEnv("LIBRARYZ_IDLE_TIMEOUT", 120*time.Second),
+		ShutdownTimeout:        getDurationEnv("LIBRARYZ_SHUTDOWN_TIMEOUT", 20*time.Second),
+		PDFSanitizeMemoryMB:    getIntEnv("LIBRARYZ_PDF_SANITIZE_MEMORY_MB", 1024),
+		PDFSanitizeTimeout:     getDurationEnv("LIBRARYZ_PDF_SANITIZE_TIMEOUT", 2*time.Minute),
+		PDFSanitizeConcurrency: getIntEnv("LIBRARYZ_PDF_SANITIZE_CONCURRENCY", 2),
+		DBMaxOpenConns:         getIntEnv("LIBRARYZ_DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:         getIntEnv("LIBRARYZ_DB_MAX_IDLE_CONNS", 10),
+		DBConnMaxLifetime:      getDurationEnv("LIBRARYZ_DB_CONN_MAX_LIFETIME", time.Hour),
 	}
 }
 

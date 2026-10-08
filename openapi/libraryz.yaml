@@ -279,9 +279,12 @@ paths:
           $ref: "#/components/responses/NotFound"
     delete:
       tags: [moderation]
-      summary: Remove a work (moderator)
+      summary: Remove a work (moderator, or its creator while empty)
       description: |
-        Moderator-only takedown of a work and all of its editions. Soft
+        Moderators can take down any work; any other user can remove only a
+        work they created that has no editions (the upload client does this
+        when a new work's first upload is rejected). Removes the work and all
+        of its editions. Soft
         delete: the rows are kept with who/when/why for audit (and can be
         restored in the DB), but the work disappears from list, search, get,
         download, personal libraries and recommendations. The files are
@@ -345,7 +348,20 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The same file was removed by a moderator
+          description: >
+            The file is already in the library as an edition, on this work or
+            another one. Matched on the sha256 of the uploaded bytes, or of the
+            bytes after sanitization. Nothing is recorded. If that edition was
+            removed by a moderator, `edition_id` / `work_id` are omitted and
+            `error` says so (a takedown can't be undone by re-uploading).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DuplicateEdition" }
+        "413":
+          description: >
+            The file couldn't be sanitized within the server's memory or time
+            budget (for example, a PDF whose compressed object streams
+            inflate to gigabytes). Nothing is recorded.
           content:
             text/plain:
               schema: { type: string }
@@ -803,8 +819,20 @@ components:
         email:    { type: string, format: email }
         password: { type: string }
 
+    DuplicateEdition:
+      type: object
+      required: [error]
+      properties:
+        error:      { type: string, example: this file is already in the library }
+        edition_id: { type: string, format: uuid, description: "The existing edition (absent if it was removed by a moderator)" }
+        work_id:    { type: string, format: uuid, description: The work the existing edition belongs to }
+
     CreateWorkRequest:
       type: object
+      description: >
+        Only these fields are read. Server-owned fields sent in the body
+        (id, created_at, updated_at, editions, tags) are ignored; editions
+        are only created by uploading a file.
       required: [title]
       properties:
         title:            { type: string }

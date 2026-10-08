@@ -78,6 +78,8 @@ func New(d Deps) http.Handler {
 	authed.HandleFunc("/auth/logout-all", authH.LogoutAll).Methods(http.MethodPost)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)
 	authed.HandleFunc("/works/{id}/editions", catH.UploadEdition).Methods(http.MethodPost)
+	// Moderators, or the creator of a still-empty work; checked in the service.
+	authed.HandleFunc("/works/{id}", catH.DeleteWork).Methods(http.MethodDelete)
 	authed.HandleFunc("/works/{id}/contributions", contribH.Submit).Methods(http.MethodPost)
 	authed.HandleFunc("/me/contributions", contribH.ListMine).Methods(http.MethodGet)
 
@@ -100,7 +102,6 @@ func New(d Deps) http.Handler {
 	mod.Use(middleware.Moderator(d.DB))
 	mod.HandleFunc("/contributions/{id}/approve", contribH.Approve).Methods(http.MethodPost)
 	mod.HandleFunc("/contributions/{id}/reject", contribH.Reject).Methods(http.MethodPost)
-	mod.HandleFunc("/works/{id}", catH.DeleteWork).Methods(http.MethodDelete)
 	mod.HandleFunc("/editions/{id}", catH.DeleteEdition).Methods(http.MethodDelete)
 
 	// Wrap the whole router so OPTIONS preflights are handled by us before

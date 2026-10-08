@@ -24,8 +24,11 @@ func NewLocal(root string) (*Local, error) {
 	return &Local{root: root}, nil
 }
 
-func (l *Local) path(key string) string {
-	return filepath.Join(l.root, key[:2], key)
+func (l *Local) path(key string) (string, error) {
+	if !validKey(key) {
+		return "", ErrInvalidKey
+	}
+	return filepath.Join(l.root, key[:2], key), nil
 }
 
 func (l *Local) Put(_ context.Context, r io.Reader) (Object, error) {
@@ -48,7 +51,11 @@ func (l *Local) Put(_ context.Context, r io.Reader) (Object, error) {
 	}
 
 	sum := hex.EncodeToString(h.Sum(nil))
-	dest := l.path(sum)
+	dest, err := l.path(sum)
+	if err != nil {
+		_ = os.Remove(tmpName)
+		return Object{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		_ = os.Remove(tmpName)
 		return Object{}, err
@@ -71,7 +78,11 @@ func (l *Local) Put(_ context.Context, r io.Reader) (Object, error) {
 }
 
 func (l *Local) Get(_ context.Context, key string) (io.ReadCloser, int64, error) {
-	f, err := os.Open(l.path(key))
+	p, err := l.path(key)
+	if err != nil {
+		return nil, 0, err
+	}
+	f, err := os.Open(p)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -84,7 +95,11 @@ func (l *Local) Get(_ context.Context, key string) (io.ReadCloser, int64, error)
 }
 
 func (l *Local) Delete(_ context.Context, key string) error {
-	err := os.Remove(l.path(key))
+	p, err := l.path(key)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -101,8 +116,8 @@ func (l *Local) List(ctx context.Context, fn func(ObjectInfo) error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if d.IsDir() || filepath.Dir(filepath.Dir(p)) != filepath.Clean(l.root) {
-			return nil // only <root>/<shard>/<key> files are objects
+		if d.IsDir() || filepath.Dir(filepath.Dir(p)) != filepath.Clean(l.root) || !validKey(d.Name()) {
+			return nil // only <root>/<shard>/<sha256> files are objects
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -113,7 +128,11 @@ func (l *Local) List(ctx context.Context, fn func(ObjectInfo) error) error {
 }
 
 func (l *Local) Exists(_ context.Context, key string) (bool, error) {
-	_, err := os.Stat(l.path(key))
+	p, err := l.path(key)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(p)
 	if err == nil {
 		return true, nil
 	}

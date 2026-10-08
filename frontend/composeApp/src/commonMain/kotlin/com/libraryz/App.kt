@@ -484,14 +484,24 @@ private fun Root(
                                         publicationYear = submission.publicationYear,
                                     )
                                 )
-                                api.uploadEdition(
-                                    workId = created.id,
-                                    format = inferFormatFromName(submission.file.name),
-                                    language = submission.language,
-                                    fileName = submission.file.name,
-                                    bytes = submission.file.bytes,
-                                )
-                                works.refresh()
+                                try {
+                                    api.uploadEdition(
+                                        workId = created.id,
+                                        format = inferFormatFromName(submission.file.name),
+                                        language = submission.language,
+                                        fileName = submission.file.name,
+                                        bytes = submission.file.bytes,
+                                    )
+                                } catch (e: Throwable) {
+                                    // Don't leave an empty work behind when its
+                                    // only upload was rejected (e.g. duplicate
+                                    // file). Creators may remove their own
+                                    // still-empty work. Best effort.
+                                    runCatching { api.deleteWork(created.id, "Upload failed; discarding the empty work") }
+                                    throw e
+                                } finally {
+                                    works.refresh()
+                                }
                             }
                             is UploadSubmission.AddEdition -> {
                                 val wid = s.workId

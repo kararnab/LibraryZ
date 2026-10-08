@@ -12,7 +12,53 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 
 ## [Unreleased]
 
+### Security
+- **PDF sanitization runs in a memory-capped child process.** pdfcpu
+  inflates compressed object streams in full while parsing, so a ~300 KiB
+  PDF could drive the server to gigabytes of heap and an OOM kill. PDFs are
+  now sanitized by re-running the binary in child mode under a hard memory
+  cap (Linux `RLIMIT_AS`), a timeout and a concurrency limit, with a minimal
+  environment. Over-budget files get `413`. New knobs:
+  `LIBRARYZ_PDF_SANITIZE_{MEMORY_MB,TIMEOUT,CONCURRENCY}`. As a side effect,
+  the server no longer buffers each sanitized PDF in memory (it used to
+  hold about 2× the file size).
+- **EPUB script scanning gaps closed.** Chapters were parsed through a 16 MiB
+  `LimitReader` (1 MiB for the OPF manifest), so a `<script>` placed after
+  that point was never seen. Oversized entries are now rejected instead.
+  `.svg` entries, which can carry scripts, were not scanned at all; they now
+  get the same check as (X)HTML.
+- **Short-lived access tokens with refresh and revocation**
+  ([#15](https://github.com/kararnab/LibraryZ/issues/15)). Access JWTs now
+  live 15 minutes and carry a `kid` (zero-downtime secret rotation via
+  `JWT_SECRET_PREVIOUS`) and a per-user token version checked on every
+  request. Login returns a single-use, rotating refresh token; replaying a
+  spent one revokes the whole session. New `POST /auth/refresh`,
+  `/auth/logout`, `/auth/logout-all`.
+- **Stricter auth header and JWT parsing**
+  ([#8](https://github.com/kararnab/LibraryZ/issues/8)): the scheme must be
+  `Bearer` (any case) as the first token, `exp` is required, and the
+  algorithm is pinned to HS256.
+
 ### Added
+- **Moderator takedowns** ([#13](https://github.com/kararnab/LibraryZ/issues/13)):
+  `DELETE /works/{id}` and `DELETE /editions/{id}` with a required reason.
+  They're soft deletes (who/when/why kept), and the item disappears from
+  list, search, download, libraries and recommendations. A background sweep
+  purges orphaned blobs and, after `LIBRARYZ_BLOB_GC_RETENTION` (30d),
+  removed files. Creators can also remove their own still-empty work, which
+  the upload flow now does when a new work's first upload is rejected.
+  Moderator "Remove" actions in WorkDetail.
+- **`GET /ready`** readiness probe (DB + storage, `503` when degraded),
+  wired into the compose healthcheck and Kong upstream health checks
+  ([#11](https://github.com/kararnab/LibraryZ/issues/11)). `/health` stays
+  liveness-only.
+- **Versioned schema migrations** (goose, `internal/migrations`) replace
+  startup AutoMigrate. They run under a Postgres advisory lock over a direct
+  connection (`LIBRARYZ_MIGRATE_DATABASE_URL`), on startup or via
+  `libraryz migrate` ([#16](https://github.com/kararnab/LibraryZ/issues/16)).
+  Pre-production, the baseline is still edited in place.
+- **Browse and search pagination** with infinite scroll
+  ([#7](https://github.com/kararnab/LibraryZ/issues/7)).
 - **`TextReader`** (commonMain) — renders `.txt` editions natively with
   Compose `Text`. No per-platform actual needed; UTF-8 decoded once via
   `bytes.decodeToString()`; reflows for free at any viewport width.
@@ -40,6 +86,31 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   modal. Optimized with pngquant (~75% size reduction).
 
 ### Changed
+- **Search results are ranked by relevance** on Postgres (`ts_rank` over a
+  title > subtitle/authors > description weighted vector) and accept
+  `"phrases"`, `or` and `-exclusions`; the sqlite fallback approximates the
+  same order ([#14](https://github.com/kararnab/LibraryZ/issues/14)).
+- **Downloads are named `<Title> - <Authors>.<format>`** (with an RFC 8187
+  `filename*` for non-ASCII titles) instead of the edition UUID, on every
+  platform ([#12](https://github.com/kararnab/LibraryZ/issues/12)).
+- **Contribution patches are validated at submit** (`400` with a reason for
+  unknown keys, wrong types, empty title, over-long strings) instead of
+  failing or silently no-op'ing at approve time
+  ([#5](https://github.com/kararnab/LibraryZ/issues/5)).
+- **docker compose runs RustFS instead of MinIO** for S3 storage. MinIO no
+  longer publishes images (`minio/minio` doesn't pull) and archived its
+  repo. The backend still speaks plain S3, so any S3 store works.
+- **Duplicate edition uploads now return `409 Conflict`** with
+  `{error, edition_id, work_id}` instead of `201` and the existing edition
+  ([#2](https://github.com/kararnab/LibraryZ/issues/2)). Before, re-uploading
+  a file that belonged to another work silently returned *that* work's
+  edition. Duplicates are matched on the uploaded bytes' hash as well as
+  the stored bytes' hash (new `editions.source_sha256` column), so
+  re-uploaded PDFs are caught too. The upload sheet shows "This file is
+  already in the library."
+- **`POST /works` only reads the `CreateWorkRequest` fields.** `id`,
+  timestamps, `editions` and `tags` in the request body are ignored; the
+  ID is always server-generated. Whitespace-only titles are rejected.
 - **`PdfBackend` renamed to `PagedReader`** (sealed under `Reader`).
   `openPdf(bytes)` is now `openPdfReader(bytes)`; the screen entry point
   is the format-aware `openReader(bytes, format)`. Behavior unchanged for
@@ -53,6 +124,23 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   render gets a Preview button.
 
 ### Fixed
+- Two moderators approving/rejecting the same contribution at once could
+  apply the patch twice or race approve against reject. The state change is
+  now a single conditional update ([#4](https://github.com/kararnab/LibraryZ/issues/4)).
+- An expired session left the app "logged in" with every screen failing.
+  The client now refreshes on `401` and, if that fails, returns to sign-in
+  with a message ([#6](https://github.com/kararnab/LibraryZ/issues/6)).
+- Only one instance trains the recommendation model at a time
+  (`pg_try_advisory_xact_lock`), so replicas no longer race the factor
+  tables ([#10](https://github.com/kararnab/LibraryZ/issues/10)).
+- `%` and `_` in a search acted as wildcards on the sqlite fallback
+  ([#9](https://github.com/kararnab/LibraryZ/issues/9)).
+- `storage.Local` panicked on object keys shorter than two characters.
+  Both backends now reject any key that isn't a sha256 hex digest with
+  `storage.ErrInvalidKey` ([#3](https://github.com/kararnab/LibraryZ/issues/3)).
+- Re-uploading the same PDF created a new edition and stored a new blob each
+  time, because sanitized PDFs never hash the same twice. It's now detected
+  as a duplicate.
 - TXT editions previously couldn't be previewed even after the Reader
   refactor — `EditionRow` was still gating the Preview button on
   `isPdf`. Fixed alongside the rename to `isPreviewable`.

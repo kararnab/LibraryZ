@@ -163,6 +163,31 @@ class ApiClientTest {
     }
 
     @Test
+    fun uploadEditionConflictThrowsDuplicateEditionException() = runTest {
+        val engine = MockEngine {
+            val (s, body, h) = json(
+                """{"error":"this file is already in the library",
+                    "edition_id":"e0","work_id":"w0"}""",
+                HttpStatusCode.Conflict,
+            )
+            respond(body, s, h)
+        }
+        val api = ApiClient(BASE, tokenProvider = { "t" }, engine = engine)
+        val ex = assertFailsWith<DuplicateEditionException> {
+            api.uploadEdition(
+                workId = "w1",
+                format = "PDF",
+                language = null,
+                fileName = "x.pdf",
+                bytes = byteArrayOf(1),
+            )
+        }
+        assertEquals("e0", ex.editionId)
+        assertEquals("w0", ex.workId)
+        assertEquals("This file is already in the library.", ex.message)
+    }
+
+    @Test
     fun downloadEditionReturnsExactBytes() = runTest {
         val payload = ByteArray(64) { it.toByte() }
         val engine = MockEngine {
@@ -208,6 +233,23 @@ class ApiClientTest {
     fun downloadEditionFileWithoutHeaderHasNullName() = runTest {
         val engine = MockEngine { respond(ByteReadChannel(byteArrayOf(9)), HttpStatusCode.OK) }
         assertEquals(null, ApiClient(BASE, engine = engine).downloadEditionFile("e1").filename)
+    }
+
+    @Test
+    fun uploadOfRemovedFileSurfacesServerMessage() = runTest {
+        val engine = MockEngine {
+            respond(
+                """{"error":"this file was removed by a moderator and can't be re-uploaded"}""",
+                HttpStatusCode.Conflict,
+                headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }
+        val ex = assertFailsWith<DuplicateEditionException> {
+            ApiClient(BASE, tokenProvider = { "t" }, engine = engine)
+                .uploadEdition("w1", "txt", null, "a.txt", byteArrayOf(1))
+        }
+        assertEquals(null, ex.editionId)
+        assertEquals("This file was removed by a moderator and can't be re-uploaded.", ex.message)
     }
 
     @Test

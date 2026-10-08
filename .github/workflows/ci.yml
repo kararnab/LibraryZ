@@ -50,6 +50,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") asks for the legacy
+          # `tools` package, which current cmdline-tools' sdkmanager no longer
+          # has, so the step fails. AGP downloads the platform + build-tools
+          # it needs on its own.
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: false
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
