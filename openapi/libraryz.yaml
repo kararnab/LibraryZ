@@ -2,30 +2,74 @@ openapi: 3.1.0
 info:
   title: LibraryZ API
   version: 0.1.0
+  license:
+    name: MIT
+    identifier: MIT
   description: |
-    Phase 1 surface for LibraryZ: auth, catalog (works + editions), and
-    content-addressable file storage. See PLAN.md in the repo root.
+    LibraryZ backend: auth and sessions, catalog (works + editions with
+    content-addressed file storage), crowdsourced edits with moderation,
+    personal libraries, and recommendations. See PLAN.md and ARCHITECTURE.md
+    in the repo root.
+
+    **Every operation has a cURL sample** (`x-codeSamples`). They assume:
+
+    ```sh
+    BASE=http://localhost:8080          # Kong in `docker compose up`
+    TOKEN=...      REFRESH=...          # from POST /auth/login (see its sample)
+    WORK_ID=...    EDITION_ID=...    CONTRIBUTION_ID=...
+    ```
+
+    **Authentication.** `POST /auth/login` returns a short-lived access token
+    (JWT, 15 minutes by default) and a single-use refresh token. Send the
+    access token as `Authorization: Bearer <token>`. On a `401`, call
+    `POST /auth/refresh` once and retry; if that also fails, log in again.
+    Presenting an already-used refresh token revokes the whole session.
+
+    **Errors.** `4xx`/`5xx` bodies are short `text/plain` messages (`4xx`
+    messages are safe to show to users), except where an operation documents
+    a JSON body (e.g. the `409` on edition upload). `5xx` bodies are generic;
+    details are only logged server-side.
+
+    **Rate limits.** In the compose/production setup Kong enforces per-IP
+    limits (login 5/min, signup 3/min, refresh/logout 20/min, edition upload
+    10/hour, everything else 60/min) and answers `429` when exceeded. Request
+    bodies are capped at 5 MB except edition uploads (500 MiB).
 servers:
   - url: http://localhost:8080
     description: Local dev
 
 tags:
   - name: health
+    description: "Liveness and readiness probes."
   - name: auth
+    description: "Accounts and sessions (access + refresh tokens)."
   - name: catalog
+    description: "Works: list, search, create."
   - name: editions
+    description: "Files attached to a work: upload, metadata, download."
   - name: contributions
+    description: "Crowdsourced edits to works and their moderation."
   - name: library
+    description: "The caller's personal library (shelves, status, progress, ratings)."
   - name: recommendations
+    description: "Personalized suggestions (matrix factorization with a content/popularity fallback)."
+  - name: moderation
+    description: "Moderator-only takedowns (soft delete, audited)."
 
 security: []
 
 paths:
   /health:
     get:
+      operationId: getHealth
       tags: [health]
       summary: Liveness probe
       description: Process is up. Touches no dependencies — see `/ready`.
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/health"
       responses:
         "200":
           description: Healthy
@@ -33,9 +77,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /ready:
     get:
+      operationId: getReady
       tags: [health]
       summary: Readiness probe
       description: |
@@ -43,6 +90,11 @@ paths:
         each). Use this for load-balancer / orchestrator readiness; use
         `/health` for liveness. Failure details are logged server-side, not
         returned.
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -w '\n%{http_code}\n' "$BASE/ready"
       responses:
         "200":
           description: All dependencies reachable
@@ -56,9 +108,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Ready"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /auth/signup:
     post:
+      operationId: signUp
       tags: [auth]
       summary: Create a new user account
       requestBody:
@@ -67,6 +122,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/SignUpRequest"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/auth/signup" -H 'Content-Type: application/json' \
+              -d '{"email":"you@example.com","password":"hunter22","name":"You"}'
       responses:
         "201":
           description: Created
@@ -74,9 +135,17 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "500":
           $ref: "#/components/responses/InternalError"
+        "409":
+          description: Email already registered
+          content:
+            text/plain:
+              schema: { type: string }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /auth/login:
     post:
+      operationId: login
       tags: [auth]
       summary: Exchange credentials for an access + refresh token pair
       description: |
@@ -90,6 +159,15 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LoginRequest"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            # Keep both tokens: the access token expires in 15 minutes.
+            curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
+              -d '{"email":"you@example.com","password":"hunter22"}' > tokens.json
+            TOKEN=$(jq -r .access_token tokens.json)
+            REFRESH=$(jq -r .refresh_token tokens.json)
       responses:
         "200":
           description: Authenticated
@@ -103,9 +181,14 @@ paths:
               schema: { $ref: "#/components/schemas/TokenPair" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /auth/refresh:
     post:
+      operationId: refreshSession
       tags: [auth]
       summary: Rotate a refresh token for a new token pair
       description: |
@@ -118,6 +201,15 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/RefreshRequest" }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            # Single use: store the new refresh_token, the old one is now spent.
+            curl -s -X POST "$BASE/auth/refresh" -H 'Content-Type: application/json' \
+              -d "{\"refresh_token\":\"$REFRESH\"}" > tokens.json
+            TOKEN=$(jq -r .access_token tokens.json)
+            REFRESH=$(jq -r .refresh_token tokens.json)
       responses:
         "200":
           description: New token pair
@@ -131,9 +223,12 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /auth/logout:
     post:
+      operationId: logout
       tags: [auth]
       summary: End the session a refresh token belongs to
       description: |
@@ -146,14 +241,23 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/RefreshRequest" }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/auth/logout" -H 'Content-Type: application/json' \
+              -d "{\"refresh_token\":\"$REFRESH\"}"
       responses:
         "204":
           description: Logged out
         "400":
           $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /auth/logout-all:
     post:
+      operationId: logoutAll
       tags: [auth]
       summary: End every session of the current user
       description: |
@@ -161,6 +265,11 @@ paths:
         access token at once — and revokes all refresh tokens.
       security:
         - bearerAuth: []
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/auth/logout-all" -H "Authorization: Bearer $TOKEN"
       responses:
         "204":
           description: All sessions ended
@@ -169,6 +278,7 @@ paths:
 
   /auth/me:
     get:
+      operationId: getMe
       tags: [auth]
       summary: Return the currently authenticated user
       description: |
@@ -177,6 +287,11 @@ paths:
         needing to re-login.
       security:
         - bearerAuth: []
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/auth/me" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: OK
@@ -185,9 +300,12 @@ paths:
               schema: { $ref: "#/components/schemas/Me" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /works:
     get:
+      operationId: listWorks
       tags: [catalog]
       summary: List works
       parameters:
@@ -197,6 +315,11 @@ paths:
         - in: query
           name: offset
           schema: { type: integer, minimum: 0, default: 0 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/works?limit=50&offset=0"
       responses:
         "200":
           description: OK
@@ -205,7 +328,10 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Work" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     post:
+      operationId: createWork
       tags: [catalog]
       summary: Create a new work
       security:
@@ -216,6 +342,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateWorkRequest"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/works" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"title":"Moby-Dick","authors":"Herman Melville","publication_year":1851}'
       responses:
         "201":
           description: Created
@@ -229,6 +361,7 @@ paths:
 
   /works/search:
     get:
+      operationId: searchWorks
       tags: [catalog]
       summary: Search works by free-text query
       description: |
@@ -252,6 +385,13 @@ paths:
         - in: query
           name: offset
           schema: { type: integer, minimum: 0, default: 0 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -G "$BASE/works/search" \
+              --data-urlencode 'q="white whale" melville -abridged' \
+              --data-urlencode limit=20
       responses:
         "200":
           description: OK
@@ -265,10 +405,16 @@ paths:
 
   /works/{id}:
     get:
+      operationId: getWork
       tags: [catalog]
       summary: Get a single work with its editions and tags
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/works/$WORK_ID"
       responses:
         "200":
           description: OK
@@ -277,7 +423,10 @@ paths:
               schema: { $ref: "#/components/schemas/Work" }
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
     delete:
+      operationId: removeWork
       tags: [moderation]
       summary: Remove a work (moderator, or its creator while empty)
       description: |
@@ -298,6 +447,12 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/RemovalRequest" }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X DELETE "$BASE/works/$WORK_ID" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"reason":"DMCA notice #42"}'
       responses:
         "204":
           description: Removed
@@ -312,6 +467,7 @@ paths:
 
   /works/{id}/editions:
     post:
+      operationId: uploadEdition
       tags: [editions]
       summary: Upload a new edition (file) for a work
       security:
@@ -335,6 +491,12 @@ paths:
                 file:
                   type: string
                   format: binary
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/works/$WORK_ID/editions" -H "Authorization: Bearer $TOKEN" \
+              -F format=epub -F language=en -F file=@moby-dick.epub
       responses:
         "201":
           description: Created
@@ -365,13 +527,26 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+        "415":
+          description: Format is not on the allowlist (currently PDF, EPUB, TXT)
+          content:
+            text/plain:
+              schema: { type: string }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /editions/{id}:
     get:
+      operationId: getEdition
       tags: [editions]
       summary: Get edition metadata
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/editions/$EDITION_ID"
       responses:
         "200":
           description: OK
@@ -380,7 +555,10 @@ paths:
               schema: { $ref: "#/components/schemas/Edition" }
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
     delete:
+      operationId: removeEdition
       tags: [moderation]
       summary: Remove an edition (moderator)
       description: |
@@ -396,6 +574,12 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/RemovalRequest" }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X DELETE "$BASE/editions/$EDITION_ID" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"reason":"broken file"}'
       responses:
         "204":
           description: Removed
@@ -410,6 +594,7 @@ paths:
 
   /works/{id}/contributions:
     post:
+      operationId: submitContribution
       tags: [contributions]
       summary: Submit a proposed edit to a work
       security:
@@ -422,6 +607,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/SubmitContributionRequest"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/works/$WORK_ID/contributions" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"patch":{"title":"Moby-Dick; or, The Whale","publication_year":1851}}'
       responses:
         "201":
           description: Created
@@ -437,6 +628,7 @@ paths:
 
   /contributions:
     get:
+      operationId: listContributions
       tags: [contributions]
       summary: List contributions
       parameters:
@@ -449,6 +641,11 @@ paths:
         - in: query
           name: offset
           schema: { type: integer, minimum: 0, default: 0 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/contributions?status=pending&limit=50"
       responses:
         "200":
           description: OK
@@ -457,13 +654,21 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Contribution" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /contributions/{id}:
     get:
+      operationId: getContribution
       tags: [contributions]
       summary: Get a single contribution
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/contributions/$CONTRIBUTION_ID"
       responses:
         "200":
           description: OK
@@ -472,9 +677,12 @@ paths:
               schema: { $ref: "#/components/schemas/Contribution" }
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /contributions/{id}/approve:
     post:
+      operationId: approveContribution
       tags: [contributions]
       summary: Approve a pending contribution and apply its patch to the work
       description: |
@@ -486,6 +694,11 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/contributions/$CONTRIBUTION_ID/approve" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: Approved
@@ -501,15 +714,25 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /contributions/{id}/reject:
     post:
+      operationId: rejectContribution
       tags: [contributions]
       summary: Reject a pending contribution (no changes applied to the work)
       security:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/contributions/$CONTRIBUTION_ID/reject" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: Rejected
@@ -525,9 +748,14 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /me/contributions:
     get:
+      operationId: listMyContributions
       tags: [contributions]
       summary: List the calling user's own contributions
       security:
@@ -542,6 +770,11 @@ paths:
         - in: query
           name: offset
           schema: { type: integer, minimum: 0, default: 0 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/me/contributions?status=pending" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: OK
@@ -555,6 +788,7 @@ paths:
 
   /me/library:
     get:
+      operationId: listLibrary
       tags: [library]
       summary: List the calling user's personal-library entries
       description: |
@@ -576,6 +810,11 @@ paths:
         - in: query
           name: offset
           schema: { type: integer, minimum: 0, default: 0 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/me/library?status=reading" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: OK
@@ -591,11 +830,17 @@ paths:
     parameters:
       - $ref: "#/components/parameters/UUIDPathId"
     get:
+      operationId: getLibraryEntry
       tags: [library]
       summary: Get the calling user's library entry for a work
       description: "`{id}` is the work id."
       security:
         - bearerAuth: []
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/me/library/$WORK_ID" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: OK
@@ -606,7 +851,10 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
     put:
+      operationId: upsertLibraryEntry
       tags: [library]
       summary: Create or update the calling user's library entry for a work
       description: |
@@ -623,6 +871,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/UpsertLibraryEntryRequest"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X PUT "$BASE/me/library/$WORK_ID" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+              -d '{"status":"reading","progress_percent":40,"rating":4}'
       responses:
         "200":
           description: Upserted
@@ -636,10 +890,16 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
     delete:
+      operationId: removeLibraryEntry
       tags: [library]
       summary: Remove the work from the calling user's library
       security:
         - bearerAuth: []
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X DELETE "$BASE/me/library/$WORK_ID" -H "Authorization: Bearer $TOKEN"
       responses:
         "204":
           description: Removed
@@ -647,9 +907,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /me/recommendations:
     get:
+      operationId: listRecommendations
       tags: [recommendations]
       summary: Personalized work recommendations for the calling user
       description: |
@@ -663,6 +926,11 @@ paths:
         - in: query
           name: limit
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/me/recommendations?limit=20" -H "Authorization: Bearer $TOKEN"
       responses:
         "200":
           description: OK
@@ -676,6 +944,7 @@ paths:
 
   /me/recommendations/{id}/dismiss:
     post:
+      operationId: dismissRecommendation
       tags: [recommendations]
       summary: Hide a work from the caller's future recommendations
       description: "`{id}` is the work id. Idempotent."
@@ -683,6 +952,11 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/me/recommendations/$WORK_ID/dismiss" -H "Authorization: Bearer $TOKEN"
       responses:
         "204":
           description: Dismissed
@@ -693,10 +967,17 @@ paths:
 
   /editions/{id}/download:
     get:
+      operationId: downloadEdition
       tags: [editions]
       summary: Download the edition bytes
       parameters:
         - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            # -OJ saves under the server-provided "<Title> - <Authors>.<format>" name.
+            curl -s -OJ "$BASE/editions/$EDITION_ID/download"
       responses:
         "200":
           description: File stream
@@ -712,6 +993,8 @@ paths:
                 format: binary
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
 components:
   securitySchemes:
@@ -719,6 +1002,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: >
+        Access token from `POST /auth/login` or `POST /auth/refresh`. Expires
+        after `LIBRARYZ_ACCESS_TOKEN_TTL` (15m); revoked immediately by
+        `POST /auth/logout-all`.
 
   parameters:
     UUIDPathId:
@@ -734,7 +1021,9 @@ components:
         text/plain:
           schema: { type: string }
     Unauthorized:
-      description: Missing or invalid credentials
+      description: >
+        Missing, malformed, expired or revoked access token (refresh it with
+        `POST /auth/refresh`), or wrong credentials on login
       content:
         text/plain:
           schema: { type: string }
@@ -748,6 +1037,18 @@ components:
       content:
         text/plain:
           schema: { type: string }
+    TooManyRequests:
+      description: Rate limit exceeded (enforced by the Kong gateway, per client IP)
+      headers:
+        Retry-After:
+          description: Seconds until the limit resets
+          schema: { type: integer }
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string, example: API rate limit exceeded }
     InternalError:
       description: Server error
       content:
@@ -905,6 +1206,7 @@ components:
         id:              { type: string, format: uuid }
         work_id:         { type: string, format: uuid }
         contributor_id:  { type: integer }
+        contributor_name: { type: string, description: "Display name of the contributor (omitted if the user no longer exists)" }
         status:          { type: string, enum: [pending, approved, rejected] }
         patch:
           type: object
@@ -918,8 +1220,8 @@ components:
             time, so it reflects the Work as it stands now. Keys mirror
             `patch`. Omitted when empty.
           additionalProperties: true
-        reviewer_id:     { type: integer, nullable: true }
-        decided_at:      { type: string, format: date-time, nullable: true }
+        reviewer_id:     { type: [integer, "null"] }
+        decided_at:      { type: [string, "null"], format: date-time }
         created_at:      { type: string, format: date-time }
         updated_at:      { type: string, format: date-time }
 
@@ -934,7 +1236,7 @@ components:
         current_page:     { type: integer, minimum: 0 }
         total_pages:      { type: integer, minimum: 0 }
         progress_percent: { type: integer, minimum: 0, maximum: 100 }
-        rating:           { type: integer, minimum: 1, maximum: 5, nullable: true }
+        rating:           { type: [integer, "null"], minimum: 1, maximum: 5 }
         notes:            { type: string }
 
     UserBook:
@@ -949,10 +1251,10 @@ components:
         current_page:     { type: integer }
         total_pages:      { type: integer }
         progress_percent: { type: integer }
-        rating:           { type: integer, nullable: true, description: "1..5 when set." }
+        rating:           { type: [integer, "null"], description: "1..5 when set." }
         notes:            { type: string }
-        started_at:       { type: string, format: date-time, nullable: true }
-        finished_at:      { type: string, format: date-time, nullable: true }
+        started_at:       { type: [string, "null"], format: date-time }
+        finished_at:      { type: [string, "null"], format: date-time }
         created_at:       { type: string, format: date-time }
         updated_at:       { type: string, format: date-time }
         work:
