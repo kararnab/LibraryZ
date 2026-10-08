@@ -254,87 +254,87 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Contribution, error
 }
 
 // Approve applies the contribution's whitelisted patch fields to the
-// target Work and marks the contribution approved. Runs inside a
-// transaction so a crash mid-apply doesn't half-update either row.
-// Returns ErrAlreadyDecided if the contribution isn't pending.
+// target Work and marks the contribution approved. Returns
+// ErrAlreadyDecided if the contribution isn't pending — including when
+// another moderator decides it concurrently (see transition).
 func (s *Service) Approve(ctx context.Context, id uuid.UUID, reviewerID uint) (*Contribution, error) {
-	var out *Contribution
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var c Contribution
-		if err := tx.First(&c, "id = ?", id).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
-			return err
-		}
-		if c.Status != StatusPending {
-			return ErrAlreadyDecided
-		}
-
+	return s.decide(ctx, id, reviewerID, StatusApproved, func(tx *gorm.DB, c *Contribution) error {
 		var patch map[string]any
 		if len(c.Patch) > 0 {
 			if err := json.Unmarshal(c.Patch, &patch); err != nil {
 				return err
 			}
 		}
+		// Defense-in-depth: Submit now validates patches, but rows queued
+		// before that check existed may still carry unknown keys.
 		updates := make(map[string]any, len(patch))
 		for k, v := range patch {
 			if col, ok := allowedPatchFields[k]; ok {
 				updates[col] = v
 			}
 		}
-		if len(updates) > 0 {
-			updates["updated_at"] = time.Now()
-			if err := tx.Table("works").Where("id = ?", c.WorkID).Updates(updates).Error; err != nil {
-				return err
-			}
+		if len(updates) == 0 {
+			return nil
 		}
-
-		now := time.Now()
-		c.Status = StatusApproved
-		c.ReviewerID = &reviewerID
-		c.DecidedAt = &now
-		if err := tx.Save(&c).Error; err != nil {
-			return err
-		}
-		out = &c
-		return nil
+		updates["updated_at"] = time.Now()
+		return tx.Table("works").Where("id = ?", c.WorkID).Updates(updates).Error
 	})
-	if err == nil && out != nil {
-		one := []Contribution{*out}
-		s.enrich(ctx, one)
-		out = &one[0]
-	}
-	return out, err
 }
 
+// Reject marks the contribution rejected without touching the Work.
 func (s *Service) Reject(ctx context.Context, id uuid.UUID, reviewerID uint) (*Contribution, error) {
-	var out *Contribution
+	return s.decide(ctx, id, reviewerID, StatusRejected, nil)
+}
+
+// decide moves a pending contribution to `to` and, only if that transition
+// wins, runs apply — all in one transaction so a crash or apply failure
+// rolls the status back too.
+//
+// The transition is a conditional UPDATE (`WHERE status = 'pending'`)
+// rather than read-check-Save: under Postgres READ COMMITTED two
+// moderators could otherwise both observe `pending` and both proceed,
+// double-applying the patch or racing approve against reject. The row
+// lock taken by the UPDATE makes the second one wait, re-check the
+// predicate, and affect zero rows. Portable to sqlite, which serializes
+// writers anyway.
+func (s *Service) decide(ctx context.Context, id uuid.UUID, reviewerID uint, to Status, apply func(*gorm.DB, *Contribution) error) (*Contribution, error) {
+	var out Contribution
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var c Contribution
-		if err := tx.First(&c, "id = ?", id).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+		now := time.Now()
+		res := tx.Model(&Contribution{}).
+			Where("id = ? AND status = ?", id, StatusPending).
+			Updates(map[string]any{
+				"status":      to,
+				"reviewer_id": reviewerID,
+				"decided_at":  now,
+				"updated_at":  now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			// Either it doesn't exist or someone else already decided it.
+			var count int64
+			if err := tx.Model(&Contribution{}).Where("id = ?", id).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
 				return ErrNotFound
 			}
-			return err
-		}
-		if c.Status != StatusPending {
 			return ErrAlreadyDecided
 		}
-		now := time.Now()
-		c.Status = StatusRejected
-		c.ReviewerID = &reviewerID
-		c.DecidedAt = &now
-		if err := tx.Save(&c).Error; err != nil {
+		if err := tx.First(&out, "id = ?", id).Error; err != nil {
 			return err
 		}
-		out = &c
+		if apply != nil {
+			return apply(tx, &out)
+		}
 		return nil
 	})
-	if err == nil && out != nil {
-		one := []Contribution{*out}
-		s.enrich(ctx, one)
-		out = &one[0]
+	if err != nil {
+		return nil, err
 	}
-	return out, err
+	one := []Contribution{out}
+	s.enrich(ctx, one)
+	return &one[0], nil
 }
