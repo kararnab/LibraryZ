@@ -88,9 +88,10 @@ func migrateBaseline(tx *gorm.DB) error {
 // of the dialect-portable works table:
 //
 //   - `search_vector tsvector` column + GIN index
-//   - BEFORE INSERT/UPDATE trigger recomputing search_vector from title +
-//     authors + description with the `simple` configuration (no stemming,
-//     no stopwords — "Brooks" stays "Brooks")
+//   - BEFORE INSERT/UPDATE trigger recomputing search_vector with the
+//     `simple` configuration (no stemming, no stopwords — "Brooks" stays
+//     "Brooks"), weighted so ts_rank prefers title (A) over subtitle and
+//     authors (B) over description (C)
 //
 // No-op on sqlite — Service.SearchWorks falls back to LOWER(LIKE) there.
 func postgresSearch(tx *gorm.DB) error {
@@ -102,10 +103,11 @@ func postgresSearch(tx *gorm.DB) error {
 		`CREATE INDEX works_search_idx ON works USING gin(search_vector)`,
 		`CREATE FUNCTION works_search_vector_update() RETURNS trigger AS $$
 			BEGIN
-				NEW.search_vector := to_tsvector('simple',
-					coalesce(NEW.title, '') || ' ' ||
-					coalesce(NEW.authors, '') || ' ' ||
-					coalesce(NEW.description, ''));
+				NEW.search_vector :=
+					setweight(to_tsvector('simple', coalesce(NEW.title, '')), 'A') ||
+					setweight(to_tsvector('simple', coalesce(NEW.subtitle, '')), 'B') ||
+					setweight(to_tsvector('simple', coalesce(NEW.authors, '')), 'B') ||
+					setweight(to_tsvector('simple', coalesce(NEW.description, '')), 'C');
 				RETURN NEW;
 			END;
 		$$ LANGUAGE plpgsql`,

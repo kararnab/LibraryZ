@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -100,13 +101,16 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 	return &ed, nil
 }
 
-// SearchWorks finds works whose title/authors/description match q.
+// SearchWorks finds works whose title/subtitle/authors/description match q,
+// most relevant first.
 //
-// Driver-aware: on Postgres uses the `search_vector` tsvector column +
-// GIN index installed by MigratePostgresExtras; on sqlite (the test DB)
-// falls back to `LOWER(col) LIKE LOWER(pattern)` across all three text
-// columns. Both paths order by `created_at DESC` for parity — ts_rank
-// ranking is a follow-up once there's a real corpus to evaluate against.
+// Driver-aware: on Postgres it matches the weighted `search_vector` tsvector
+// (GIN-indexed; see internal/migrations) with websearch_to_tsquery — so
+// users can type `"exact phrase"`, `or`, and `-exclude` — and orders by
+// ts_rank, which prefers title hits over author hits over description hits.
+// On sqlite (the test DB) it falls back to `LOWER(col) LIKE` and
+// approximates the ranking: title matches, then subtitle/author matches,
+// then description-only matches. Ties break newest-first on both.
 //
 // Empty q is the handler's concern (returns 400); the service treats it
 // as a no-op returning an empty slice rather than scanning the table.
@@ -116,15 +120,21 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 		return []Work{}, nil
 	}
 	var works []Work
-	db := s.db.WithContext(ctx).Preload("Editions").Order("created_at DESC")
+	db := s.db.WithContext(ctx).Preload("Editions")
 	if s.db.Dialector.Name() == "postgres" {
-		db = db.Where("search_vector @@ plainto_tsquery('simple', ?)", q)
+		const tsq = "websearch_to_tsquery('simple', ?)"
+		db = db.Where("search_vector @@ "+tsq, q).
+			Clauses(orderBy("ts_rank(search_vector, "+tsq+") DESC, created_at DESC", q))
 	} else {
+		const like = `LIKE ? ESCAPE '\'`
 		pattern := "%" + escapeLike(strings.ToLower(q)) + "%"
 		db = db.Where(
-			`LOWER(title) LIKE ? ESCAPE '\' OR LOWER(authors) LIKE ? ESCAPE '\' OR LOWER(description) LIKE ? ESCAPE '\'`,
+			"LOWER(title) "+like+" OR LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" OR LOWER(description) "+like,
+			pattern, pattern, pattern, pattern,
+		).Clauses(orderBy(
+			"CASE WHEN LOWER(title) "+like+" THEN 0 WHEN LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" THEN 1 ELSE 2 END, created_at DESC",
 			pattern, pattern, pattern,
-		)
+		))
 	}
 	if limit > 0 {
 		db = db.Limit(limit)
@@ -133,6 +143,13 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 		db = db.Offset(offset)
 	}
 	return works, db.Find(&works).Error
+}
+
+// orderBy builds a parameterized ORDER BY. db.Order only accepts plain
+// columns/strings, and a clause.OrderBy carrying an Expression drops any
+// columns merged into it later — so the tiebreak lives in the same SQL.
+func orderBy(sql string, vars ...any) clause.OrderBy {
+	return clause.OrderBy{Expression: clause.Expr{SQL: sql, Vars: vars, WithoutParentheses: true}}
 }
 
 // likeEscaper escapes the LIKE metacharacters so user input matches

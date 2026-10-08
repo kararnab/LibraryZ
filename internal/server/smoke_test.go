@@ -633,6 +633,23 @@ func TestSearchWorksOrderedByCreatedAtDesc(t *testing.T) {
 	}
 }
 
+// The sqlite fallback approximates ts_rank: a title hit outranks an author
+// hit, which outranks a description-only hit — regardless of recency.
+func TestSearchWorksRanksTitleMatchesFirst(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupAndLogin(t, ts.URL, "search5@x.com", "hunter22", "S5")
+
+	createWorkFull(t, ts.URL, auth, "Leviathan", "Thomas Hobbes", "")
+	createWorkFull(t, ts.URL, auth, "Whale Facts", "Leviathan Press", "")
+	createWorkFull(t, ts.URL, auth, "Sea Stories", "", "Mentions a leviathan once.")
+
+	got := searchTitles(t, ts.URL, "leviathan")
+	want := []string{"Leviathan", "Whale Facts", "Sea Stories"}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ranking: want %v, got %v", want, got)
+	}
+}
+
 func TestSearchWorksTreatsLikeWildcardsLiterally(t *testing.T) {
 	ts, _ := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "search4@x.com", "hunter22", "S4")

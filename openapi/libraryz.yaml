@@ -137,13 +137,15 @@ paths:
       tags: [catalog]
       summary: Search works by free-text query
       description: |
-        Matches against `title`, `authors`, and `description`. On Postgres
-        uses a `tsvector` GIN index with the `simple` text-search
-        configuration (no stemming / stopwords). On sqlite (the test DB)
-        falls back to `LOWER(col) LIKE LOWER('%q%')` across the same
-        three columns. Results are ordered by `created_at DESC` in both
-        cases; `ts_rank` is intentionally deferred until there's a real
-        corpus to evaluate against. Empty `q` returns 400.
+        Matches against `title`, `subtitle`, `authors`, and `description`,
+        most relevant first. On Postgres uses a weighted `tsvector` GIN index
+        (`simple` configuration — no stemming / stopwords) queried with
+        `websearch_to_tsquery`, so `"exact phrase"`, `or`, and `-exclude`
+        work; results are ordered by `ts_rank` (title > subtitle/authors >
+        description), then `created_at DESC`. On sqlite (the test DB) falls
+        back to a literal, case-insensitive substring match (`%` and `_` are
+        not wildcards) ordered title hits, then subtitle/author hits, then
+        description hits, then `created_at DESC`. Empty `q` returns 400.
       parameters:
         - in: query
           name: q

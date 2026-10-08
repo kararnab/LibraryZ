@@ -123,3 +123,65 @@ func TestPostgresSearchVectorReflectsUpdates(t *testing.T) {
 		t.Fatalf("expected updated title to be searchable, got %+v", got)
 	}
 }
+
+// A title hit must outrank a passing mention in a newer work's description,
+// even though the description work was created later.
+func TestPostgresSearchRanksTitleAboveDescription(t *testing.T) {
+	db := openPostgres(t)
+	svc := catalog.NewService(db, nil)
+	ctx := context.Background()
+
+	for _, w := range []catalog.Work{
+		{ID: uuid.New(), Title: "Leviathan", Authors: "Thomas Hobbes"},
+		{ID: uuid.New(), Title: "Whale Facts", Authors: "Leviathan Press"},
+		{ID: uuid.New(), Title: "Sea Stories", Description: "Mentions a leviathan once."},
+	} {
+		ww := w
+		if err := svc.CreateWork(ctx, &ww); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := svc.SearchWorks(ctx, "leviathan", 50, 0)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(got) != 3 || got[0].Title != "Leviathan" || got[1].Title != "Whale Facts" || got[2].Title != "Sea Stories" {
+		titles := make([]string, len(got))
+		for i, w := range got {
+			titles[i] = w.Title
+		}
+		t.Fatalf("ranking: want [Leviathan, Whale Facts, Sea Stories], got %v", titles)
+	}
+}
+
+func TestPostgresSearchWebsearchSyntax(t *testing.T) {
+	db := openPostgres(t)
+	svc := catalog.NewService(db, nil)
+	ctx := context.Background()
+
+	for _, w := range []catalog.Work{
+		{ID: uuid.New(), Title: "The Old Man and the Sea"},
+		{ID: uuid.New(), Title: "The Sea Wolf"},
+		{ID: uuid.New(), Title: "Old Sea Charts and Man"},
+	} {
+		ww := w
+		if err := svc.CreateWork(ctx, &ww); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	phrase, _ := svc.SearchWorks(ctx, `"old man"`, 50, 0)
+	if len(phrase) != 1 || phrase[0].Title != "The Old Man and the Sea" {
+		t.Fatalf("phrase search: %+v", phrase)
+	}
+	excl, _ := svc.SearchWorks(ctx, "sea -wolf", 50, 0)
+	for _, w := range excl {
+		if w.Title == "The Sea Wolf" {
+			t.Fatalf("exclusion ignored: %+v", excl)
+		}
+	}
+	if len(excl) != 2 {
+		t.Fatalf("exclusion search: want 2, got %+v", excl)
+	}
+}
