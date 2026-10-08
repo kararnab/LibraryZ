@@ -25,18 +25,25 @@ func GenerateJWT(userID uint) (string, error) {
 }
 
 func VerifyJWT(tokenString string) (jwt.MapClaims, error) {
+	// Pin the algorithm to exactly HS256 (not merely "some HMAC") and refuse
+	// tokens without an exp claim — a token that never expires is never
+	// something we issued.
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")
 		}
 		return jwtSecret, nil
-	})
-
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		return claims, nil
-	} else {
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
+	if err != nil {
+		// Parse can return a nil token for malformed input, so bail before
+		// touching token.Claims.
 		return nil, err
 	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+	return claims, nil
 }
 
 func CheckPasswordHash(password, hashedPassword string) bool {

@@ -24,13 +24,13 @@ func Auth(next http.Handler) http.Handler {
 			http.Error(w, "Authorization header is missing", http.StatusUnauthorized)
 			return
 		}
-		parts := strings.SplitN(authHeader, "Bearer ", 2)
-		if len(parts) != 2 || parts[1] == "" {
+		token, ok := bearerToken(authHeader)
+		if !ok {
 			http.Error(w, "invalid Authorization header format", http.StatusUnauthorized)
 			return
 		}
 
-		claims, err := utils.VerifyJWT(parts[1])
+		claims, err := utils.VerifyJWT(token)
 		if err != nil {
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
@@ -45,6 +45,22 @@ func Auth(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), userIDKey, uint(raw))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// bearerToken extracts the credential from an `Authorization: Bearer <token>`
+// header. The scheme must be the first token and is matched case-insensitively
+// (RFC 7235 §2.1); anything else — a different scheme, "Bearer" appearing
+// mid-header, or an empty/whitespace-containing credential — is rejected.
+func bearerToken(h string) (string, bool) {
+	scheme, token, ok := strings.Cut(strings.TrimSpace(h), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	token = strings.TrimSpace(token)
+	if token == "" || strings.ContainsAny(token, " \t") {
+		return "", false
+	}
+	return token, true
 }
 
 // UserID extracts the authenticated user id injected by Auth.
