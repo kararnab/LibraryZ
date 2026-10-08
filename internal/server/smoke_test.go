@@ -164,6 +164,9 @@ func TestSmokeHappyPath(t *testing.T) {
 	if dlResp.Header.Get("X-Content-SHA256") != ed.SHA256 {
 		t.Fatalf("download: sha header mismatch")
 	}
+	if cd := dlResp.Header.Get("Content-Disposition"); !strings.Contains(cd, `filename="Moby-Dick - Herman Melville.txt"`) {
+		t.Fatalf("download: Content-Disposition should name the work, got %q", cd)
+	}
 
 	// GET work shows the edition
 	getWorkResp, _ := http.Get(ts.URL + "/works/" + work.ID)

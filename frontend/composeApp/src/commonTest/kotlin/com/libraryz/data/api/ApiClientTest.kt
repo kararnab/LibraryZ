@@ -178,6 +178,39 @@ class ApiClientTest {
     }
 
     @Test
+    fun downloadEditionFilePrefersUtf8FilenameFromContentDisposition() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = ByteReadChannel(byteArrayOf(1, 2, 3)),
+                status = HttpStatusCode.OK,
+                headers = headersOf(
+                    HttpHeaders.ContentDisposition,
+                    "attachment; filename=\"_____ - ___.pdf\"; filename*=UTF-8''%D0%92%D0%BE%D0%B9%D0%BD%D0%B0%3B%20x.pdf",
+                ),
+            )
+        }
+        val file = ApiClient(BASE, engine = engine).downloadEditionFile("e1")
+        assertEquals("Война; x.pdf", file.filename)
+        assertContentEquals(byteArrayOf(1, 2, 3), file.bytes)
+    }
+
+    @Test
+    fun contentDispositionParsing() {
+        assertEquals("Moby-Dick - Herman Melville.txt",
+            parseContentDispositionFilename("attachment; filename=\"Moby-Dick - Herman Melville.txt\""))
+        assertEquals(null, parseContentDispositionFilename("attachment"))
+        // Malformed filename* falls back to the ASCII form.
+        assertEquals("plain.pdf",
+            parseContentDispositionFilename("attachment; filename=\"plain.pdf\"; filename*=UTF-8''%ZZ"))
+    }
+
+    @Test
+    fun downloadEditionFileWithoutHeaderHasNullName() = runTest {
+        val engine = MockEngine { respond(ByteReadChannel(byteArrayOf(9)), HttpStatusCode.OK) }
+        assertEquals(null, ApiClient(BASE, engine = engine).downloadEditionFile("e1").filename)
+    }
+
+    @Test
     fun listWorksOn500ThrowsApiException() = runTest {
         val engine = MockEngine { respondError(HttpStatusCode.InternalServerError, "boom") }
         val api = ApiClient(BASE, engine = engine)

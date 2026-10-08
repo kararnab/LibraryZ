@@ -56,6 +56,7 @@ import com.libraryz.data.api.WorksState
 import com.libraryz.data.api.createTokenStore
 import com.libraryz.data.canPreview
 import com.libraryz.data.isDownloadSupported
+import com.libraryz.data.safeDownloadName
 import com.libraryz.data.sanitizeFilename
 import com.libraryz.data.saveDownload
 import com.libraryz.nav.Navigator
@@ -187,10 +188,13 @@ private fun Root(
         } else {
             scope.launch {
                 try {
-                    val name = "${sanitizeFilename(work.title)}.${ed.format.lowercase()}"
-                    snackbar.showSnackbar("Downloading $name…")
-                    val bytes = api.downloadEdition(ed.id)
-                    val path = saveDownload(name, bytes)
+                    snackbar.showSnackbar("Downloading ${work.title}…")
+                    val file = api.downloadEditionFile(ed.id)
+                    // Server names the file ("<Title> - <Authors>.<format>");
+                    // the local name is only a fallback for older backends.
+                    val name = file.filename?.let(::safeDownloadName)
+                        ?: "${sanitizeFilename(work.title)}.${ed.format.lowercase()}"
+                    val path = saveDownload(name, file.bytes)
                     snackbar.showSnackbar("Saved to $path")
                 } catch (e: Throwable) {
                     snackbar.showSnackbar("Download failed: ${e.message ?: "unknown"}")

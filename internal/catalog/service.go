@@ -158,18 +158,34 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
-// OpenEdition returns the edition metadata, an open reader for its bytes, and
-// the size of those bytes as reported by the storage backend (which may differ
-// from ed.SizeBytes if the stored object has drifted — the handler uses this
-// value, not the recorded one, to frame the response).
-func (s *Service) OpenEdition(ctx context.Context, id uuid.UUID) (*Edition, io.ReadCloser, int64, error) {
+// Download is an open edition plus what the handler needs to frame it.
+type Download struct {
+	Edition *Edition
+	// WorkTitle / WorkAuthors name the downloaded file.
+	WorkTitle   string
+	WorkAuthors string
+	Body        io.ReadCloser
+	// Size is what the storage backend reports, which may differ from
+	// Edition.SizeBytes if the stored object has drifted — the handler uses
+	// this value, not the recorded one, to frame the response.
+	Size int64
+}
+
+// OpenEdition loads the edition and its parent work's naming fields and opens
+// the stored bytes. The caller must close Body.
+func (s *Service) OpenEdition(ctx context.Context, id uuid.UUID) (*Download, error) {
 	ed, err := s.GetEdition(ctx, id)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
+	}
+	var work struct{ Title, Authors string }
+	if err := s.db.WithContext(ctx).Model(&Work{}).Select("title", "authors").
+		Where("id = ?", ed.WorkID).Take(&work).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 	rc, size, err := s.store.Get(ctx, ed.FileKey)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
 	}
-	return ed, rc, size, nil
+	return &Download{Edition: ed, WorkTitle: work.Title, WorkAuthors: work.Authors, Body: rc, Size: size}, nil
 }

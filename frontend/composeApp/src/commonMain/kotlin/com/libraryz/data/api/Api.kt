@@ -73,6 +73,42 @@ data class UpsertLibraryRequest(
 
 data class Session(val token: String)
 
+/** [filename] is null when the server didn't name the file. */
+class DownloadedFile(val filename: String?, val bytes: ByteArray)
+
+/**
+ * Extracts the filename from a `Content-Disposition` header, preferring the
+ * RFC 8187 `filename*=UTF-8''…` form (non-ASCII titles) over the ASCII
+ * `filename="…"` fallback. Returns null if neither is present.
+ */
+internal fun parseContentDispositionFilename(header: String): String? {
+    Regex("""filename\*\s*=\s*UTF-8''([^;\s]+)""", RegexOption.IGNORE_CASE)
+        .find(header)?.groupValues?.get(1)
+        ?.let(::percentDecodeUtf8)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { return it }
+    return Regex("""filename\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        .find(header)?.groupValues?.get(1)
+        ?.takeIf { it.isNotBlank() }
+}
+
+private fun percentDecodeUtf8(s: String): String? {
+    val out = ArrayList<Byte>(s.length)
+    var i = 0
+    while (i < s.length) {
+        val c = s[i]
+        if (c == '%') {
+            if (i + 2 >= s.length) return null
+            out += s.substring(i + 1, i + 3).toIntOrNull(16)?.toByte() ?: return null
+            i += 3
+        } else {
+            out += c.code.toByte()
+            i++
+        }
+    }
+    return out.toByteArray().decodeToString()
+}
+
 class ApiException(val status: Int, val body: String, message: String) :
     RuntimeException("$message [HTTP $status]: $body") {
     /**
@@ -317,12 +353,22 @@ class ApiClient(
     }
 
     /** Public. Returns the raw edition bytes. */
-    suspend fun downloadEdition(id: String): ByteArray {
+    suspend fun downloadEdition(id: String): ByteArray = downloadEditionFile(id).bytes
+
+    /**
+     * Public. Returns the edition bytes plus the filename the server chose
+     * (from `Content-Disposition`; "<Title> - <Authors>.<format>"), so every
+     * platform names saved files the same way.
+     */
+    suspend fun downloadEditionFile(id: String): DownloadedFile {
         val resp = client.get("$baseUrl/editions/$id/download")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "download edition failed")
         }
-        return resp.body()
+        return DownloadedFile(
+            filename = resp.headers[HttpHeaders.ContentDisposition]?.let(::parseContentDispositionFilename),
+            bytes = resp.body(),
+        )
     }
 
     /**

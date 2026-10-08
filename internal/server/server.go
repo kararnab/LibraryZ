@@ -119,7 +119,7 @@ func cors(next http.Handler, allowed []string, allowPrivateLAN bool) http.Handle
 				"GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers",
 				"Authorization, Content-Type, X-Requested-With")
-			w.Header().Set("Access-Control-Expose-Headers", "Authorization, X-Content-SHA256")
+			w.Header().Set("Access-Control-Expose-Headers", "Authorization, Content-Disposition, X-Content-SHA256")
 		}
 		// Preflights are always answered 204 (a disallowed origin simply gets
 		// no Allow-Origin header, so the browser blocks it). Non-OPTIONS
