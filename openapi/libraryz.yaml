@@ -390,7 +390,7 @@ paths:
           label: cURL
           source: |
             curl -s -G "$BASE/works/search" \
-              --data-urlencode 'q="white whale" melville -abridged' \
+              --data-urlencode 'q="herman melville" -abridged' \
               --data-urlencode limit=20
       responses:
         "200":
