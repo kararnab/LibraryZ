@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -176,6 +177,62 @@ func TestSmokeHappyPath(t *testing.T) {
 	_ = json.NewDecoder(getWorkResp.Body).Decode(&withEd)
 	if len(withEd.Editions) != 1 || withEd.Editions[0].ID != ed.ID {
 		t.Fatalf("get work: editions missing or wrong: %+v", withEd)
+	}
+}
+
+func TestReadyReportsDependencies(t *testing.T) {
+	ts, _ := newTestServer(t)
+	resp, err := http.Get(ts.URL + "/ready")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("ready: err=%v code=%d body=%s", err, statusOf(resp), readBody(resp))
+	}
+	var body struct {
+		Status string            `json:"status"`
+		Checks map[string]string `json:"checks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "ready" || body.Checks["database"] != "ok" || body.Checks["storage"] != "ok" {
+		t.Fatalf("unexpected body: %+v", body)
+	}
+}
+
+// failingStore is a Storage whose backend is unreachable.
+type failingStore struct{ storage.Storage }
+
+func (failingStore) Exists(context.Context, string) (bool, error) {
+	return false, errors.New("dial tcp: connection refused")
+}
+
+func TestReadyReturns503WhenADependencyIsDown(t *testing.T) {
+	deps, db := newTestDeps(t)
+	deps.Storage = failingStore{deps.Storage}
+	ts := httptest.NewServer(server.New(deps))
+	t.Cleanup(ts.Close)
+
+	resp, _ := http.Get(ts.URL + "/ready")
+	body := readBody(resp)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("storage down: want 503, got %d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, `"storage":"unavailable"`) || !strings.Contains(body, `"database":"ok"`) {
+		t.Fatalf("storage down: body = %s", body)
+	}
+	if strings.Contains(body, "connection refused") {
+		t.Fatalf("error details leaked: %s", body)
+	}
+	// Liveness is unaffected.
+	if r, _ := http.Get(ts.URL + "/health"); r.StatusCode != http.StatusOK {
+		t.Fatalf("health should stay 200, got %d", r.StatusCode)
+	}
+
+	// Database down too.
+	sqlDB, _ := db.DB()
+	sqlDB.Close()
+	resp, _ = http.Get(ts.URL + "/ready")
+	if body := readBody(resp); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"database":"unavailable"`) {
+		t.Fatalf("db down: got %d %s", resp.StatusCode, body)
 	}
 }
 

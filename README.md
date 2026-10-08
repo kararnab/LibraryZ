@@ -82,8 +82,10 @@ That's it. The stack comes up with:
 Smoke-test it:
 
 ```bash
-curl -s localhost:8080/health
+curl -s localhost:8080/health   # liveness: process is up
 # {"status":"Healthy","time":"..."}
+curl -s localhost:8080/ready    # readiness: Postgres + blob storage reachable (503 if not)
+# {"status":"ready","checks":{"database":"ok","storage":"ok"}}
 
 curl -s -X POST localhost:8080/auth/signup \
   -H 'Content-Type: application/json' \
@@ -215,7 +217,8 @@ Full spec: [openapi/libraryz.yaml](openapi/libraryz.yaml).
 **Public**
 
 ```
-GET  /health
+GET  /health                       liveness
+GET  /ready                        readiness (DB + storage), 503 when degraded
 POST /auth/signup                  {email, password, name}
 POST /auth/login                   {email, password}     -> Authorization: Bearer <jwt>
 GET  /works[?limit=&offset=]

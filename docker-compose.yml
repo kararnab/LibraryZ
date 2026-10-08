@@ -76,7 +76,7 @@ services:
     image: kong:3.9.1
     depends_on:
       libraryz:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -175,6 +175,14 @@ services:
       # LIBRARYZ_SHUTDOWN_TIMEOUT: "20s"
       # Recommendation retrain interval (optional; default 6h):
       # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
+    # /ready checks Postgres + MinIO (503 if either is unreachable); /health is
+    # liveness only. busybox wget ships in the alpine runtime image.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     # libraryz is intentionally NOT published to the host — Kong is the edge
     # (Slice 6.2). For direct debugging without going through Kong:
     #   docker compose exec libraryz wget -qO- http://localhost:8080/health

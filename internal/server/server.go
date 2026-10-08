@@ -50,6 +50,7 @@ func New(d Deps) http.Handler {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", authH.HealthCheck).Methods(http.MethodGet)
+	r.HandleFunc("/ready", ready(d.DB, d.Storage)).Methods(http.MethodGet)
 	r.HandleFunc("/auth/signup", authH.SignUp).Methods(http.MethodPost)
 	r.HandleFunc("/auth/login", authH.Login).Methods(http.MethodPost)
 

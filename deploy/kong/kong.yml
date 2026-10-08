@@ -15,9 +15,33 @@ _transform: true
 # request-size-limiting config overrides the service-wide 5 MB ceiling, and
 # per-route rate limits override the service-wide 60/min fallback.
 
+# The upstream lets Kong load-balance across libraryz replicas and eject any
+# replica whose /ready probe fails (DB or blob storage unreachable) until it
+# recovers. Add one target per replica.
+upstreams:
+  - name: libraryz-upstream
+    targets:
+      - target: libraryz:8080
+    healthchecks:
+      active:
+        type: http
+        http_path: /ready
+        timeout: 3
+        healthy:
+          interval: 10
+          successes: 2
+        unhealthy:
+          interval: 5
+          http_failures: 2
+          tcp_failures: 2
+          timeouts: 2
+          http_statuses: [500, 502, 503, 504]
+
 services:
   - name: libraryz
-    url: http://libraryz:8080
+    host: libraryz-upstream
+    port: 8080
+    protocol: http
     # Service-level fallbacks. Anything not matched by a more specific route
     # below still goes through these.
     plugins:

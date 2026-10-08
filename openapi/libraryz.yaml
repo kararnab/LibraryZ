@@ -25,6 +25,7 @@ paths:
     get:
       tags: [health]
       summary: Liveness probe
+      description: Process is up. Touches no dependencies — see `/ready`.
       responses:
         "200":
           description: Healthy
@@ -32,6 +33,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      description: |
+        Checks that the database and blob storage are reachable (2s timeout
+        each). Use this for load-balancer / orchestrator readiness; use
+        `/health` for liveness. Failure details are logged server-side, not
+        returned.
+      responses:
+        "200":
+          description: All dependencies reachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ready"
+        "503":
+          description: At least one dependency is unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ready"
 
   /auth/signup:
     post:
@@ -583,6 +607,15 @@ components:
       properties:
         status: { type: string, example: Healthy }
         time:   { type: string, format: date-time }
+
+    Ready:
+      type: object
+      properties:
+        status: { type: string, enum: [ready, unavailable] }
+        checks:
+          type: object
+          additionalProperties: { type: string, enum: [ok, unavailable] }
+          example: { database: ok, storage: ok }
 
     Me:
       type: object
