@@ -93,6 +93,25 @@ services:
               limit_by: ip
               fault_tolerant: true
 
+      # POST /auth/refresh, /auth/logout — clients refresh roughly every
+      # 15 minutes per session, so this is generous; it only blunts guessing
+      # (refresh tokens are 256-bit random, so guessing is hopeless anyway).
+      - name: auth-session
+        paths: ["~/auth/(refresh|logout)$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 20
+              hour: 300
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+
       # POST /works/{id}/editions — large multipart upload (≤500 MiB).
       # request_buffering off so the body streams to libraryz instead of being
       # spooled in Kong. allowed_payload_size is slightly above the app cap

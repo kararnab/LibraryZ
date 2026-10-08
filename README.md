@@ -220,7 +220,9 @@ Full spec: [openapi/libraryz.yaml](openapi/libraryz.yaml).
 GET  /health                       liveness
 GET  /ready                        readiness (DB + storage), 503 when degraded
 POST /auth/signup                  {email, password, name}
-POST /auth/login                   {email, password}     -> Authorization: Bearer <jwt>
+POST /auth/login                   {email, password}     -> {access_token, refresh_token, expires_in}
+POST /auth/refresh                 {refresh_token}       -> new pair (single-use, rotating)
+POST /auth/logout                  {refresh_token}       ends that session
 GET  /works[?limit=&offset=]
 GET  /works/search?q=...           full-text search (FTS on Postgres, LIKE on SQLite)
 GET  /works/{id}
@@ -234,6 +236,7 @@ GET  /contributions/{id}
 
 ```
 GET  /auth/me
+POST /auth/logout-all                      ends every session (revokes all tokens)
 POST /works                                {title, authors, description, ...}
 POST /works/{id}/editions                  multipart: format, language?, file
 POST /works/{id}/contributions             {patch: {field: value, ...}}

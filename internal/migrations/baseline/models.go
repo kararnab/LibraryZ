@@ -19,11 +19,23 @@ import (
 )
 
 type User struct {
-	ID          uint   `gorm:"primaryKey"`
-	Email       string `gorm:"uniqueIndex"`
-	Password    string
-	Name        string
-	IsModerator bool
+	ID           uint   `gorm:"primaryKey"`
+	Email        string `gorm:"uniqueIndex"`
+	Password     string
+	Name         string
+	IsModerator  bool
+	TokenVersion int `gorm:"not null;default:0"`
+}
+
+type RefreshToken struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+	UserID    uint      `gorm:"not null;index"`
+	FamilyID  uuid.UUID `gorm:"type:uuid;not null;index"`
+	TokenHash string    `gorm:"size:64;not null;uniqueIndex"`
+	ExpiresAt time.Time `gorm:"not null"`
+	UsedAt    *time.Time
+	RevokedAt *time.Time
+	CreatedAt time.Time
 }
 
 type Work struct {
@@ -132,7 +144,7 @@ func (Dismissal) TableName() string { return "rec_dismissals" }
 // All lists every model, in dependency order, for AutoMigrate.
 func All() []any {
 	return []any{
-		&User{},
+		&User{}, &RefreshToken{},
 		&Work{}, &Edition{}, &Tag{},
 		&Contribution{},
 		&UserBook{},

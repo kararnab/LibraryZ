@@ -1337,3 +1337,102 @@ func TestModeratorRemovesWork(t *testing.T) {
 		t.Fatalf("contribution on removed work: want 404, got %d", r.StatusCode)
 	}
 }
+
+// --- Sessions: refresh + revocation (#15) ------------------------------------
+
+type tokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+func loginPair(t *testing.T, base, email, password string) tokenPair {
+	t.Helper()
+	resp, err := http.Post(base+"/auth/login", "application/json",
+		mustJSON(t, map[string]string{"email": email, "password": password}))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("login: err=%v code=%d", err, statusOf(resp))
+	}
+	var p tokenPair
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Header.Get("Authorization") != "Bearer "+p.AccessToken {
+		t.Fatalf("Authorization header should mirror access_token")
+	}
+	return p
+}
+
+func getMe(t *testing.T, base, access string) int {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode
+}
+
+func postJSON(t *testing.T, url string, body any) *http.Response {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", mustJSON(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestRefreshLogoutAndLogoutAll(t *testing.T) {
+	ts, _ := newTestServer(t)
+	signupAndLogin(t, ts.URL, "session1@x.com", "hunter22", "S")
+	a := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	b := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	if a.RefreshToken == "" || a.ExpiresIn != 900 {
+		t.Fatalf("login pair: %+v", a)
+	}
+
+	// Refresh rotates.
+	resp := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: %d %s", resp.StatusCode, readBody(resp))
+	}
+	var a2 tokenPair
+	_ = json.NewDecoder(resp.Body).Decode(&a2)
+	if a2.RefreshToken == a.RefreshToken || getMe(t, ts.URL, a2.AccessToken) != http.StatusOK {
+		t.Fatalf("rotated pair unusable: %+v", a2)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("spent refresh token: want 401, got %d", r.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing refresh token: want 400, got %d", r.StatusCode)
+	}
+
+	// Logout ends session b only.
+	if r := postJSON(t, ts.URL+"/auth/logout", map[string]string{"refresh_token": b.RefreshToken}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout: %d", r.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": b.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh after logout: want 401, got %d", r.StatusCode)
+	}
+
+	// Logout-all kills outstanding access tokens immediately.
+	c := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout-all: %d", r.StatusCode)
+	}
+	for name, tok := range map[string]string{"a2": a2.AccessToken, "c": c.AccessToken} {
+		if code := getMe(t, ts.URL, tok); code != http.StatusUnauthorized {
+			t.Fatalf("access token %s after logout-all: want 401, got %d", name, code)
+		}
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": c.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh after logout-all: want 401, got %d", r.StatusCode)
+	}
+	if code := getMe(t, ts.URL, loginPair(t, ts.URL, "session1@x.com", "hunter22").AccessToken); code != http.StatusOK {
+		t.Fatalf("fresh login after logout-all: %d", code)
+	}
+}

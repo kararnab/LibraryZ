@@ -139,6 +139,13 @@ services:
       # the built-in default). This dev value keeps `docker compose up` one-command;
       # override it for anything real:  JWT_SECRET=... docker compose up
       JWT_SECRET: "${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please-0123456789}"
+      # Zero-downtime secret rotation: set the new JWT_SECRET and move the old
+      # value here; tokens signed with either verify. Drop it once old access
+      # tokens have expired (LIBRARYZ_ACCESS_TOKEN_TTL, default 15m).
+      # JWT_SECRET_PREVIOUS: ""
+      # Token lifetimes (Go durations; defaults shown).
+      # LIBRARYZ_ACCESS_TOKEN_TTL: "15m"
+      # LIBRARYZ_REFRESH_TOKEN_TTL: "720h"
       # libraryz uses S3/MinIO when LIBRARYZ_S3_ENDPOINT is set, otherwise
       # falls back to a local-filesystem store under LIBRARYZ_STORAGE_DIR.
       # Setting the endpoint here is the entire signal — there is no separate

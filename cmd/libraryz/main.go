@@ -65,6 +65,8 @@ func main() {
 		MaxUploadBytes:  cfg.MaxUploadBytes,
 		AllowedOrigins:  cfg.AllowedOrigins,
 		AllowPrivateLAN: cfg.CORSAllowPrivateLAN,
+		AccessTokenTTL:  cfg.AccessTokenTTL,
+		RefreshTokenTTL: cfg.RefreshTokenTTL,
 	})
 
 	startRecommendationTraining(dbConn, cfg)

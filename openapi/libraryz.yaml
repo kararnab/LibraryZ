@@ -78,7 +78,12 @@ paths:
   /auth/login:
     post:
       tags: [auth]
-      summary: Exchange credentials for a JWT (returned in Authorization header)
+      summary: Exchange credentials for an access + refresh token pair
+      description: |
+        Starts a new session. The access token is a short-lived JWT
+        (`LIBRARYZ_ACCESS_TOKEN_TTL`, default 15m); renew it with
+        `POST /auth/refresh`. The access token is also mirrored in the
+        `Authorization` response header.
       requestBody:
         required: true
         content:
@@ -87,12 +92,78 @@ paths:
               $ref: "#/components/schemas/LoginRequest"
       responses:
         "200":
-          description: Authenticated. JWT is returned in the `Authorization` response header.
+          description: Authenticated
           headers:
             Authorization:
-              description: "`Bearer <jwt>`"
+              description: "`Bearer <access_token>`"
               schema:
                 type: string
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate a refresh token for a new token pair
+      description: |
+        The presented refresh token is spent and a new pair is returned.
+        Presenting an already-spent token is treated as theft: the whole
+        session (token family) is revoked and the client must log in again.
+        Clients must therefore serialize refreshes per session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Unknown, expired, revoked, or reused refresh token — log in again
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: End the session a refresh token belongs to
+      description: |
+        Revokes the refresh token's session. No access token needed (it may
+        already have expired). Unknown tokens are ignored. Outstanding access
+        tokens for the session stay valid until they expire (≤ access TTL);
+        use `/auth/logout-all` to kill those immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "204":
+          description: Logged out
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/logout-all:
+    post:
+      tags: [auth]
+      summary: End every session of the current user
+      description: |
+        Increments the user's token version — invalidating every outstanding
+        access token at once — and revokes all refresh tokens.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: All sessions ended
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -673,6 +744,21 @@ components:
       properties:
         status: { type: string, example: Healthy }
         time:   { type: string, format: date-time }
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:  { type: string, description: "JWT; send as `Authorization: Bearer <access_token>`" }
+        refresh_token: { type: string, description: Opaque; single use }
+        token_type:    { type: string, enum: [Bearer] }
+        expires_in:    { type: integer, description: Access token lifetime in seconds }
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
 
     RemovalRequest:
       type: object

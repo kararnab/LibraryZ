@@ -17,11 +17,18 @@ type Config struct {
 	// AutoMigrate runs migrations on server startup (default). Set
 	// LIBRARYZ_AUTO_MIGRATE=false when migrations run as a separate
 	// `libraryz migrate` step instead.
-	AutoMigrate    bool
-	ListenAddr     string
-	StorageDir     string
-	JWTSecret      string
-	MaxUploadBytes int64
+	AutoMigrate bool
+	ListenAddr  string
+	StorageDir  string
+	JWTSecret   string
+	// JWTPreviousSecret still verifies (but never signs) tokens, for
+	// zero-downtime rotation. Optional.
+	JWTPreviousSecret string
+	// AccessTokenTTL bounds a leaked access token's usefulness; clients renew
+	// with a refresh token that lives RefreshTokenTTL.
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+	MaxUploadBytes  int64
 	// AllowedOrigins is the CORS allowlist (exact-match) for browser clients.
 	// Empty means "dev mode": only localhost / 127.0.0.1 origins are allowed.
 	// Set LIBRARYZ_ALLOWED_ORIGINS (comma-separated) in production.
@@ -71,6 +78,9 @@ func Load() *Config {
 		ListenAddr:          GetListenAddr(),
 		StorageDir:          GetStorageDir(),
 		JWTSecret:           GetJWTSecret(),
+		JWTPreviousSecret:   GetJWTPreviousSecret(),
+		AccessTokenTTL:      getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:     getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		MaxUploadBytes:      GetMaxUploadBytes(),
 		AllowedOrigins:      GetAllowedOrigins(),
 		CORSAllowPrivateLAN: os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
@@ -185,6 +195,12 @@ func GetJWTSecret() string {
 	return getEnv("JWT_SECRET", InsecureDefaultJWTSecret)
 }
 
+// GetJWTPreviousSecret is the rotated-out secret that still verifies tokens
+// (JWT_SECRET_PREVIOUS). Empty when not rotating.
+func GetJWTPreviousSecret() string {
+	return os.Getenv("JWT_SECRET_PREVIOUS")
+}
+
 // Validate fails fast on configuration that is safe for tests but dangerous in
 // a real deployment. Call it from main() before serving; the library path
 // (server.New, used by tests) deliberately does not, so the dev fallback
@@ -197,6 +213,10 @@ func (c *Config) Validate() error {
 		return errors.New("JWT_SECRET is set to the insecure built-in default; set a real secret")
 	case len(c.JWTSecret) < 32:
 		return errors.New("JWT_SECRET must be at least 32 bytes")
+	case c.JWTPreviousSecret != "" && len(c.JWTPreviousSecret) < 32:
+		return errors.New("JWT_SECRET_PREVIOUS must be at least 32 bytes when set")
+	case c.JWTPreviousSecret == c.JWTSecret:
+		return errors.New("JWT_SECRET_PREVIOUS must differ from JWT_SECRET")
 	}
 	return nil
 }

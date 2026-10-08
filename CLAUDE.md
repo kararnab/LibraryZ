@@ -215,6 +215,16 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
     resolve callback, JS invokes it, Kotlin wraps in
     `suspendCancellableCoroutine`. Look for `awaitHandle` / `awaitBytes`
     in that file. Don't replace those with `.await()`.
+- **Sessions = short access JWT + rotating refresh token.** Access tokens
+  (15m, `kid` header, `tv` claim) are checked against `users.token_version`
+  by `middleware.Auth(db)` — bump it to revoke everything
+  (`/auth/logout-all`). Refresh tokens are opaque, stored as sha256, single
+  use; presenting a spent one revokes its whole family. Frontend:
+  `ApiClient` wraps authed calls in `authed {}` (one serialized refresh on
+  401, then retry); `AuthState` is its `SessionHooks` and raises
+  `sessionExpired` when renewal fails, which sends `App` to sign-in. Never
+  run two refreshes for one session in parallel. Secret rotation:
+  `JWT_SECRET_PREVIOUS`.
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

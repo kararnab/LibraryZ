@@ -98,7 +98,9 @@ fun App() {
             // Break the circular construction by attaching the fetcher
             // post-hoc — me() failures are swallowed inside AuthState so
             // offline starts don't drop the session.
-            ApiClient(DefaultBaseUrl, tokenProvider = { auth.token }).also { client ->
+            // auth is also the client's SessionHooks: on a 401 the client
+            // refreshes the session through it, or reports it expired.
+            ApiClient(DefaultBaseUrl, tokenProvider = { auth.token }, sessionHooks = auth).also { client ->
                 auth.setUserFetcher { runCatching { client.me() }.getOrNull() }
             }
         }
@@ -164,10 +166,28 @@ private fun Root(
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbar.current
 
-    // If bootstrap restored a session, jump straight to Browse.
+    // Follow the session: a restored one jumps straight to Browse; losing it
+    // (logout, or expiry detected by ApiClient anywhere in the app) returns
+    // to sign-in.
     LaunchedEffect(auth.isAuthenticated) {
-        if (auth.isAuthenticated && nav.current == Screen.Auth) {
-            nav.replace(Screen.Browse)
+        if (auth.isAuthenticated) {
+            if (nav.current == Screen.Auth) nav.replace(Screen.Browse)
+        } else if (nav.current != Screen.Auth) {
+            nav.replace(Screen.Auth)
+        }
+    }
+    LaunchedEffect(auth.sessionExpired) {
+        if (auth.sessionExpired) {
+            auth.acknowledgeSessionExpired()
+            snackbar.showSnackbar("Your session expired. Please sign in again.")
+        }
+    }
+    // Ends the session server-side too (best effort — offline still logs out
+    // locally), then clears it; the effect above navigates to sign-in.
+    val logout: () -> Unit = {
+        scope.launch {
+            auth.refreshToken?.let { rt -> runCatching { api.logout(rt) } }
+            auth.clear()
         }
     }
 
@@ -283,6 +303,7 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onLogout = logout,
                             onRemoveWork = removeWork,
                             onRemoveEdition = removeEdition,
                         )
@@ -292,7 +313,7 @@ private fun Root(
                         works = works,
                         onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
                         onUploadClick = { nav.push(Screen.Upload()) },
-                        onLogout = { scope.launch { auth.clear(); nav.replace(Screen.Auth) } },
+                        onLogout = logout,
                         showRefresh = false,
                         onReviewClick = if (auth.isModerator) {
                             { nav.push(Screen.ContributionQueue) }
@@ -334,6 +355,7 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onLogout = logout,
                             onRemoveWork = removeWork,
                             onRemoveEdition = removeEdition,
                         )
@@ -382,6 +404,7 @@ private fun Root(
                                 onDownload = downloadEdition,
                                 onLibraryUpsert = libraryUpsert,
                                 onLibraryRemove = libraryRemove,
+                                onLogout = logout,
                                 onRemoveWork = removeWork,
                                 onRemoveEdition = removeEdition,
                             )
@@ -427,6 +450,7 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onLogout = logout,
                             onRemoveWork = removeWork,
                             onRemoveEdition = removeEdition,
                         )
@@ -740,10 +764,10 @@ private fun ListDetailLayout(
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
+    onLogout: () -> Unit,
     onRemoveWork: ((Work, String) -> Unit)? = null,
     onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
 ) {
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(selectedWorkId) {
         if (selectedWorkId != null) {
@@ -759,7 +783,7 @@ private fun ListDetailLayout(
                 works = works,
                 onWorkClick = onSelect,
                 onUploadClick = { nav.push(Screen.Upload()) },
-                onLogout = { scope.launch { auth.clear(); nav.replace(Screen.Auth) } },
+                onLogout = onLogout,
                 showRefresh = true,
             )
         }

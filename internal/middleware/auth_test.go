@@ -13,16 +13,59 @@ import (
 	"gorm.io/gorm"
 )
 
-func signHS(t *testing.T, method jwt.SigningMethod, claims jwt.MapClaims, key any) string {
+// testDB has a minimal users table: id 1 is a moderator, id 2 isn't, id 3
+// has had its tokens revoked (token_version bumped to 1).
+func testDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	s, err := jwt.NewWithClaims(method, claims).SignedString(key)
+	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	for _, s := range []string{
+		`CREATE TABLE users (id INTEGER PRIMARY KEY, is_moderator BOOLEAN, token_version INTEGER NOT NULL DEFAULT 0)`,
+		`INSERT INTO users (id, is_moderator, token_version) VALUES (1, true, 0), (2, false, 0), (3, false, 1)`,
+	} {
+		if err := db.Exec(s).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	return db
+}
+
+func sign(t *testing.T, method jwt.SigningMethod, claims jwt.MapClaims, kid string, key any) string {
+	t.Helper()
+	tok := jwt.NewWithClaims(method, claims)
+	if kid != "" {
+		tok.Header["kid"] = kid
+	}
+	s, err := tok.SignedString(key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
 	return s
 }
 
-func secret() []byte { return []byte(config.GetJWTSecret()) }
+// currentKID reads the kid the server stamps on tokens it issues.
+func currentKID(t *testing.T) string {
+	t.Helper()
+	tok, _ := utils.GenerateJWT(1, 0, time.Minute)
+	parsed, _, err := jwt.NewParser().ParseUnverified(tok, jwt.MapClaims{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Header["kid"].(string)
+}
+
+func bearer(t *testing.T, userID uint, tv int) string {
+	t.Helper()
+	tok, err := utils.GenerateJWT(userID, tv, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "Bearer " + tok
+}
 
 // okHandler records the user id Auth injected.
 func okHandler(got *uint) http.Handler {
@@ -34,7 +77,7 @@ func okHandler(got *uint) http.Handler {
 	})
 }
 
-func doAuth(h http.Handler, header string) int {
+func do(h http.Handler, header string) int {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	if header != "" {
 		req.Header.Set("Authorization", header)
@@ -71,73 +114,76 @@ func TestBearerToken(t *testing.T) {
 }
 
 func TestAuthAcceptsValidToken(t *testing.T) {
-	tok, err := utils.GenerateJWT(42)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var got uint
-	if code := doAuth(Auth(okHandler(&got)), "bearer "+tok); code != http.StatusOK {
+	if code := do(Auth(testDB(t))(okHandler(&got)), "bearer "+bearer(t, 2, 0)[len("Bearer "):]); code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", code)
 	}
-	if got != 42 {
-		t.Fatalf("user id = %d, want 42", got)
+	if got != 2 {
+		t.Fatalf("user id = %d, want 2", got)
 	}
 }
 
 func TestAuthRejects(t *testing.T) {
-	valid, _ := utils.GenerateJWT(1)
+	secret := []byte(config.GetJWTSecret())
+	kid := currentKID(t)
 	exp := time.Now().Add(time.Hour).Unix()
-	cases := map[string]string{
-		"missing header":  "",
-		"wrong scheme":    "Basic " + valid,
-		"embedded bearer": "xyzBearer " + valid,
-		"garbage token":   "Bearer not.a.jwt",
-		"expired":         "Bearer " + signHS(t, jwt.SigningMethodHS256, jwt.MapClaims{"user_id": 1, "exp": time.Now().Add(-time.Minute).Unix()}, secret()),
-		"no exp claim":    "Bearer " + signHS(t, jwt.SigningMethodHS256, jwt.MapClaims{"user_id": 1}, secret()),
-		"wrong alg HS512": "Bearer " + signHS(t, jwt.SigningMethodHS512, jwt.MapClaims{"user_id": 1, "exp": exp}, secret()),
-		"alg none":        "Bearer " + signHS(t, jwt.SigningMethodNone, jwt.MapClaims{"user_id": 1, "exp": exp}, jwt.UnsafeAllowNoneSignatureType),
-		"wrong secret":    "Bearer " + signHS(t, jwt.SigningMethodHS256, jwt.MapClaims{"user_id": 1, "exp": exp}, []byte("some-other-secret")),
-		"missing user_id": "Bearer " + signHS(t, jwt.SigningMethodHS256, jwt.MapClaims{"exp": exp}, secret()),
-		"string user_id":  "Bearer " + signHS(t, jwt.SigningMethodHS256, jwt.MapClaims{"user_id": "1", "exp": exp}, secret()),
+	claims := func(extra jwt.MapClaims) jwt.MapClaims {
+		c := jwt.MapClaims{"user_id": 2, "tv": 0, "exp": exp}
+		for k, v := range extra {
+			if v == nil {
+				delete(c, k)
+			} else {
+				c[k] = v
+			}
+		}
+		return c
 	}
+	cases := map[string]string{
+		"missing header":       "",
+		"wrong scheme":         "Basic " + bearer(t, 2, 0)[len("Bearer "):],
+		"embedded bearer":      "xyz" + bearer(t, 2, 0),
+		"garbage token":        "Bearer not.a.jwt",
+		"expired":              "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"exp": time.Now().Add(-time.Minute).Unix()}), kid, secret),
+		"no exp claim":         "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"exp": nil}), kid, secret),
+		"wrong alg HS512":      "Bearer " + sign(t, jwt.SigningMethodHS512, claims(nil), kid, secret),
+		"alg none":             "Bearer " + sign(t, jwt.SigningMethodNone, claims(nil), kid, jwt.UnsafeAllowNoneSignatureType),
+		"wrong secret":         "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), kid, []byte("some-other-secret")),
+		"missing kid":          "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), "", secret),
+		"unknown kid":          "Bearer " + sign(t, jwt.SigningMethodHS256, claims(nil), "deadbeef", secret),
+		"missing user_id":      "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"user_id": nil}), kid, secret),
+		"string user_id":       "Bearer " + sign(t, jwt.SigningMethodHS256, claims(jwt.MapClaims{"user_id": "2"}), kid, secret),
+		"revoked token_version": bearer(t, 3, 0),
+		"unknown user":         bearer(t, 99, 0),
+	}
+	db := testDB(t)
 	for name, header := range cases {
 		t.Run(name, func(t *testing.T) {
 			var got uint
-			if code := doAuth(Auth(okHandler(&got)), header); code != http.StatusUnauthorized {
+			if code := do(Auth(db)(okHandler(&got)), header); code != http.StatusUnauthorized {
 				t.Fatalf("code = %d, want 401", code)
 			}
 		})
 	}
+	// The current token version for user 3 is accepted.
+	var got uint
+	if code := do(Auth(db)(okHandler(&got)), bearer(t, 3, 1)); code != http.StatusOK {
+		t.Fatalf("current token_version: code = %d, want 200", code)
+	}
 }
 
 func TestModerator(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, is_moderator BOOLEAN)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	db.Exec(`INSERT INTO users (id, is_moderator) VALUES (1, true), (2, false)`)
-
+	db := testDB(t)
 	var got uint
-	chain := Auth(Moderator(db)(okHandler(&got)))
-	bearer := func(id uint) string {
-		tok, _ := utils.GenerateJWT(id)
-		return "Bearer " + tok
-	}
+	chain := Auth(db)(Moderator(db)(okHandler(&got)))
 
-	if code := doAuth(chain, bearer(1)); code != http.StatusOK {
+	if code := do(chain, bearer(t, 1, 0)); code != http.StatusOK {
 		t.Errorf("moderator: code = %d, want 200", code)
 	}
-	if code := doAuth(chain, bearer(2)); code != http.StatusForbidden {
+	if code := do(chain, bearer(t, 2, 0)); code != http.StatusForbidden {
 		t.Errorf("non-moderator: code = %d, want 403", code)
 	}
-	if code := doAuth(chain, bearer(99)); code != http.StatusForbidden {
-		t.Errorf("unknown user: code = %d, want 403", code)
-	}
 	// Moderator without Auth in front has no user id in context.
-	if code := doAuth(Moderator(db)(okHandler(&got)), ""); code != http.StatusUnauthorized {
+	if code := do(Moderator(db)(okHandler(&got)), ""); code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated: code = %d, want 401", code)
 	}
 }

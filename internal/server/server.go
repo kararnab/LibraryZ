@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/kararnab/libraryZ/internal/auth"
@@ -28,12 +29,15 @@ type Deps struct {
 	// AllowPrivateLAN additionally permits RFC-1918 private-IP origins in dev
 	// mode (when AllowedOrigins is empty). Ignored otherwise.
 	AllowPrivateLAN bool
+	// Token lifetimes; zero means the auth package defaults.
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 // New builds the HTTP handler with all routes wired. Used by cmd/libraryz and
 // integration tests so production and tests exercise the same router.
 func New(d Deps) http.Handler {
-	authSvc := auth.NewService(d.DB)
+	authSvc := auth.NewService(d.DB, d.AccessTokenTTL, d.RefreshTokenTTL)
 	authH := auth.NewHandler(authSvc)
 
 	catSvc := catalog.NewService(d.DB, d.Storage)
@@ -53,6 +57,8 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("/ready", ready(d.DB, d.Storage)).Methods(http.MethodGet)
 	r.HandleFunc("/auth/signup", authH.SignUp).Methods(http.MethodPost)
 	r.HandleFunc("/auth/login", authH.Login).Methods(http.MethodPost)
+	r.HandleFunc("/auth/refresh", authH.Refresh).Methods(http.MethodPost)
+	r.HandleFunc("/auth/logout", authH.Logout).Methods(http.MethodPost)
 
 	r.HandleFunc("/works", catH.ListWorks).Methods(http.MethodGet)
 	// /works/search before /works/{id} so mux matches "search" as a
@@ -67,8 +73,9 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("/contributions/{id}", contribH.Get).Methods(http.MethodGet)
 
 	authed := r.NewRoute().Subrouter()
-	authed.Use(middleware.Auth)
+	authed.Use(middleware.Auth(d.DB))
 	authed.HandleFunc("/auth/me", authH.Me).Methods(http.MethodGet)
+	authed.HandleFunc("/auth/logout-all", authH.LogoutAll).Methods(http.MethodPost)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)
 	authed.HandleFunc("/works/{id}/editions", catH.UploadEdition).Methods(http.MethodPost)
 	authed.HandleFunc("/works/{id}/contributions", contribH.Submit).Methods(http.MethodPost)

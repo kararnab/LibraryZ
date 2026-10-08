@@ -15,36 +15,58 @@ type ctxKey int
 
 const userIDKey ctxKey = iota
 
-// Auth verifies the Bearer JWT, injects the user id into the request context,
-// and rejects unauthenticated requests with 401.
-func Auth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization header is missing", http.StatusUnauthorized)
-			return
-		}
-		token, ok := bearerToken(authHeader)
-		if !ok {
-			http.Error(w, "invalid Authorization header format", http.StatusUnauthorized)
-			return
-		}
+// Auth verifies the Bearer access token, checks it hasn't been revoked, and
+// injects the user id into the request context. Unauthenticated or revoked
+// requests get 401.
+//
+// Revocation: the token's `tv` claim must equal the user's current
+// users.token_version, so "log out everywhere" (or deleting the user) kills
+// every outstanding access token immediately rather than at expiry. That
+// costs one primary-key lookup per authenticated request.
+func Auth(db *gorm.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				http.Error(w, "Authorization header is missing", http.StatusUnauthorized)
+				return
+			}
+			token, ok := bearerToken(authHeader)
+			if !ok {
+				http.Error(w, "invalid Authorization header format", http.StatusUnauthorized)
+				return
+			}
 
-		claims, err := utils.VerifyJWT(token)
-		if err != nil {
-			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-			return
-		}
+			claims, err := utils.VerifyJWT(token)
+			if err != nil {
+				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				return
+			}
 
-		raw, ok := claims["user_id"].(float64)
-		if !ok {
-			log.Printf("auth middleware: user_id claim missing or wrong type: %T", claims["user_id"])
-			http.Error(w, "invalid token claims", http.StatusUnauthorized)
-			return
-		}
-		ctx := context.WithValue(r.Context(), userIDKey, uint(raw))
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+			var row struct{ TokenVersion int }
+			err = db.WithContext(r.Context()).
+				Table("users").
+				Select("token_version").
+				Where("id = ?", claims.UserID).
+				Take(&row).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				return
+			}
+			if err != nil {
+				log.Printf("%s %s: token version check failed: %v", r.Method, r.URL.Path, err)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if row.TokenVersion != claims.TokenVersion {
+				http.Error(w, "token revoked", http.StatusUnauthorized)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), userIDKey, claims.UserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
 
 // bearerToken extracts the credential from an `Authorization: Bearer <token>`
