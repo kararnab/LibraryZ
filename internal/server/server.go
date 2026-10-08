@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"github.com/kararnab/libraryZ/internal/contribution"
 	"github.com/kararnab/libraryZ/internal/library"
 	"github.com/kararnab/libraryZ/internal/middleware"
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"gorm.io/gorm"
@@ -165,19 +167,7 @@ func allowOrigin(allowed []string, allowPrivateLAN bool) func(string) bool {
 	}
 }
 
-// Migrate runs all schema migrations needed by the routes New() exposes.
+// Migrate brings the schema up to date. See internal/migrations.
 func Migrate(db *gorm.DB) error {
-	if err := auth.Migrate(db); err != nil {
-		return err
-	}
-	if err := catalog.Migrate(db); err != nil {
-		return err
-	}
-	if err := contribution.Migrate(db); err != nil {
-		return err
-	}
-	if err := library.Migrate(db); err != nil {
-		return err
-	}
-	return recommendation.Migrate(db)
+	return migrations.Up(context.Background(), db)
 }

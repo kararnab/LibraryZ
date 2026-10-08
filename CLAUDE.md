@@ -112,11 +112,23 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
 - **Don't add Postgres-specific column types** (arrays, tsvector) without
   also changing the test DB strategy — smoke tests run against SQLite.
   Slice 2.3's full-text search is the precedent: the `search_vector`
-  column + GIN index + trigger live in `internal/catalog/search.go` as a
-  dialect-gated migration that no-ops on sqlite, and `SearchWorks` has a
+  column + GIN index + trigger live in `internal/migrations` as a
+  dialect-gated step that no-ops on sqlite, and `SearchWorks` has a
   `LOWER(LIKE)` fallback for the sqlite path. Postgres-only verification
   lives in `//go:build postgres`-tagged files (see `go test -tags=postgres`
   command above).
+- **Schema = versioned migrations, not AutoMigrate.** `internal/migrations`
+  (goose, Go migrations over GORM, runs on sqlite + Postgres). Migration
+  00001 `AutoMigrate`s the **frozen** structs in
+  `internal/migrations/baseline` — not the live models — so editing a
+  model never silently changes history. Adding a model field means adding
+  a migration; `TestLiveModelsMatchMigratedSchema` fails otherwise.
+  **Pre-v0.1.0 there's no data to preserve, so the baseline is still edited
+  in place**; after v0.1.0 it's frozen and changes go in new versions.
+  `migrations.Up` takes a Postgres session advisory lock, so it must use a
+  **direct** connection (`LIBRARYZ_MIGRATE_DATABASE_URL`, compose points it
+  at `postgres:5432`, not pgbouncer). Runs on startup unless
+  `LIBRARYZ_AUTO_MIGRATE=false`; `libraryz migrate` runs it one-shot.
 - **Storage: S3/MinIO is the production backend; `Local` is the test seam.**
   `internal/storage.Storage` (Put/Get/Delete/Exists, content-addressed by
   sha256) is implemented by `S3` (`s3.go` via `minio-go`, used by

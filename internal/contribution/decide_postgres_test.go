@@ -7,7 +7,7 @@
 //	DATABASE_URL='postgres://user:pass@localhost:5432/libraryz?sslmode=disable' \
 //	  go test -tags=postgres ./internal/contribution/...
 //
-// Drops and re-creates the catalog + contributions tables — do NOT point
+// Drops and re-creates the public schema — do NOT point
 // DATABASE_URL at a production-shaped DB.
 package contribution_test
 
@@ -18,8 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kararnab/libraryZ/internal/catalog"
 	"github.com/kararnab/libraryZ/internal/contribution"
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -34,20 +34,15 @@ func openPostgres(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	for _, s := range []string{
-		`DROP TRIGGER IF EXISTS works_search_vector_trigger ON works`,
-		`DROP FUNCTION IF EXISTS works_search_vector_update()`,
-		`DROP TABLE IF EXISTS contributions, work_tags, editions, tags, works CASCADE`,
-	} {
+	// Hard reset: drop everything (including goose's version table) so the
+	// migrations run from scratch each time.
+	for _, s := range []string{`DROP SCHEMA public CASCADE`, `CREATE SCHEMA public`} {
 		if err := db.Exec(s).Error; err != nil {
 			t.Fatalf("reset (%s): %v", s, err)
 		}
 	}
-	if err := catalog.Migrate(db); err != nil {
-		t.Fatalf("catalog migrate: %v", err)
-	}
-	if err := contribution.Migrate(db); err != nil {
-		t.Fatalf("contribution migrate: %v", err)
+	if err := migrations.Up(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	return db
 }

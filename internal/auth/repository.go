@@ -1,7 +1,5 @@
 package auth
 
-import "gorm.io/gorm"
-
 type User struct {
 	ID       uint   `gorm:"primaryKey"`
 	Email    string `gorm:"uniqueIndex"`
@@ -12,8 +10,4 @@ type User struct {
 	// exposes this field on the way out. Promote users out-of-band via:
 	//   UPDATE users SET is_moderator = true WHERE email = '...';
 	IsModerator bool `json:"-"`
-}
-
-func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&User{})
 }

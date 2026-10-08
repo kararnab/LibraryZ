@@ -5,7 +5,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 )
 
 // The recommendation package owns four precomputed tables. The factor tables
@@ -53,7 +52,3 @@ type Dismissal struct {
 }
 
 func (Dismissal) TableName() string { return "rec_dismissals" }
-
-func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&WorkFactors{}, &UserFactors{}, &WorkNeighbor{}, &Dismissal{})
-}

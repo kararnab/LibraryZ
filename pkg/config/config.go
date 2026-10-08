@@ -9,7 +9,15 @@ import (
 )
 
 type Config struct {
-	DatabaseURL    string
+	DatabaseURL string
+	// MigrateDatabaseURL is the DSN schema migrations run over. It must reach
+	// Postgres directly (not pgbouncer in transaction-pooling mode): the
+	// migrator holds a session advisory lock. Defaults to DatabaseURL.
+	MigrateDatabaseURL string
+	// AutoMigrate runs migrations on server startup (default). Set
+	// LIBRARYZ_AUTO_MIGRATE=false when migrations run as a separate
+	// `libraryz migrate` step instead.
+	AutoMigrate    bool
 	ListenAddr     string
 	StorageDir     string
 	JWTSecret      string
@@ -53,6 +61,8 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		DatabaseURL:         GetDatabaseUrl(),
+		MigrateDatabaseURL:  getEnv("LIBRARYZ_MIGRATE_DATABASE_URL", GetDatabaseUrl()),
+		AutoMigrate:         os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
 		ListenAddr:          GetListenAddr(),
 		StorageDir:          GetStorageDir(),
 		JWTSecret:           GetJWTSecret(),

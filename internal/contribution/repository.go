@@ -5,7 +5,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 )
 
 type Status string
@@ -45,8 +44,4 @@ type Contribution struct {
 	// Work as it stands now (another approval may have moved it since
 	// submission). Omitted from the wire when empty.
 	Current map[string]any `gorm:"-" json:"current,omitempty"`
-}
-
-func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&Contribution{})
 }

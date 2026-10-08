@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/server"
 	"github.com/kararnab/libraryZ/internal/storage"
@@ -20,8 +21,26 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// `libraryz migrate` applies pending schema migrations and exits — for
+	// running them as a one-shot deploy step (with LIBRARYZ_AUTO_MIGRATE=false
+	// on the servers) instead of on every instance's startup.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		if err := migrate(cfg); err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
+		log.Printf("migrations up to date")
+		return
+	}
+
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if cfg.AutoMigrate {
+		if err := migrate(cfg); err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
 	}
 
 	dbConn, err := db.InitDB(cfg.DatabaseURL, db.PoolConfig{
@@ -31,9 +50,6 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("db: %v", err)
-	}
-	if err := server.Migrate(dbConn); err != nil {
-		log.Fatalf("migrate: %v", err)
 	}
 
 	store, err := newStorage(cfg)
@@ -85,6 +101,20 @@ func main() {
 		}
 		log.Printf("shutdown complete")
 	}
+}
+
+// migrate runs schema migrations over a short-lived connection to
+// MigrateDatabaseURL (direct Postgres — see config.MigrateDatabaseURL).
+// Concurrent instances are serialized by an advisory lock in migrations.Up.
+func migrate(cfg *config.Config) error {
+	conn, err := db.InitDB(cfg.MigrateDatabaseURL, db.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnMaxLifetime: time.Minute})
+	if err != nil {
+		return err
+	}
+	if sqlDB, err := conn.DB(); err == nil {
+		defer sqlDB.Close()
+	}
+	return migrations.Up(context.Background(), conn)
 }
 
 // newStorage picks the blob backend implicitly from config: S3/MinIO when

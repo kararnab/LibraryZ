@@ -4,15 +4,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Work is the canonical record for a book/document — the abstract thing
 // (e.g. "Moby-Dick"), independent of any particular file.
 type Work struct {
-	ID              uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	Title           string    `gorm:"not null;index" json:"title"`
-	Subtitle        string    `json:"subtitle,omitempty"`
+	ID       uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	Title    string    `gorm:"not null;index" json:"title"`
+	Subtitle string    `json:"subtitle,omitempty"`
 	// Authors is semicolon-separated for Phase 1; normalized into its own
 	// table in Phase 2 alongside crowdsourced contributions.
 	Authors         string    `json:"authors,omitempty"`
@@ -47,11 +46,4 @@ type Tag struct {
 	ID    uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	Name  string    `gorm:"uniqueIndex;not null" json:"name"`
 	Works []Work    `gorm:"many2many:work_tags;" json:"-"`
-}
-
-func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&Work{}, &Edition{}, &Tag{}); err != nil {
-		return err
-	}
-	return migratePostgresSearchExtras(db)
 }

@@ -5,7 +5,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/catalog"
-	"gorm.io/gorm"
 )
 
 type Status string
@@ -52,8 +51,4 @@ type UserBook struct {
 	// library legitimately *composes* works, so we embed the full Work. The
 	// dependency is acyclic: catalog never imports library.
 	Work *catalog.Work `gorm:"-" json:"work,omitempty"`
-}
-
-func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(&UserBook{})
 }

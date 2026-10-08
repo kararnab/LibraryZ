@@ -128,6 +128,12 @@ services:
       # (Slice 6.3); default_query_exec_mode=exec disables pgx's per-conn
       # prepared-statement cache so transaction-mode pooling is safe.
       DATABASE_URL: "postgres://user:password@pgbouncer:6432/libraryz?sslmode=disable&default_query_exec_mode=exec"
+      # Schema migrations bypass pgbouncer: they hold a session-level advisory
+      # lock (so replicas starting together don't race DDL), which transaction
+      # pooling would break. Migrations run on startup; to run them as a
+      # one-shot step instead, set LIBRARYZ_AUTO_MIGRATE=false here and run
+      #   docker compose run --rm libraryz migrate
+      LIBRARYZ_MIGRATE_DATABASE_URL: "postgres://user:password@postgres:5432/libraryz?sslmode=disable"
       LIBRARYZ_LISTEN_ADDR: ":8080"
       # The backend refuses to start without a real JWT_SECRET (>=32 bytes, not
       # the built-in default). This dev value keeps `docker compose up` one-command;

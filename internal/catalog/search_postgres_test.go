@@ -6,7 +6,7 @@
 //	DATABASE_URL='postgres://user:pass@localhost:5432/libraryz?sslmode=disable' \
 //	  go test -tags=postgres ./internal/catalog/...
 //
-// The test wipes and re-creates the catalog tables in the target
+// The test drops and re-creates the public schema in the target
 // database, so DO NOT point DATABASE_URL at a production-shaped DB.
 package catalog_test
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/catalog"
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -31,19 +32,14 @@ func openPostgres(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	// Hard reset the catalog tables. Trigger + function drop too so the
-	// migrate path re-installs them fresh each run.
-	stmts := []string{
-		`DROP TRIGGER IF EXISTS works_search_vector_trigger ON works`,
-		`DROP FUNCTION IF EXISTS works_search_vector_update()`,
-		`DROP TABLE IF EXISTS work_tags, editions, tags, works CASCADE`,
-	}
-	for _, s := range stmts {
+	// Hard reset: drop everything (including goose's version table) so the
+	// migrations run from scratch each time.
+	for _, s := range []string{`DROP SCHEMA public CASCADE`, `CREATE SCHEMA public`} {
 		if err := db.Exec(s).Error; err != nil {
 			t.Fatalf("reset (%s): %v", s, err)
 		}
 	}
-	if err := catalog.Migrate(db); err != nil {
+	if err := migrations.Up(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db

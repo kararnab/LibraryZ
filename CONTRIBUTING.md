@@ -82,28 +82,32 @@ A handful of things are easy to get wrong without reading the whole repo:
 2. **SQLite-friendly schema.** Tests run against SQLite. Don't add
    Postgres-only column types (arrays, `tsvector`, `JSONB` operators) to a
    migration without gating them by dialect — the precedent is
-   `internal/catalog/search.go` (tsvector + GIN behind a Postgres check,
+   `internal/migrations` (tsvector + GIN behind a Postgres check,
    `LOWER(LIKE)` fallback in `SearchWorks`). Postgres-only verification
    goes behind `//go:build postgres`.
-3. **Two storage backends, one interface.** New file operations go through
+3. **Schema changes are migrations.** Add a numbered step in
+   `internal/migrations` (and, before v0.1.0, edit the baseline snapshot in
+   `internal/migrations/baseline`). Changing a model struct alone fails
+   `TestLiveModelsMatchMigratedSchema`.
+4. **Two storage backends, one interface.** New file operations go through
    `internal/storage.Storage` (`Put`/`Get`/`Delete`/`Exists`). Don't reach
    into the filesystem or S3 client directly from handlers.
-4. **Downloads stream — no presigned URLs.** `GET /editions/{id}/download`
+5. **Downloads stream — no presigned URLs.** `GET /editions/{id}/download`
    pipes through `store.Get` + `io.Copy`. Don't add presigning without a
    discussion; it changes the trust model.
-5. **Recommendations: keep the cold-start fallback.** `internal/recommendation`
+6. **Recommendations: keep the cold-start fallback.** `internal/recommendation`
    trains implicit ALS in-process. A trained user reads from `rec_*`
    tables; an untrained user falls back to the older content+popularity
    scorer. Don't delete the fallback.
-6. **TokenStore is an interface, not `expect class`.** Production impls
+7. **TokenStore is an interface, not `expect class`.** Production impls
    are per-platform; tests use `FakeTokenStore` in `commonTest`. Please
    don't revert to `expect class` — it makes tests painful.
-7. **Reader is a sealed interface.** `data/Reader.kt` has `PagedReader`
+8. **Reader is a sealed interface.** `data/Reader.kt` has `PagedReader`
    (PDF) + `TextReader` (TXT). A new format is a `when` branch in
    `openReader`, not a new top-level `expect`. Keep platform actuals
    tight to "rasterize a page" — anything that can render in commonMain
    should stay there.
-8. **Versions in `frontend/gradle/libs.versions.toml` are pinned.** Bumping
+9. **Versions in `frontend/gradle/libs.versions.toml` are pinned.** Bumping
    Kotlin, Compose Multiplatform, or AGP is a deliberate change — open an
    issue first.
 
