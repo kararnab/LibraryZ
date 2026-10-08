@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 type User struct {
@@ -37,6 +38,9 @@ type Work struct {
 	OpenLibraryID   string `gorm:"index"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	DeletedAt       gorm.DeletedAt `gorm:"index"`
+	DeletedBy       *uint
+	DeleteReason    string
 
 	Editions []Edition `gorm:"foreignKey:WorkID;constraint:OnDelete:CASCADE"`
 	Tags     []Tag     `gorm:"many2many:work_tags;"`
@@ -52,6 +56,9 @@ type Edition struct {
 	SHA256           string `gorm:"size:64;uniqueIndex"`
 	UploadedByUserID uint   `gorm:"not null;index"`
 	CreatedAt        time.Time
+	DeletedAt        gorm.DeletedAt `gorm:"index"`
+	DeletedBy        *uint
+	DeleteReason     string
 }
 
 type Tag struct {

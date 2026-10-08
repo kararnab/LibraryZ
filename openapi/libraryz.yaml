@@ -206,6 +206,35 @@ paths:
               schema: { $ref: "#/components/schemas/Work" }
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [moderation]
+      summary: Remove a work (moderator)
+      description: |
+        Moderator-only takedown of a work and all of its editions. Soft
+        delete: the rows are kept with who/when/why for audit (and can be
+        restored in the DB), but the work disappears from list, search, get,
+        download, personal libraries and recommendations. The files are
+        purged by the blob GC after `LIBRARYZ_BLOB_GC_RETENTION`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemovalRequest" }
+      responses:
+        "204":
+          description: Removed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /works/{id}/editions:
     post:
@@ -244,6 +273,11 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: The same file was removed by a moderator
+          content:
+            text/plain:
+              schema: { type: string }
 
   /editions/{id}:
     get:
@@ -257,6 +291,33 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Edition" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [moderation]
+      summary: Remove an edition (moderator)
+      description: |
+        Moderator-only takedown of one edition (soft delete; see
+        `DELETE /works/{id}`). Re-uploading byte-identical content afterwards
+        is refused with 409.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemovalRequest" }
+      responses:
+        "204":
+          description: Removed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -330,10 +391,10 @@ paths:
       tags: [contributions]
       summary: Approve a pending contribution and apply its patch to the work
       description: |
-        Applies whitelisted fields from `patch` onto the target Work in a
-        single transaction; non-whitelisted keys are silently dropped.
-        Slice 2.1 only requires authentication; slice 2.2 will add the
-        moderator gate.
+        Moderator-only. Atomically moves the contribution out of `pending`
+        and applies its `patch` to the target Work in the same transaction;
+        if another moderator decided it first, returns 409 and applies
+        nothing.
       security:
         - bearerAuth: []
       parameters:
@@ -590,6 +651,11 @@ components:
       content:
         text/plain:
           schema: { type: string }
+    Forbidden:
+      description: Authenticated but not permitted (e.g. moderator required)
+      content:
+        text/plain:
+          schema: { type: string }
     NotFound:
       description: Resource not found
       content:
@@ -607,6 +673,16 @@ components:
       properties:
         status: { type: string, example: Healthy }
         time:   { type: string, format: date-time }
+
+    RemovalRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Why it was taken down — kept for the audit trail.
 
     Ready:
       type: object
@@ -700,11 +776,13 @@ components:
         patch:
           type: object
           description: |
-            Flat partial object of proposed Work field overrides. Allowed
-            keys (anything else is silently dropped on Approve): `title`,
-            `subtitle`, `authors`, `description`, `language`,
-            `publication_year`, `isbn`, `openlibrary_id`. An empty patch
-            is rejected with 400.
+            Flat partial object of proposed Work field overrides, validated
+            at submit time (400 with a descriptive message otherwise).
+            Allowed keys: `title`, `subtitle`, `authors`, `description`,
+            `language`, `isbn`, `openlibrary_id` (strings; `title` must be
+            non-empty; length-capped) and `publication_year` (integer,
+            -5000..current year + 5). Unknown keys, wrong types, and an
+            empty patch are rejected.
           additionalProperties: true
 
     Contribution:

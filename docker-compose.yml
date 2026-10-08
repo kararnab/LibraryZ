@@ -173,6 +173,11 @@ services:
       # LIBRARYZ_WRITE_TIMEOUT: "60s"
       # LIBRARYZ_IDLE_TIMEOUT: "120s"
       # LIBRARYZ_SHUTDOWN_TIMEOUT: "20s"
+      # Blob GC (Go durations; defaults shown): how often to sweep storage for
+      # orphaned blobs, and how long a moderator-removed edition's file is kept
+      # (so the takedown can still be reverted) before it's purged.
+      # LIBRARYZ_BLOB_GC_INTERVAL: "24h"
+      # LIBRARYZ_BLOB_GC_RETENTION: "720h"
       # Recommendation retrain interval (optional; default 6h):
       # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
     # /ready checks Postgres + MinIO (503 if either is unreachable); /health is

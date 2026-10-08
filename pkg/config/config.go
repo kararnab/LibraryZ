@@ -37,6 +37,11 @@ type Config struct {
 	S3SecretKey         string
 	S3Bucket            string
 	S3UseSSL            bool
+	// Blob garbage collection: how often to sweep storage, and how long a
+	// moderator-removed edition's file is kept (so the removal can still be
+	// reverted) before it's purged.
+	BlobGCInterval  time.Duration
+	BlobGCRetention time.Duration
 	// Recommendation training knobs.
 	RecRetrainInterval time.Duration
 	RecFactors         int
@@ -74,6 +79,8 @@ func Load() *Config {
 		S3SecretKey:         os.Getenv("LIBRARYZ_S3_SECRET_KEY"),
 		S3Bucket:            getEnv("LIBRARYZ_S3_BUCKET", "libraryz"),
 		S3UseSSL:            os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
+		BlobGCInterval:      getDurationEnv("LIBRARYZ_BLOB_GC_INTERVAL", 24*time.Hour),
+		BlobGCRetention:     getDurationEnv("LIBRARYZ_BLOB_GC_RETENTION", 30*24*time.Hour),
 		RecRetrainInterval:  GetRecRetrainInterval(),
 		RecFactors:          GetRecFactors(),
 		RecAlpha:            GetRecAlpha(),

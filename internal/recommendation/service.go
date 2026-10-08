@@ -370,7 +370,7 @@ func (s *Service) titlesFor(ctx context.Context, ids []uuid.UUID) map[uuid.UUID]
 		Title string    `gorm:"column:title"`
 	}
 	var rows []row
-	if err := s.db.WithContext(ctx).Table("works").Select("id, title").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("works").Select("id, title").Where("id IN ? AND deleted_at IS NULL", ids).Find(&rows).Error; err != nil {
 		return out
 	}
 	for _, r := range rows {

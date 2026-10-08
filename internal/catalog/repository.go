@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Work is the canonical record for a book/document — the abstract thing
@@ -22,6 +23,7 @@ type Work struct {
 	OpenLibraryID   string    `gorm:"index" json:"openlibrary_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+	Removal
 
 	Editions []Edition `gorm:"foreignKey:WorkID;constraint:OnDelete:CASCADE" json:"editions,omitempty"`
 	Tags     []Tag     `gorm:"many2many:work_tags;" json:"tags,omitempty"`
@@ -40,6 +42,20 @@ type Edition struct {
 	SHA256           string    `gorm:"size:64;uniqueIndex" json:"sha256"`
 	UploadedByUserID uint      `gorm:"not null;index" json:"uploaded_by"`
 	CreatedAt        time.Time `json:"created_at"`
+	Removal
+}
+
+// Removal is the moderator takedown record embedded in Work and Edition.
+// DeletedAt is gorm.DeletedAt, so every GORM query on those models
+// (First/Find/Preload) skips removed rows automatically; raw
+// Table("works") queries elsewhere must add `deleted_at IS NULL`
+// themselves. Rows are kept — not hard-deleted — so takedowns stay
+// auditable and reversible; the blob itself is purged by CollectGarbage
+// after a retention period.
+type Removal struct {
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	DeletedBy    *uint          `json:"-"`
+	DeleteReason string         `json:"-"`
 }
 
 type Tag struct {

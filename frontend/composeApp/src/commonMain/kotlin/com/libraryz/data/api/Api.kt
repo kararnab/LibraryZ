@@ -55,6 +55,9 @@ data class CreateWorkRequest(
 )
 
 @Serializable
+data class RemovalRequest(val reason: String)
+
+@Serializable
 data class SubmitContributionRequest(val patch: Map<String, JsonElement>)
 
 // Partial patch for PUT /me/library/{work_id}. Null fields are dropped on the
@@ -269,6 +272,28 @@ class ApiClient(
             throw ApiException(resp.status.value, resp.bodyAsText(), "submit contribution failed")
         }
         return resp.body()
+    }
+
+    /** Moderator-only. Takes a work and all its editions down (soft delete). */
+    suspend fun deleteWork(id: String, reason: String) {
+        val resp = client.delete("$baseUrl/works/$id") {
+            maybeAuth()
+            setBody(RemovalRequest(reason))
+        }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "remove work failed")
+        }
+    }
+
+    /** Moderator-only. Takes a single edition down (soft delete). */
+    suspend fun deleteEdition(id: String, reason: String) {
+        val resp = client.delete("$baseUrl/editions/$id") {
+            maybeAuth()
+            setBody(RemovalRequest(reason))
+        }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "remove edition failed")
+        }
     }
 
     /** Authenticated. Creates a new Work (no file attached). */

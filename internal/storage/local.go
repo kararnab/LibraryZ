@@ -91,6 +91,27 @@ func (l *Local) Delete(_ context.Context, key string) error {
 	return err
 }
 
+// List walks the shard directories. In-flight uploads (".upload-*" temp
+// files in the root) are not objects yet and are skipped.
+func (l *Local) List(ctx context.Context, fn func(ObjectInfo) error) error {
+	return filepath.WalkDir(l.root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Dir(filepath.Dir(p)) != filepath.Clean(l.root) {
+			return nil // only <root>/<shard>/<key> files are objects
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return fn(ObjectInfo{Key: d.Name(), Size: info.Size(), ModTime: info.ModTime()})
+	})
+}
+
 func (l *Local) Exists(_ context.Context, key string) (bool, error) {
 	_, err := os.Stat(l.path(key))
 	if err == nil {

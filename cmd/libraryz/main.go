@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kararnab/libraryZ/internal/catalog"
 	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/runlock"
@@ -67,6 +68,7 @@ func main() {
 	})
 
 	startRecommendationTraining(dbConn, cfg)
+	startBlobGC(catalog.NewService(dbConn, store), cfg)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -136,6 +138,27 @@ func newStorage(cfg *config.Config) (storage.Storage, error) {
 	}
 	log.Printf("storage: local backend (dir=%s; set LIBRARYZ_S3_ENDPOINT to use S3/MinIO)", cfg.StorageDir)
 	return storage.NewLocal(cfg.StorageDir)
+}
+
+// startBlobGC sweeps orphaned and long-removed blobs on a ticker (not at
+// startup — there's no urgency, and it keeps rolling restarts cheap). Safe on
+// every replica: CollectGarbage holds a cluster-wide lock and skips if busy.
+func startBlobGC(svc *catalog.Service, cfg *config.Config) {
+	go func() {
+		ticker := time.NewTicker(cfg.BlobGCInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			stats, err := svc.CollectGarbage(context.Background(), cfg.BlobGCRetention)
+			switch {
+			case errors.Is(err, runlock.ErrBusy):
+				log.Printf("blob gc: another instance is sweeping; skipped")
+			case err != nil:
+				log.Printf("blob gc: failed after deleting %d blobs: %v", stats.Deleted, err)
+			default:
+				log.Printf("blob gc: scanned %d, deleted %d", stats.Scanned, stats.Deleted)
+			}
+		}
+	}()
 }
 
 // startRecommendationTraining trains the MF model once on startup (non-blocking

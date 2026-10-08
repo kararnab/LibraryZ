@@ -140,7 +140,7 @@ func (s *Service) Submit(ctx context.Context, workID uuid.UUID, contributorID ui
 		return nil, err
 	}
 	var count int64
-	if err := s.db.WithContext(ctx).Table("works").Where("id = ?", workID).Count(&count).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("works").Where("id = ? AND deleted_at IS NULL", workID).Count(&count).Error; err != nil {
 		return nil, err
 	}
 	if count == 0 {
@@ -365,7 +365,7 @@ func (s *Service) Approve(ctx context.Context, id uuid.UUID, reviewerID uint) (*
 			return nil
 		}
 		updates["updated_at"] = time.Now()
-		return tx.Table("works").Where("id = ?", c.WorkID).Updates(updates).Error
+		return tx.Table("works").Where("id = ? AND deleted_at IS NULL", c.WorkID).Updates(updates).Error
 	})
 }
 

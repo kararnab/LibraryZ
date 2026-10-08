@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,6 +169,10 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, ErrRemoved) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		httpx.ServerError(w, r, "add edition", err)
 		return
@@ -232,6 +237,48 @@ func (h *Handler) DownloadEdition(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-SHA256", ed.SHA256)
 	if _, err := io.Copy(w, rc); err != nil {
 		log.Printf("download edition %s: streaming aborted after headers sent: %v", ed.ID, err)
+	}
+}
+
+// DeleteWork is the moderator takedown for a work and all its editions.
+// Body: {"reason": "..."} (required).
+func (h *Handler) DeleteWork(w http.ResponseWriter, r *http.Request) {
+	h.remove(w, r, h.service.DeleteWork)
+}
+
+// DeleteEdition is the moderator takedown for one edition.
+// Body: {"reason": "..."} (required).
+func (h *Handler) DeleteEdition(w http.ResponseWriter, r *http.Request) {
+	h.remove(w, r, h.service.DeleteEdition)
+}
+
+func (h *Handler) remove(w http.ResponseWriter, r *http.Request, fn func(context.Context, uuid.UUID, uint, string) error) {
+	id, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	userID, ok := middleware.UserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	switch err := fn(r.Context(), id, userID, body.Reason); {
+	case errors.Is(err, ErrReasonRequired):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, ErrNotFound):
+		http.Error(w, "not found", http.StatusNotFound)
+	case err != nil:
+		httpx.ServerError(w, r, "remove", err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

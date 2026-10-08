@@ -45,11 +45,11 @@ go build ./...
 # Tests (uses in-memory sqlite — no Postgres / Docker needed)
 go test ./...
 
-# Postgres-only tests (currently: full-text-search tsvector path in
-# internal/catalog/search_postgres_test.go). Skipped by default.
-# DROPS AND RECREATES catalog tables — do NOT point at production.
+# Postgres-only tests (FTS ranking, concurrent approve/reject, advisory
+# locks, migrations). Skipped by default. -p 1: packages share the DB.
+# DROPS AND RECREATES the public schema — do NOT point at production.
 DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' \
-  go test -tags=postgres ./internal/catalog/...
+  go test -tags=postgres -p 1 ./...
 
 # Recommendation offline eval (sqlite, no Postgres). Holdout precision/recall/
 # hit-rate@K, MF vs popularity baseline. Tagged so it's off by default.
@@ -176,6 +176,14 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   `FakeTokenStore`. **As of Phase 5 (2026-05-27): 56 backend + 61 frontend
   tests** (57 backend with `-tags=eval`). See [PLAN.md](PLAN.md) for the
   endpoint surface.
+- **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
+  (`gorm.DeletedAt` + `deleted_by` + `delete_reason`), so GORM queries on
+  those models skip removed rows automatically — but **raw
+  `Table("works")` queries must add `deleted_at IS NULL` themselves**
+  (library, contribution, recommendation do). Blob GC
+  (`catalog.Service.CollectGarbage`, `runlock.KeyBlobGC`) deletes blobs no
+  live edition references after `LIBRARYZ_BLOB_GC_RETENTION`; it needs
+  `storage.Storage.List`.
 - **Moderator promotion (v0): there is no admin endpoint.** Update the
   DB directly. Postgres or sqlite:
   ```sql

@@ -71,6 +71,15 @@ func TestS3RoundTripAndDedup(t *testing.T) {
 		t.Fatalf("Exists = %v, %v; want true", ok, err)
 	}
 
+	// List sees the object.
+	var listed []ObjectInfo
+	if err := s.List(ctx, func(o ObjectInfo) error { listed = append(listed, o); return nil }); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Key != obj.Key || listed[0].Size != int64(len(payload)) {
+		t.Fatalf("List = %+v, want just %s", listed, obj.Key)
+	}
+
 	// Get round-trips the exact bytes.
 	rc, size, err := s.Get(ctx, obj.Key)
 	if err != nil {

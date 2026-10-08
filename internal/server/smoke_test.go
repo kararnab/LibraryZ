@@ -1214,3 +1214,126 @@ func readBody(r *http.Response) string {
 	b, _ := io.ReadAll(r.Body)
 	return string(b)
 }
+
+// --- Moderation takedowns (#13) ---------------------------------------------
+
+func deleteAuthed(t *testing.T, url, auth string, body any) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if body != nil {
+		rdr = mustJSON(t, body)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, url, rdr)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", auth)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete %s: %v", url, err)
+	}
+	return resp
+}
+
+func editionID(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: code=%d body=%s", resp.StatusCode, readBody(resp))
+	}
+	var ed struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ed)
+	return ed.ID
+}
+
+func TestModeratorRemovesEdition(t *testing.T) {
+	ts, db := newTestServer(t)
+	mod := signupAndLogin(t, ts.URL, "takedown1@x.com", "hunter22", "Mod")
+	promoteModerator(t, db, "takedown1@x.com")
+	user := signupAndLogin(t, ts.URL, "takedown1u@x.com", "hunter22", "User")
+	workID := createWork(t, ts.URL, user, "Takedown Work", "")
+	content := []byte("infringing bytes\n")
+	keep := editionID(t, uploadEdition(t, ts.URL, user, workID, "txt", "en", []byte("fine bytes\n")))
+	gone := editionID(t, uploadEdition(t, ts.URL, user, workID, "txt", "en", content))
+	url := ts.URL + "/editions/" + gone
+
+	if r := deleteAuthed(t, url, user, map[string]string{"reason": "dmca"}); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-moderator: want 403, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "  "}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("blank reason: want 400, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "DMCA notice #42"}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "again"}); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("remove twice: want 404, got %d", r.StatusCode)
+	}
+
+	for _, path := range []string{"/editions/" + gone, "/editions/" + gone + "/download"} {
+		if r, _ := http.Get(ts.URL + path); r.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s after removal: want 404, got %d", path, r.StatusCode)
+		}
+	}
+	workResp, _ := http.Get(ts.URL + "/works/" + workID)
+	if body := readBody(workResp); strings.Contains(body, gone) || !strings.Contains(body, keep) {
+		t.Fatalf("work should list only the surviving edition: %s", body)
+	}
+
+	// Re-uploading the removed bytes doesn't resurrect them.
+	if r := uploadEdition(t, ts.URL, user, workID, "txt", "en", content); r.StatusCode != http.StatusConflict {
+		t.Fatalf("re-upload of removed file: want 409, got %d %s", r.StatusCode, readBody(r))
+	}
+
+	// The audit trail is kept.
+	var row struct {
+		DeletedBy    uint
+		DeleteReason string
+	}
+	db.Table("editions").Select("deleted_by, delete_reason").Where("id = ?", gone).Take(&row)
+	if row.DeleteReason != "DMCA notice #42" || row.DeletedBy == 0 {
+		t.Fatalf("audit fields not recorded: %+v", row)
+	}
+}
+
+func TestModeratorRemovesWork(t *testing.T) {
+	ts, db := newTestServer(t)
+	mod := signupAndLogin(t, ts.URL, "takedown2@x.com", "hunter22", "Mod")
+	promoteModerator(t, db, "takedown2@x.com")
+	workID := createWork(t, ts.URL, mod, "Zyzzyva Removed Title", "")
+	ed := editionID(t, uploadEdition(t, ts.URL, mod, workID, "txt", "en", []byte("zyzzyva\n")))
+	putLibrary(t, ts.URL, mod, workID, map[string]any{"status": "reading"})
+
+	if r := deleteAuthed(t, ts.URL+"/works/"+workID, mod, map[string]string{"reason": "spam"}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove work: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+
+	if r, _ := http.Get(ts.URL + "/works/" + workID); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET work: want 404, got %d", r.StatusCode)
+	}
+	if r, _ := http.Get(ts.URL + "/editions/" + ed + "/download"); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("download edition of removed work: want 404, got %d", r.StatusCode)
+	}
+	if titles := searchTitles(t, ts.URL, "zyzzyva"); len(titles) != 0 {
+		t.Fatalf("search still finds removed work: %v", titles)
+	}
+	listResp, _ := http.Get(ts.URL + "/works?limit=200")
+	if strings.Contains(readBody(listResp), workID) {
+		t.Fatalf("list still includes removed work")
+	}
+
+	// Personal library hides it; library writes and contributions 404.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/me/library", nil)
+	req.Header.Set("Authorization", mod)
+	libResp, _ := http.DefaultClient.Do(req)
+	if strings.Contains(readBody(libResp), workID) {
+		t.Fatalf("library still lists removed work")
+	}
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/me/library/"+workID, mustJSON(t, map[string]any{"status": "read"}))
+	req.Header.Set("Authorization", mod)
+	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("library upsert on removed work: want 404, got %d", r.StatusCode)
+	}
+	if r := submitContribution(t, ts.URL, mod, workID, map[string]any{"title": "x"}); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("contribution on removed work: want 404, got %d", r.StatusCode)
+	}
+}

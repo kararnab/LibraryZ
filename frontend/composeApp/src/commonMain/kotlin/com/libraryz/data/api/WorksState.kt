@@ -71,5 +71,19 @@ class WorksState(private val api: ApiClient) {
         }
     }
 
+    /** Moderator takedown; drops the work from the local list on success. Throws on failure. */
+    suspend fun removeWork(id: String, reason: String) {
+        api.deleteWork(id, reason)
+        items = items?.filterNot { it.id == id }
+    }
+
+    /** Moderator takedown of one edition; updates the cached work on success. Throws on failure. */
+    suspend fun removeEdition(workId: String, editionId: String, reason: String) {
+        api.deleteEdition(editionId, reason)
+        items = items?.map { w ->
+            if (w.id == workId) w.copy(editions = w.editions.filterNot { it.id == editionId }) else w
+        }
+    }
+
     fun find(id: String): Work? = items?.firstOrNull { it.id == id }
 }

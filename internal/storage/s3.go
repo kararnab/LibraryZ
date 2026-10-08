@@ -128,6 +128,20 @@ func (s *S3) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
+func (s *S3) List(ctx context.Context, fn func(ObjectInfo) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // stops the listing goroutine if fn bails early
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		if err := fn(ObjectInfo{Key: obj.Key, Size: obj.Size, ModTime: obj.LastModified}); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
 func (s *S3) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
 	if err != nil {

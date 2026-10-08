@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,5 +102,35 @@ func TestLocalExistsAndDelete(t *testing.T) {
 	// Deleting a missing key is a no-op.
 	if err := store.Delete(context.Background(), obj.Key); err != nil {
 		t.Fatalf("delete-missing should be nil: %v", err)
+	}
+}
+
+func TestLocalListSkipsTempFiles(t *testing.T) {
+	root := t.TempDir()
+	store, _ := NewLocal(root)
+	a, _ := store.Put(context.Background(), bytes.NewReader([]byte("alpha")))
+	b, _ := store.Put(context.Background(), bytes.NewReader([]byte("beta")))
+	// A half-written upload lives in the root and must not be listed.
+	if err := os.WriteFile(filepath.Join(root, ".upload-123"), []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]int64{}
+	if err := store.List(context.Background(), func(o ObjectInfo) error {
+		got[o.Key] = o.Size
+		if o.ModTime.IsZero() {
+			t.Errorf("%s: zero ModTime", o.Key)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[a.Key] != 5 || got[b.Key] != 4 {
+		t.Fatalf("List = %v, want %s:5 and %s:4", got, a.Key, b.Key)
+	}
+
+	stop := errors.New("stop")
+	if err := store.List(context.Background(), func(ObjectInfo) error { return stop }); !errors.Is(err, stop) {
+		t.Fatalf("List should propagate fn's error, got %v", err)
 	}
 }

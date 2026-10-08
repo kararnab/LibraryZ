@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
 import com.libraryz.data.Work
 import com.libraryz.data.api.ApiClient
+import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.AuthState
 import com.libraryz.data.api.ContributionsState
 import com.libraryz.data.api.CreateWorkRequest
@@ -224,6 +225,37 @@ private fun Root(
         }
     }
 
+    // Moderator takedowns, shared by compact + expanded WorkDetail. Null for
+    // everyone else, which hides the Remove affordances.
+    val removeWork: ((Work, String) -> Unit)? = if (auth.isModerator) {
+        { work, reason ->
+            scope.launch {
+                try {
+                    works.removeWork(work.id, reason)
+                    // Leave the now-404 detail screen.
+                    if (nav.current.let { it is Screen.WorkDetail && it.workId == work.id }) {
+                        if (!nav.pop()) nav.replace(Screen.Browse)
+                    }
+                    snackbar.showSnackbar("Removed “${work.title}”.")
+                } catch (e: Throwable) {
+                    snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                }
+            }
+        }
+    } else null
+    val removeEdition: ((Work, Edition, String) -> Unit)? = if (auth.isModerator) {
+        { work, ed, reason ->
+            scope.launch {
+                try {
+                    works.removeEdition(work.id, ed.id, reason)
+                    snackbar.showSnackbar("Removed the ${ed.format.uppercase()} edition.")
+                } catch (e: Throwable) {
+                    snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                }
+            }
+        }
+    } else null
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val expanded = maxWidth.value >= EXPANDED_DP
 
@@ -251,6 +283,8 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onRemoveWork = removeWork,
+                            onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
@@ -300,6 +334,8 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onRemoveWork = removeWork,
+                            onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
@@ -314,6 +350,8 @@ private fun Root(
                         libraryEntry = library.entryFor(s.workId),
                         onLibraryUpsert = { req -> libraryUpsert(s.workId, req) },
                         onLibraryRemove = { libraryRemove(s.workId) },
+                        onRemoveWork = removeWork?.let { rm -> { reason -> rm(work, reason) } },
+                        onRemoveEdition = removeEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
                     )
                 }
             }
@@ -344,6 +382,8 @@ private fun Root(
                                 onDownload = downloadEdition,
                                 onLibraryUpsert = libraryUpsert,
                                 onLibraryRemove = libraryRemove,
+                                onRemoveWork = removeWork,
+                                onRemoveEdition = removeEdition,
                             )
                         }
                     } else {
@@ -387,6 +427,8 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onRemoveWork = removeWork,
+                            onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
@@ -698,6 +740,8 @@ private fun ListDetailLayout(
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
+    onRemoveWork: ((Work, String) -> Unit)? = null,
+    onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
 
@@ -742,6 +786,8 @@ private fun ListDetailLayout(
                     libraryEntry = library.entryFor(work.id),
                     onLibraryUpsert = { req -> onLibraryUpsert(work.id, req) },
                     onLibraryRemove = { onLibraryRemove(work.id) },
+                    onRemoveWork = onRemoveWork?.let { rm -> { reason -> rm(work, reason) } },
+                    onRemoveEdition = onRemoveEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
                 )
             }
         }

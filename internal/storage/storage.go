@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // Object is the metadata returned after writing to storage.
@@ -27,4 +28,14 @@ type Storage interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, int64, error)
 	Delete(ctx context.Context, key string) error
 	Exists(ctx context.Context, key string) (bool, error)
+	// List calls fn for every stored object, in no particular order, stopping
+	// at the first error fn returns. Used by blob garbage collection.
+	List(ctx context.Context, fn func(ObjectInfo) error) error
+}
+
+// ObjectInfo describes a stored object as reported by List.
+type ObjectInfo struct {
+	Key     string
+	Size    int64
+	ModTime time.Time
 }

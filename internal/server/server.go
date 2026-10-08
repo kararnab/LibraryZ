@@ -93,6 +93,8 @@ func New(d Deps) http.Handler {
 	mod.Use(middleware.Moderator(d.DB))
 	mod.HandleFunc("/contributions/{id}/approve", contribH.Approve).Methods(http.MethodPost)
 	mod.HandleFunc("/contributions/{id}/reject", contribH.Reject).Methods(http.MethodPost)
+	mod.HandleFunc("/works/{id}", catH.DeleteWork).Methods(http.MethodDelete)
+	mod.HandleFunc("/editions/{id}", catH.DeleteEdition).Methods(http.MethodDelete)
 
 	// Wrap the whole router so OPTIONS preflights are handled by us before
 	// mux's method matcher returns 405. r.Use(...) would run AFTER routing.

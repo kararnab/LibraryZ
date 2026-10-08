@@ -3,9 +3,11 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/storage"
@@ -13,7 +15,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound = errors.New("not found")
+	// ErrRemoved is returned when uploading bytes identical to an edition a
+	// moderator took down — a takedown shouldn't be undone by re-uploading.
+	ErrRemoved = errors.New("this file was removed by a moderator and can't be re-uploaded")
+)
 
 type Service struct {
 	db    *gorm.DB
@@ -75,9 +82,14 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		return nil, err
 	}
 
+	// Unscoped: sha256 is unique across removed rows too, so a removed
+	// edition must be found here rather than tripping the unique index.
 	var existing Edition
-	err = s.db.WithContext(ctx).Where("sha256 = ?", obj.SHA256).First(&existing).Error
+	err = s.db.WithContext(ctx).Unscoped().Where("sha256 = ?", obj.SHA256).First(&existing).Error
 	if err == nil {
+		if existing.DeletedAt.Valid {
+			return nil, ErrRemoved
+		}
 		return &existing, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -188,4 +200,60 @@ func (s *Service) OpenEdition(ctx context.Context, id uuid.UUID) (*Download, err
 		return nil, err
 	}
 	return &Download{Edition: ed, WorkTitle: work.Title, WorkAuthors: work.Authors, Body: rc, Size: size}, nil
+}
+
+// maxDeleteReasonRunes caps the takedown note moderators attach.
+const maxDeleteReasonRunes = 1000
+
+// ErrReasonRequired is returned when a takedown has no (or an over-long)
+// reason; the audit trail is the point of soft deletion.
+var ErrReasonRequired = fmt.Errorf("a reason (1-%d characters) is required", maxDeleteReasonRunes)
+
+func validReason(reason string) bool {
+	n := utf8.RuneCountInString(strings.TrimSpace(reason))
+	return n > 0 && n <= maxDeleteReasonRunes
+}
+
+func removal(by uint, reason string) map[string]any {
+	return map[string]any{
+		"deleted_at":    time.Now(),
+		"deleted_by":    by,
+		"delete_reason": strings.TrimSpace(reason),
+	}
+}
+
+// DeleteWork takes a work down along with all its editions. The rows are
+// soft-deleted (hidden from list/search/get/download, library and
+// recommendations) and the blobs are purged later by CollectGarbage.
+func (s *Service) DeleteWork(ctx context.Context, id uuid.UUID, by uint, reason string) error {
+	if !validReason(reason) {
+		return ErrReasonRequired
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Model(&Work{}) scopes to deleted_at IS NULL, so removing an
+		// already-removed work is a 404, not a silent re-stamp.
+		res := tx.Model(&Work{}).Where("id = ?", id).Updates(removal(by, reason))
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return tx.Model(&Edition{}).Where("work_id = ?", id).Updates(removal(by, reason)).Error
+	})
+}
+
+// DeleteEdition takes a single edition down (see DeleteWork).
+func (s *Service) DeleteEdition(ctx context.Context, id uuid.UUID, by uint, reason string) error {
+	if !validReason(reason) {
+		return ErrReasonRequired
+	}
+	res := s.db.WithContext(ctx).Model(&Edition{}).Where("id = ?", id).Updates(removal(by, reason))
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

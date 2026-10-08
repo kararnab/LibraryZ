@@ -106,9 +106,12 @@ func (t *Trainer) Train(ctx context.Context) error {
 
 func (t *Trainer) train(tx *gorm.DB) error {
 	var rows []trainRow
+	// Removed works are left out so the model doesn't spend factors on them
+	// (serving would drop them anyway).
 	if err := tx.
 		Table("user_books").
 		Select("user_id, work_id, status, rating").
+		Where("work_id IN (SELECT id FROM works WHERE deleted_at IS NULL)").
 		Find(&rows).Error; err != nil {
 		return err
 	}

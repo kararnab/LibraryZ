@@ -251,7 +251,14 @@ POST /me/recommendations/{work_id}/dismiss
 ```
 POST /contributions/{id}/approve
 POST /contributions/{id}/reject
+DEL  /works/{id}                           {reason}  takedown: work + all editions (soft delete)
+DEL  /editions/{id}                        {reason}  takedown: one edition (soft delete)
 ```
+
+Takedowns are soft deletes (who/when/why is kept) and hide the item
+everywhere. The stored files are purged by a background sweep after
+`LIBRARYZ_BLOB_GC_RETENTION` (default 30 days), which also removes orphaned
+blobs.
 
 Example:
 
@@ -278,10 +285,11 @@ curl -X POST localhost:8080/works/<work-id>/editions \
 # Backend — in-memory SQLite, no Docker required
 go test ./...
 
-# Postgres-only paths (full-text search tsvector). DROPS catalog tables —
-# never point at production.
+# Postgres-only paths (FTS ranking, concurrent approve, advisory locks,
+# migrations). DROPS AND RECREATES the public schema — never point at
+# production.
 DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' \
-  go test -tags=postgres ./internal/catalog/...
+  go test -tags=postgres -p 1 ./...
 
 # Recommendation offline eval (MF vs popularity baseline)
 go test -tags=eval ./internal/recommendation/...

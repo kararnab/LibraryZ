@@ -46,7 +46,7 @@ type UpsertRequest struct {
 // idempotently — an existing stamp is never overwritten.
 func (s *Service) Upsert(ctx context.Context, userID uint, workID uuid.UUID, req UpsertRequest) (*UserBook, error) {
 	var count int64
-	if err := s.db.WithContext(ctx).Table("works").Where("id = ?", workID).Count(&count).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table("works").Where("id = ? AND deleted_at IS NULL", workID).Count(&count).Error; err != nil {
 		return nil, err
 	}
 	if count == 0 {
@@ -137,6 +137,7 @@ func (s *Service) Get(ctx context.Context, userID uint, workID uuid.UUID) (*User
 	var ub UserBook
 	err := s.db.WithContext(ctx).
 		Where("user_id = ? AND work_id = ?", userID, workID).
+		Where(liveWork).
 		First(&ub).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
@@ -159,10 +160,15 @@ type ListFilter struct {
 	Offset int
 }
 
+// liveWork hides entries whose work a moderator removed. The rows are kept
+// (the removal is reversible) but stop showing up in the library.
+const liveWork = "work_id IN (SELECT id FROM works WHERE deleted_at IS NULL)"
+
 func (s *Service) List(ctx context.Context, f ListFilter) ([]UserBook, error) {
 	var ubs []UserBook
 	q := s.db.WithContext(ctx).
 		Where("user_id = ?", f.UserID).
+		Where(liveWork).
 		Order("updated_at DESC")
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)

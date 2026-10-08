@@ -160,4 +160,70 @@ class WorksStateTest {
         assertEquals("X", state.find("x")?.title)
         assertNull(state.find("missing"))
     }
+
+    @Test
+    fun removeWorkDeletesWithReasonAndDropsItFromItems() = runTest {
+        val engine = MockEngine { req ->
+            when (req.method) {
+                io.ktor.http.HttpMethod.Get -> {
+                    val (s, body, h) = jsonRespond("""[{"id":"a","title":"Alpha"},{"id":"b","title":"Beta"}]""")
+                    respond(body, s, h)
+                }
+                io.ktor.http.HttpMethod.Delete -> {
+                    assertEquals("/works/a", req.url.encodedPath)
+                    assertEquals("Bearer tok", req.headers[HttpHeaders.Authorization])
+                    assertEquals("""{"reason":"spam"}""", (req.body as io.ktor.http.content.TextContent).text)
+                    respond("", HttpStatusCode.NoContent)
+                }
+                else -> error("unexpected ${req.method}")
+            }
+        }
+        val state = WorksState(ApiClient("http://t", tokenProvider = { "tok" }, engine = engine))
+        state.refresh()
+
+        state.removeWork("a", "spam")
+
+        assertEquals(listOf("b"), state.items?.map { it.id })
+    }
+
+    @Test
+    fun removeEditionDropsOnlyThatEdition() = runTest {
+        val engine = MockEngine { req ->
+            if (req.method == io.ktor.http.HttpMethod.Delete) {
+                assertEquals("/editions/e1", req.url.encodedPath)
+                respond("", HttpStatusCode.NoContent)
+            } else {
+                val (s, body, h) = jsonRespond(
+                    """[{"id":"a","title":"Alpha","editions":[
+                        {"id":"e1","work_id":"a","format":"pdf","size_bytes":1,"sha256":"x"},
+                        {"id":"e2","work_id":"a","format":"txt","size_bytes":1,"sha256":"y"}]}]""",
+                )
+                respond(body, s, h)
+            }
+        }
+        val state = WorksState(ApiClient("http://t", tokenProvider = { "tok" }, engine = engine))
+        state.refresh()
+
+        state.removeEdition("a", "e1", "broken file")
+
+        assertEquals(listOf("e2"), state.find("a")?.editions?.map { it.id })
+    }
+
+    @Test
+    fun removeWorkFailureThrowsAndKeepsItems() = runTest {
+        val engine = MockEngine { req ->
+            if (req.method == io.ktor.http.HttpMethod.Delete) {
+                respondError(HttpStatusCode.Forbidden, "moderator required")
+            } else {
+                val (s, body, h) = jsonRespond("""[{"id":"a","title":"Alpha"}]""")
+                respond(body, s, h)
+            }
+        }
+        val state = WorksState(ApiClient("http://t", tokenProvider = { "tok" }, engine = engine))
+        state.refresh()
+
+        val ex = kotlin.test.assertFailsWith<ApiException> { state.removeWork("a", "x") }
+        assertEquals(403, ex.status)
+        assertEquals(listOf("a"), state.items?.map { it.id })
+    }
 }
