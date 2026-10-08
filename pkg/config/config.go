@@ -81,7 +81,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		DatabaseURL:            GetDatabaseUrl(),
-		MigrateDatabaseURL:     getEnv("LIBRARYZ_MIGRATE_DATABASE_URL", GetDatabaseUrl()),
+		MigrateDatabaseURL:     getMigrateDatabaseURL(),
 		AutoMigrate:            os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
 		ListenAddr:             GetListenAddr(),
 		StorageDir:             GetStorageDir(),
@@ -166,6 +166,16 @@ func GetRecAlpha() float64 {
 		}
 	}
 	return 0
+}
+
+// getMigrateDatabaseURL is LIBRARYZ_MIGRATE_DATABASE_URL, falling back to
+// DATABASE_URL when unset *or empty* — an empty value (e.g. a blank compose
+// variable) would otherwise leave migrations with no DSN at all.
+func getMigrateDatabaseURL() string {
+	if v := os.Getenv("LIBRARYZ_MIGRATE_DATABASE_URL"); v != "" {
+		return v
+	}
+	return GetDatabaseUrl()
 }
 
 func GetDatabaseUrl() string {

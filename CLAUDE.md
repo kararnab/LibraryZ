@@ -195,8 +195,9 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of Phase 5 (2026-05-27): 56 backend + 61 frontend
-  tests** (57 backend with `-tags=eval`). See [PLAN.md](PLAN.md) for the
+  `FakeTokenStore`. **As of 2026-10-08: 127 backend + 88 frontend
+  tests** (+1 with `-tags=eval`, +9 with `-tags=postgres`, which CI runs
+  against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
   (`gorm.DeletedAt` + `deleted_by` + `delete_reason`), so GORM queries on

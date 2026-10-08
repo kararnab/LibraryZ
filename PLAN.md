@@ -852,7 +852,10 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      deployment. ✓
 113. Unit tests for `catalog`, `auth`, `middleware`, `config`
      ([#17](https://github.com/kararnab/LibraryZ/issues/17)). Each slice above
-     adds its own regression tests as it lands; this item covers the rest.
+     adds its own regression tests as it lands; this item covers the rest. Landed:
+     package tests for catalog, auth, middleware, config, utils (JWT),
+     migrations and runlock; CI reports coverage (not gated) and runs the
+     `-tags=postgres` suite against a Postgres service container. ✓
 114. Tag **`v0.1.0`** once 7.1–7.3 are merged (CHANGELOG `[Unreleased]` →
      dated section).
 

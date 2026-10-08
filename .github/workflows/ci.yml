@@ -33,8 +33,58 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Vet (postgres-tagged tests)
+        run: go vet -tags=postgres ./...
+
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+
+      # Reported, not gated (yet).
+      - name: Coverage summary
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')
+          echo "Backend statement coverage: **$total** (per-function detail in the coverage artifact: \`go tool cover -func=coverage.out\`)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.out
+
+  # Postgres-only paths: FTS ranking, concurrent approve/reject, advisory
+  # locks (migrations, rec training, blob GC). These tests drop and recreate
+  # the public schema, so they get a throwaway service container.
+  backend-postgres:
+    name: Backend (Go, Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: libraryz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user -d libraryz"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Test (-tags=postgres)
+        env:
+          DATABASE_URL: postgres://user:password@localhost:5432/libraryz?sslmode=disable
+        # -p 1: the packages share one database.
+        run: go test -tags=postgres -count=1 -p 1 ./...
 
   frontend:
     name: Frontend (Compose Multiplatform)
