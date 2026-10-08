@@ -629,6 +629,31 @@ func TestSearchWorksOrderedByCreatedAtDesc(t *testing.T) {
 	}
 }
 
+func TestSearchWorksTreatsLikeWildcardsLiterally(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupAndLogin(t, ts.URL, "search4@x.com", "hunter22", "S4")
+
+	createWorkFull(t, ts.URL, auth, "snake_case handbook", "", "")
+	createWorkFull(t, ts.URL, auth, "100% Pure Prose", "", "")
+	createWorkFull(t, ts.URL, auth, "Plain title without metachars", "", "")
+
+	underscore := searchTitles(t, ts.URL, "_")
+	if !contains(underscore, "snake_case handbook") {
+		t.Fatalf("'_' should match the literal underscore title, got %v", underscore)
+	}
+	if contains(underscore, "Plain title without metachars") || contains(underscore, "100% Pure Prose") {
+		t.Fatalf("'_' must not act as a wildcard, got %v", underscore)
+	}
+
+	percent := searchTitles(t, ts.URL, "%")
+	if !contains(percent, "100% Pure Prose") {
+		t.Fatalf("'%%' should match the literal percent title, got %v", percent)
+	}
+	if contains(percent, "Plain title without metachars") || contains(percent, "snake_case handbook") {
+		t.Fatalf("'%%' must not act as a wildcard, got %v", percent)
+	}
+}
+
 func TestLibraryUpsertRequiresAuth(t *testing.T) {
 	ts, _ := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "lib0@x.com", "hunter22", "L0")

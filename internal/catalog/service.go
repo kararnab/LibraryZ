@@ -120,9 +120,9 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 	if s.db.Dialector.Name() == "postgres" {
 		db = db.Where("search_vector @@ plainto_tsquery('simple', ?)", q)
 	} else {
-		pattern := "%" + strings.ToLower(q) + "%"
+		pattern := "%" + escapeLike(strings.ToLower(q)) + "%"
 		db = db.Where(
-			"LOWER(title) LIKE ? OR LOWER(authors) LIKE ? OR LOWER(description) LIKE ?",
+			`LOWER(title) LIKE ? ESCAPE '\' OR LOWER(authors) LIKE ? ESCAPE '\' OR LOWER(description) LIKE ? ESCAPE '\'`,
 			pattern, pattern, pattern,
 		)
 	}
@@ -134,6 +134,12 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 	}
 	return works, db.Find(&works).Error
 }
+
+// likeEscaper escapes the LIKE metacharacters so user input matches
+// literally; pair with `ESCAPE '\'` in the SQL.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
 // OpenEdition returns the edition metadata, an open reader for its bytes, and
 // the size of those bytes as reported by the storage backend (which may differ
