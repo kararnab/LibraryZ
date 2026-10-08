@@ -74,7 +74,16 @@ data class UpsertLibraryRequest(
 data class Session(val token: String)
 
 class ApiException(val status: Int, val body: String, message: String) :
-    RuntimeException("$message [HTTP $status]: $body")
+    RuntimeException("$message [HTTP $status]: $body") {
+    /**
+     * What to show the user. 4xx bodies from the backend are deliberately
+     * user-facing validation messages (e.g. "invalid patch: title must not
+     * be empty"), so surface them verbatim; 5xx bodies are generic and the
+     * full [message] is more useful for a bug report.
+     */
+    val userMessage: String
+        get() = body.trim().takeIf { status in 400..499 && it.isNotEmpty() } ?: (message ?: "Request failed")
+}
 
 /**
  * Tiny HTTP client wrapping the LibraryZ backend. Engine is auto-selected

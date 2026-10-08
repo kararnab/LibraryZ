@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Work
+import com.libraryz.data.api.ApiException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -262,7 +263,7 @@ private fun EditWorkBody(
                         try {
                             onSubmit(toSend)
                         } catch (e: Throwable) {
-                            submitError = e.message ?: "Submit failed"
+                            submitError = (e as? ApiException)?.userMessage ?: e.message ?: "Submit failed"
                         } finally {
                             submitting = false
                         }

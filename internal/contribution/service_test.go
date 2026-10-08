@@ -3,12 +3,14 @@ package contribution_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/catalog"
 	"github.com/kararnab/libraryZ/internal/contribution"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -83,18 +85,15 @@ func TestSubmitUnknownWorkReturnsErr(t *testing.T) {
 	}
 }
 
-func TestApproveAppliesWhitelistedPatchAndDropsTheRest(t *testing.T) {
+func TestApproveAppliesPatch(t *testing.T) {
 	db := newTestDB(t)
 	svc := contribution.NewService(db)
 	wid := seedWork(t, db, "Original", "old author")
 
-	patch := map[string]any{
+	c, err := svc.Submit(context.Background(), wid, 1, map[string]any{
 		"title":   "Revised",
 		"authors": "new author",
-		"bogus":   "junk",          // not whitelisted
-		"id":      uuid.New().String(), // mustn't allow id rewrites
-	}
-	c, err := svc.Submit(context.Background(), wid, 1, patch)
+	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -117,14 +116,82 @@ func TestApproveAppliesWhitelistedPatchAndDropsTheRest(t *testing.T) {
 	if err := db.First(&w, "id = ?", wid).Error; err != nil {
 		t.Fatal(err)
 	}
-	if w.ID != wid {
-		t.Fatalf("id was rewritten: %s vs %s", w.ID, wid)
-	}
 	if w.Title != "Revised" {
 		t.Fatalf("title not applied: %s", w.Title)
 	}
 	if w.Authors != "new author" {
 		t.Fatalf("authors not applied: %s", w.Authors)
+	}
+}
+
+func TestSubmitRejectsInvalidPatches(t *testing.T) {
+	db := newTestDB(t)
+	svc := contribution.NewService(db)
+	wid := seedWork(t, db, "Original", "")
+
+	cases := map[string]map[string]any{
+		"unknown key only":  {"bogus": "junk"},
+		"unknown key mixed": {"title": "ok", "bogus": "junk"},
+		"id rewrite":        {"id": uuid.New().String()},
+		"year as string":    {"publication_year": "abc"},
+		"year fractional":   {"publication_year": 1999.5},
+		"year far future":   {"publication_year": float64(9999)},
+		"year absurdly old": {"publication_year": float64(-100000)},
+		"empty title":       {"title": ""},
+		"blank title":       {"title": "   "},
+		"non-string author": {"authors": 42.0},
+		"null title":        {"title": nil},
+		"over-long title":   {"title": strings.Repeat("x", 501)},
+		"over-long isbn":    {"isbn": strings.Repeat("9", 33)},
+	}
+	for name, patch := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.Submit(context.Background(), wid, 1, patch)
+			if !errors.Is(err, contribution.ErrInvalidPatch) {
+				t.Fatalf("err = %v, want ErrInvalidPatch", err)
+			}
+		})
+	}
+
+	// Valid edge values are accepted.
+	for _, patch := range []map[string]any{
+		{"publication_year": float64(1851)},
+		{"publication_year": float64(-400)},
+		{"subtitle": ""}, // clearing an optional field is fine
+		{"title": strings.Repeat("é", 500)},
+	} {
+		if _, err := svc.Submit(context.Background(), wid, 1, patch); err != nil {
+			t.Fatalf("submit %v: %v", patch, err)
+		}
+	}
+}
+
+// Rows queued before Submit validated may carry non-whitelisted keys; Approve
+// must still drop them rather than write arbitrary columns.
+func TestApproveDropsNonWhitelistedKeysFromLegacyRows(t *testing.T) {
+	db := newTestDB(t)
+	svc := contribution.NewService(db)
+	wid := seedWork(t, db, "Original", "")
+
+	legacy := contribution.Contribution{
+		ID:            uuid.New(),
+		WorkID:        wid,
+		ContributorID: 1,
+		Status:        contribution.StatusPending,
+		Patch:         datatypes.JSON(`{"title":"Revised","id":"` + uuid.New().String() + `","bogus":"junk"}`),
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Approve(context.Background(), legacy.ID, 2); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	var w catalog.Work
+	if err := db.First(&w, "id = ?", wid).Error; err != nil {
+		t.Fatalf("work id was rewritten or lost: %v", err)
+	}
+	if w.Title != "Revised" {
+		t.Fatalf("title not applied: %s", w.Title)
 	}
 }
 

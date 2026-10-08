@@ -435,32 +435,36 @@ func TestContributionDoubleApproveReturns409(t *testing.T) {
 	}
 }
 
-func TestContributionInvalidPatchFieldsAreIgnored(t *testing.T) {
-	ts, db := newTestServer(t)
+func TestContributionInvalidPatchRejectedAtSubmit(t *testing.T) {
+	ts, _ := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "contrib5@x.com", "hunter22", "C5")
-	promoteModerator(t, db, "contrib5@x.com")
 	workID := createWork(t, ts.URL, auth, "Title A", "")
 
-	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{
-		"title": "Real Update",
-		"bogus": "junk-string-that-should-not-leak",
-	})
-	var c struct {
-		ID string `json:"id"`
+	for name, patch := range map[string]map[string]any{
+		"unknown key":    {"title": "Real Update", "bogus": "junk"},
+		"only unknown":   {"bogus": "junk"},
+		"year as string": {"publication_year": "abc"},
+		"empty title":    {"title": ""},
+	} {
+		resp := submitContribution(t, ts.URL, auth, workID, patch)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: want 400, got %d body=%s", name, resp.StatusCode, readBody(resp))
+		}
+		if body := readBody(resp); !strings.Contains(body, "invalid patch") {
+			t.Fatalf("%s: want a descriptive message, got %q", name, body)
+		}
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&c)
 
-	if r := postAuthed(t, ts.URL+"/contributions/"+c.ID+"/approve", auth); r.StatusCode != http.StatusOK {
-		t.Fatalf("approve: code=%d body=%s", r.StatusCode, readBody(r))
+	// Nothing was queued.
+	resp, _ := http.Get(ts.URL + "/contributions?status=pending")
+	var cs []struct {
+		WorkID string `json:"work_id"`
 	}
-
-	workResp, _ := http.Get(ts.URL + "/works/" + workID)
-	body := readBody(workResp)
-	if !strings.Contains(body, "Real Update") {
-		t.Fatalf("whitelisted title not applied: %s", body)
-	}
-	if strings.Contains(body, "junk-string-that-should-not-leak") {
-		t.Fatalf("non-whitelisted field leaked into work: %s", body)
+	_ = json.NewDecoder(resp.Body).Decode(&cs)
+	for _, c := range cs {
+		if c.WorkID == workID {
+			t.Fatalf("invalid patch was queued: %+v", cs)
+		}
 	}
 }
 

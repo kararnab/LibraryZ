@@ -347,6 +347,25 @@ class ApiClientTest {
     }
 
     @Test
+    fun submitContributionOn400ExposesServerMessageAsUserMessage() = runTest {
+        val engine = MockEngine {
+            respondError(HttpStatusCode.BadRequest, "invalid patch: title must not be empty\n")
+        }
+        val api = ApiClient(BASE, tokenProvider = { "t" }, engine = engine)
+        val ex = assertFailsWith<ApiException> {
+            api.submitContribution("w1", mapOf("title" to kotlinx.serialization.json.JsonPrimitive("")))
+        }
+        assertEquals(400, ex.status)
+        assertEquals("invalid patch: title must not be empty", ex.userMessage)
+    }
+
+    @Test
+    fun userMessageFallsBackToFullMessageOn5xx() {
+        val ex = ApiException(500, "internal server error", "submit contribution failed")
+        assertEquals(ex.message, ex.userMessage)
+    }
+
+    @Test
     fun getLibraryEntryReturnsNullOn404() = runTest {
         val engine = MockEngine { respondError(HttpStatusCode.NotFound, "not found") }
         val api = ApiClient(BASE, tokenProvider = { "t" }, engine = engine)
