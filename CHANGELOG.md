@@ -30,17 +30,37 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   upload limit, failed check). **Suggest an edit** marks each changed field
   with its old value and an undo. The **review queue** shows a word-level
   before/after diff.
-- **Password reset and email verification screens** (client only; the
-  endpoints come next). See `ApiClient`'s recovery section for the
-  expected contract.
+- **Password reset and email verification, end to end.** New endpoints
+  `POST /auth/password-reset`, `/auth/password-reset/complete`,
+  `/me/email-verification` and `/auth/email-verification/complete`;
+  `/auth/me` reports `email_verified`, and sign-up sends a verification
+  email. Emails are branded (text + HTML) and carry both a link and a code;
+  the apps take either through "Have a code?" on the "Check your email"
+  screen and the verification banner. A finished reset signs the account
+  out everywhere.
+- **Email delivery** through
+  [onemailer](https://github.com/kararnab/onemailer) over plain SMTP, so any
+  provider works. Configured with `LIBRARYZ_MAIL_PROVIDER`,
+  `LIBRARYZ_PUBLIC_URL`, `LIBRARYZ_MAIL_FROM` and `LIBRARYZ_SMTP_*` (see
+  "Email" in the README); off by default. `libraryz mail send-test -to …`
+  checks the settings. `docker compose up` adds Mailpit
+  (<http://localhost:8025>) to catch every message.
 - README screenshots are now generated from the real UI
   (`ScreenshotsTest`, see `docs/screenshots/README.md`).
 
 ### Changed
+- The web dev server (`wasmJsBrowserDevelopmentRun`) moved to port 8081,
+  where emailed links point in development; 8080 is Kong.
 - The upload screen only offers the formats the server accepts (PDF, EPUB,
   TXT); AZW3, DJVU and CBZ were listed before but always rejected.
 
 ### Security
+- **Recovery emails are capped per account**: one per 2 minutes and five
+  per day, checked before a token is issued (a row lock makes concurrent
+  requests send one email). Kong rate-limits the new routes per IP. A reset
+  request answers `202` whether or not the address has an account. Reset
+  tokens last 1 hour, verification tokens 48 hours, and both are single-use;
+  server logs never contain links or tokens.
 - **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0**
   ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the
   hand-written JWT/refresh code. Passwords are hashed with argon2id (bcrypt
