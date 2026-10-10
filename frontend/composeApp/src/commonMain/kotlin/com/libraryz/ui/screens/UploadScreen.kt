@@ -472,7 +472,7 @@ private fun UploadForm(
                 OutlinedTextField(
                     value = authors, onValueChange = onAuthors,
                     label = { Text("Authors") }, singleLine = true,
-                    supportingText = { Text("Separate several authors with commas") },
+                    supportingText = { Text("Separate several authors with semicolons (;)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
