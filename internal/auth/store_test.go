@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/kararnab/iam/v2/onetime"
 	"github.com/kararnab/iam/v2/session"
 	"github.com/kararnab/iam/v2/storetest"
 	"github.com/kararnab/libraryZ/internal/auth"
@@ -82,4 +83,8 @@ func TestPurgeExpired(t *testing.T) {
 	if _, err := s.Get(ctx, "live"); err != nil {
 		t.Fatalf("live session purged: %v", err)
 	}
+}
+
+func TestTokensConformance(t *testing.T) {
+	storetest.Tokens(t, func(t *testing.T) onetime.Store { return auth.NewTokens(freshDB(t)) })
 }

@@ -96,6 +96,15 @@ services:
     ports:
       - "8080:8000" # host 8080 -> Kong proxy 8000 (replaces the old libraryz mapping)
 
+  # Mailpit catches every email the stack sends (password resets,
+  # verification links) and shows it at http://localhost:8025; nothing leaves
+  # the machine. Same image and digest as CodeAtlas's stack. Messages aren't
+  # kept across restarts.
+  mailpit:
+    image: axllent/mailpit:v1.31.4@sha256:b68349e3a014b90c5610bfb26b2ae36f3892d7b8cf25ee140c6c71c98d2fcf48
+    ports:
+      - "8025:8025" # inbox UI and API (GET /api/v1/messages)
+
   # S3-compatible blob store. This used to be MinIO, but MinIO stopped
   # publishing container images and archived its repository (2026), so
   # `minio/minio` no longer pulls. RustFS is an Apache-2.0, actively
@@ -132,6 +141,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       # `pgbouncer` / `postgres` / `rustfs` are the service hostnames on the
       # compose network. libraryz talks to Postgres through pgbouncer
@@ -183,6 +194,18 @@ services:
       LIBRARYZ_S3_SECRET_KEY: "rustfsadmin"
       LIBRARYZ_S3_BUCKET: "libraryz"
       LIBRARYZ_S3_USE_SSL: "false"
+      # Email (password reset, verification) through github.com/kararnab/onemailer.
+      # Dev: plain SMTP to Mailpit, allowed only because SMTP_ALLOW_PLAIN_HOST
+      # names it. Links point at the web client's dev server (port 8081).
+      # Production: see "Email" in README.md (SMTP provider, https URL,
+      # LIBRARYZ_SMTP_PASSWORD_FILE, SPF/DKIM/DMARC).
+      LIBRARYZ_MAIL_PROVIDER: smtp
+      LIBRARYZ_PUBLIC_URL: "http://localhost:8081"
+      LIBRARYZ_MAIL_FROM: "LibraryZ <accounts@libraryz.localhost>"
+      LIBRARYZ_SMTP_HOST: mailpit
+      LIBRARYZ_SMTP_PORT: "1025"
+      LIBRARYZ_SMTP_TLS: none
+      LIBRARYZ_SMTP_ALLOW_PLAIN_HOST: mailpit
       # CORS allowlist for the browser (Wasm) client — exact-match, comma-separated.
       # Only matters for the web target; native (Android/Desktop/iOS) clients don't
       # use CORS. When unset, the backend allows only localhost / 127.0.0.1 origins,

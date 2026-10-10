@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/kararnab/iam/redisstore/v2 v2.3.0
 	github.com/kararnab/iam/v2 v2.3.0
+	github.com/kararnab/onemailer v0.2.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/pdfcpu/pdfcpu v0.16.1
 	github.com/pressly/goose/v3 v3.28.0

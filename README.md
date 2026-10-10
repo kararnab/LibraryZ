@@ -82,6 +82,8 @@ That's it. The stack comes up with:
 - **Postgres** on `:5432` (metadata)
 - **RustFS** on `:9100` / console `:9101` (S3-compatible blob store;
   MinIO no longer publishes images — any S3-compatible store works)
+- **Mailpit** on <http://localhost:8025> — catches every email the stack
+  sends (sign-up verification, password resets); nothing leaves the machine
 
 Smoke-test it:
 
@@ -156,6 +158,8 @@ Design notes worth knowing before you contribute:
   a `when` branch in `openReader`, not a new per-platform actual.
 - **Kong is the edge in `docker compose up`.** Per-IP rate limits on
   `/auth/login` (5/min), `/auth/signup` (3/min), `/auth/refresh` (20/min),
+  `/auth/password-reset` (5/min, 20/hour), the two `…/complete` routes
+  (10/min, 60/hour), `/me/email-verification` (3/min, 10/hour),
   edition uploads (10/hour), service-wide fallback (60/min). The app adds
   per-account login throttling on top (iam, Redis-backed). The `libraryz` container is intentionally
   not published to the host. See [deploy/kong/kong.yml](deploy/kong/kong.yml).
@@ -207,7 +211,43 @@ All via environment variables. Defaults work for `docker compose up`.
 | `LIBRARYZ_LOAD_SUBJECT_ON_ACCESS`         | `true` — role changes and disabled users apply to the next request; `false` uses the token's roles (≤15 min stale) |
 | `LIBRARYZ_REDIS_ADDR` / `_REDIS_PASSWORD` | _(unset)_ — Redis for login throttling shared by all replicas; unset = per-process memory |
 | `LIBRARYZ_TRUSTED_PROXIES`                | _(unset)_ — CIDRs whose `X-Forwarded-For` is believed (set behind Kong / an LB) |
-| `LIBRARYZ_SESSION_PURGE_INTERVAL`         | `1h` — how often expired sessions are deleted                      |
+| `LIBRARYZ_SESSION_PURGE_INTERVAL`         | `1h` — how often expired sessions, used/expired email tokens and old send records are deleted |
+| `LIBRARYZ_MAIL_PROVIDER`                  | `none` — nothing is sent (reset/verify requests are still answered); `smtp` sends. See [Email](#email) |
+| `LIBRARYZ_PUBLIC_URL`                     | _(unset)_ — origin of the web app that emailed links open (required with `smtp`; `https` outside localhost) |
+| `LIBRARYZ_MAIL_FROM` / `_MAIL_REPLY_TO`   | _(unset)_ — named sender, e.g. `LibraryZ <accounts@example.org>` (required with `smtp`); optional reply-to inbox |
+| `LIBRARYZ_SMTP_HOST` / `_SMTP_PORT`       | _(unset)_ / `587`                                                  |
+| `LIBRARYZ_SMTP_TLS`                       | `starttls` — or `tls` (implicit, usually 465) or `none` (loopback or `_SMTP_ALLOW_PLAIN_HOST` only) |
+| `LIBRARYZ_SMTP_USERNAME`                  | _(unset)_                                                          |
+| `LIBRARYZ_SMTP_PASSWORD_FILE` / `_SMTP_PASSWORD` | _(unset)_ — prefer the file; set at most one                |
+
+### Email
+
+Password reset and email verification send mail through
+[onemailer](https://github.com/kararnab/onemailer) over plain SMTP, so any
+provider works (Amazon SES, Postmark, SendGrid, Resend, your own relay)
+with no code change. In `docker compose up` everything goes to Mailpit
+(<http://localhost:8025>). For production:
+
+1. Pick a provider and verify your sending domain with it. Publish its
+   **SPF**, **DKIM** and a **DMARC** record, or resets land in spam.
+2. Set `LIBRARYZ_MAIL_PROVIDER=smtp`, `LIBRARYZ_SMTP_HOST`/`_PORT`,
+   `LIBRARYZ_SMTP_USERNAME` and the password through
+   `LIBRARYZ_SMTP_PASSWORD_FILE` (a mounted secret). Certificates are always
+   verified; credentials are never sent without TLS.
+3. Set `LIBRARYZ_MAIL_FROM` to a real, named address
+   (`LibraryZ <accounts@example.org>`, not `no-reply@`), and
+   `LIBRARYZ_PUBLIC_URL` to the `https` origin of the web app — links go to
+   `$LIBRARYZ_PUBLIC_URL/reset-password?token=…` and `/verify-email?token=…`.
+4. Check it before going live:
+   `libraryz mail send-test -to you@example.org` sends one message with
+   these settings and exits non-zero if the server refused it.
+
+Each email carries both a link and the same token as a code, so the
+Android and desktop apps can finish a flow through "Have a code?". Each
+account gets at most one recovery email per 2 minutes and five per day;
+reset links expire after 1 hour, verification links after 48 hours.
+Server logs record the kind of email and the user id, never the link or
+token.
 
 ## Running the client
 
@@ -220,7 +260,7 @@ cd frontend
 ./gradlew :composeApp:run                              # Desktop window
 ./gradlew :androidApp:assembleDebug                    # Android APK
 ./gradlew :androidApp:installDebug                     # Push to device/emulator
-./gradlew :composeApp:wasmJsBrowserDevelopmentRun      # Web at :8080
+./gradlew :composeApp:wasmJsBrowserDevelopmentRun      # Web at :8081
 ./gradlew :composeApp:wasmJsBrowserDistribution        # Static web bundle
 ```
 
@@ -229,6 +269,40 @@ iOS builds only link on macOS — they're auto-disabled on Linux/Windows.
 The default base URL is wired to `localhost:8080` (Desktop / Web), `10.0.2.2`
 (Android emulator), and a dev LAN IP (real Android device — edit
 `BaseUrl.android.kt`).
+
+### Opening emailed links in the apps
+
+Reset and verification emails link to the web app
+(`$LIBRARYZ_PUBLIC_URL/reset-password?token=…`) and carry the same token as
+a code, which every app accepts through "Have a code?". The apps can also
+open the links directly:
+
+- **Android** handles `libraryz://reset-password?token=…` and
+  `libraryz://verify-email?token=…`. To have the **emailed https links** open
+  the app (Android App Links), build with the deployment's public URL and
+  publish the matching `assetlinks.json`:
+
+  ```bash
+  ./gradlew :androidApp:assembleRelease -Plibraryz.appLinkUrl=https://library.example.org
+  # the web bundle then serves /.well-known/assetlinks.json for that app's signing key
+  ./gradlew :composeApp:wasmJsBrowserDistribution \
+      -Plibraryz.androidCertSha256=AA:BB:…   # comma-separate several keys
+  ```
+
+  The fingerprint is the SHA-256 of the signing certificate
+  (`keytool -list -v -keystore …`). `assetlinks.json` must be served from the
+  root of that host. Without `libraryz.appLinkUrl` the https links open in
+  the browser as before.
+- **Desktop**: the installed app registers `libraryz://` (macOS from its
+  Info.plist; Linux and Windows on first launch, for the current user). The
+  web app's "Choose a new password" page has an **Open in the LibraryZ app**
+  button that hands the link over. Only one copy of the desktop app runs: a
+  second launch passes its link to the first and brings it forward.
+
+To try a link without an email:
+`adb shell am start -a android.intent.action.VIEW -d 'libraryz://reset-password?token=…'`
+(Android) or `xdg-open 'libraryz://reset-password?token=…'` (installed
+desktop app on Linux).
 
 ## API
 
@@ -243,6 +317,9 @@ POST /auth/signup                  {email, password, name} -> token pair (passwo
 POST /auth/login                   {email, password}     -> {access_token, refresh_token, expires_in}
 POST /auth/refresh                 {refresh_token}       -> new pair (single-use, rotating)
 POST /auth/logout                  {refresh_token}       ends that session
+POST /auth/password-reset          {email}               202 always; emails a reset link + code
+POST /auth/password-reset/complete {token, new_password} sets it, ends every session (410: token used/expired)
+POST /auth/email-verification/complete {token}           confirms the address (410: token used/expired)
 GET  /works[?limit=&offset=]
 GET  /works/search?q=...           full-text search (FTS on Postgres, LIKE on SQLite)
 GET  /works/{id}
@@ -254,12 +331,15 @@ GET  /contributions/{id}
 
 Tokens come back in the JSON body only. Failed logins are throttled per
 account (5 per 15 minutes) and per IP (100), answering `429` with
-`Retry-After`.
+`Retry-After`. Sign-up also sends a verification email. Recovery emails
+are capped per account (one per 2 minutes, five per day); a password-reset
+request answers `202` whether or not the address has an account.
 
 **Authenticated** (`Authorization: Bearer <access_token>`)
 
 ```
-GET  /auth/me
+GET  /auth/me                               includes email_verified
+POST /me/email-verification                emails a fresh verification link (204 if already verified)
 POST /auth/logout-all                      ends every session (no more refreshes)
 GET  /me/sessions                          the caller's sessions (devices)
 DEL  /me/sessions/{id}                     ends one of them

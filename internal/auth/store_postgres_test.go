@@ -14,6 +14,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/kararnab/iam/v2/onetime"
 	"github.com/kararnab/iam/v2/session"
 	"github.com/kararnab/iam/v2/storetest"
 	"github.com/kararnab/libraryZ/internal/auth"
@@ -61,4 +62,8 @@ func TestPostgresSessionsConformance(t *testing.T) {
 
 func TestPostgresSessionsPurgerConformance(t *testing.T) {
 	storetest.Purger(t, func(t *testing.T) storetest.PurgingSessionStore { return auth.NewSessions(freshPostgres(t)) })
+}
+
+func TestPostgresTokensConformance(t *testing.T) {
+	storetest.Tokens(t, func(t *testing.T) onetime.Store { return auth.NewTokens(freshPostgres(t)) })
 }

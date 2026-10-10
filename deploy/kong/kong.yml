@@ -131,6 +131,59 @@ services:
               limit_by: ip
               fault_tolerant: true
 
+      # POST /auth/password-reset — anonymous and emails someone, so floods are
+      # stopped here per IP; the app adds a per-account cap (2 min / 5 a day) that
+      # protects an inbox even from rotating IPs.
+      - name: auth-password-reset
+        paths: ["~/auth/password-reset$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 5
+              hour: 20
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+      # POST /auth/password-reset/complete and /auth/email-verification/complete —
+      # tokens are 256-bit random, so this only blunts abuse.
+      - name: auth-recovery-complete
+        paths: ["~/auth/(password-reset|email-verification)/complete$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 10
+              hour: 60
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+      # POST /me/email-verification — authenticated resend; the app caps it per
+      # account too.
+      - name: me-email-verification
+        paths: ["~/me/email-verification$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 3
+              hour: 10
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+
       # POST /works/{id}/editions — large multipart upload (≤500 MiB).
       # request_buffering off so the body streams to libraryz instead of being
       # spooled in Kong. allowed_payload_size is slightly above the app cap

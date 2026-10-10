@@ -313,6 +313,77 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /auth/password-reset:
+    post:
+      operationId: requestPasswordReset
+      tags: [auth]
+      summary: Email a password-reset link (anonymous)
+      description: |
+        Always 202, whether or not the address has an account, so it can't be
+        used to find accounts. Per-account cap: one email per 2 minutes, five
+        per day. The email carries a link to `$LIBRARYZ_PUBLIC_URL/reset-password?token=…`
+        and the same token as a code. Tokens expire after 1 hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email], properties: { email: { type: string, format: email } } }
+      responses:
+        "202": { description: Accepted }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/password-reset/complete:
+    post:
+      operationId: completePasswordReset
+      tags: [auth]
+      summary: Set a new password with a reset token (anonymous)
+      description: Signs the account out everywhere. A password the policy rejects (400) leaves the token usable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties: { token: { type: string }, new_password: { type: string, minLength: 8, maxLength: 1024 } }
+      responses:
+        "204": { description: Password changed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "410": { description: Token unknown, used or expired }
+
+  /me/email-verification:
+    post:
+      operationId: requestEmailVerification
+      tags: [auth]
+      summary: Email the caller a fresh verification link
+      description: 204 when already verified; 429 within the 2-minute cooldown or past five a day. Sign-up sends the first link.
+      security:
+        - bearerAuth: []
+      responses:
+        "202": { description: Accepted }
+        "204": { description: Already verified }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/email-verification/complete:
+    post:
+      operationId: completeEmailVerification
+      tags: [auth]
+      summary: Confirm an address with a verification token (anonymous)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string } } }
+      responses:
+        "200":
+          description: Verified
+          content:
+            application/json:
+              schema: { type: object, properties: { email: { type: string, format: email } } }
+        "410": { description: Token unknown, used or expired, or the account's address changed }
+
   /auth/me:
     get:
       operationId: getMe
@@ -1200,6 +1271,7 @@ components:
         name:         { type: string }
         roles:        { type: array, items: { type: string }, example: [moderator] }
         is_moderator: { type: boolean, description: "`roles` contains `moderator`" }
+        email_verified: { type: boolean, description: "the user followed a verification link for their current address" }
 
     Session:
       type: object

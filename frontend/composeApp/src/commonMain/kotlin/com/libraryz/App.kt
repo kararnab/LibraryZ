@@ -6,6 +6,10 @@ import com.libraryz.ui.screens.VerifyEmailScreen
 import com.libraryz.ui.screens.ResetPasswordScreen
 import com.libraryz.ui.screens.ForgotPasswordScreen
 import com.libraryz.data.launchDeepLink
+import com.libraryz.data.DeepLinkInbox
+import com.libraryz.data.appLinkUrl
+import com.libraryz.data.openInApp
+import kotlinx.coroutines.flow.filterNotNull
 import com.libraryz.data.DeepLink
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
@@ -207,15 +211,16 @@ internal fun Root(
     recs: RecommendationsState,
     startAt: Screen? = null,
 ) {
-    // An emailed reset / verification link (web: the page URL) opens its screen.
-    val launchLink = remember { launchDeepLink() }
-    val nav = rememberNavigator(
-        startAt ?: when (launchLink) {
-            is DeepLink.ResetPassword -> Screen.ResetPassword(launchLink.token)
-            is DeepLink.VerifyEmail -> Screen.VerifyEmail(launchLink.token)
-            null -> Screen.Auth
-        },
-    )
+    // An emailed reset / verification link opens its screen: the page URL
+    // on the web, the launch intent / arguments elsewhere.
+    val launchLink = remember { launchDeepLink() ?: DeepLinkInbox.take() }
+    val nav = rememberNavigator(startAt ?: launchLink?.let(::screenFor) ?: Screen.Auth)
+    // …and so does one that arrives while the app is open.
+    LaunchedEffect(Unit) {
+        DeepLinkInbox.pending.filterNotNull().collect {
+            DeepLinkInbox.take()?.let { link -> nav.push(screenFor(link)) }
+        }
+    }
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbar.current
 
@@ -251,7 +256,13 @@ internal fun Root(
         }
     }
     val verifyBanner: (@Composable () -> Unit)? = auth.user?.takeIf { !it.emailVerified }?.let { u ->
-        { VerifyEmailBanner(u.email, onResend = resendVerification) }
+        {
+            VerifyEmailBanner(
+                u.email,
+                onResend = resendVerification,
+                onHaveCode = { code -> nav.push(Screen.VerifyEmail(code)) },
+            )
+        }
     }
     // An expired session lands on sign-in with a banner explaining why.
     var expiredNotice by remember { mutableStateOf(false) }
@@ -785,11 +796,13 @@ internal fun Root(
                 api = api,
                 initialEmail = s.email,
                 onBack = { if (!nav.pop()) nav.replace(Screen.Auth) },
+                onHaveCode = { code -> nav.push(Screen.ResetPassword(code)) },
             )
 
             is Screen.ResetPassword -> ResetPasswordScreen(
                 api = api,
                 token = s.token,
+                onOpenInApp = openInApp?.let { open -> { open(appLinkUrl(DeepLink.ResetPassword(s.token))) } },
                 onDone = {
                     // The reset ended every session, this device's included.
                     scope.launch {
@@ -1156,4 +1169,9 @@ private fun ListDetailLayout(
             }
         }
     }
+}
+
+private fun screenFor(link: DeepLink): Screen = when (link) {
+    is DeepLink.ResetPassword -> Screen.ResetPassword(link.token)
+    is DeepLink.VerifyEmail -> Screen.VerifyEmail(link.token)
 }

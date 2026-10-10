@@ -111,6 +111,36 @@ val generateBuildInfo by tasks.registering {
 }
 kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generateBuildInfo)
 
+// /.well-known/assetlinks.json for the web bundle, which lets Android open
+// the emailed https links in the app (androidApp's libraryz.appLinkUrl).
+// libraryz.androidCertSha256: the SHA-256 fingerprint(s) of the app's
+// signing certificate, AA:BB:…, comma-separated. Unset: no file.
+val generateAssetLinks by tasks.registering {
+    val fingerprints = providers.gradleProperty("libraryz.androidCertSha256").orElse("")
+    val outDir = layout.buildDirectory.dir("generated/assetlinks/wasmJsMain/resources")
+    inputs.property("fingerprints", fingerprints)
+    outputs.dir(outDir)
+    doLast {
+        val dir = outDir.get().asFile
+        dir.deleteRecursively()
+        val prints = fingerprints.get().split(',').map { it.trim().uppercase() }.filter { it.isNotEmpty() }
+        if (prints.isEmpty()) return@doLast
+        prints.forEach {
+            require(Regex("([0-9A-F]{2}:){31}[0-9A-F]{2}").matches(it)) {
+                "libraryz.androidCertSha256: expected a SHA-256 fingerprint like AA:BB:…, got $it"
+            }
+        }
+        val file = dir.resolve(".well-known/assetlinks.json")
+        file.parentFile.mkdirs()
+        file.writeText(
+            """[{"relation":["delegate_permission/common.handle_all_urls"],""" +
+                """"target":{"namespace":"android_app","package_name":"com.libraryz",""" +
+                """"sha256_cert_fingerprints":[${prints.joinToString(",") { "\"$it\"" }}]}}]""" + "\n",
+        )
+    }
+}
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(generateAssetLinks)
+
 compose.desktop {
     application {
         mainClass = "com.libraryz.MainKt"
@@ -120,6 +150,25 @@ compose.desktop {
             // Compose Desktop's installer toolchain (jpackage) requires
             // MAJOR >= 1, so "0.x.y" is rejected even though SemVer allows it.
             packageVersion = "1.0.0"
+            // libraryz:// links (the web app's "Open in the LibraryZ app").
+            // macOS reads this at install; Linux and Windows register the
+            // scheme when the installed app first runs (DesktopLinks.kt).
+            macOS {
+                bundleID = "com.libraryz"
+                infoPlist {
+                    extraKeysRawXml = """
+                        |  <key>CFBundleURLTypes</key>
+                        |  <array>
+                        |    <dict>
+                        |      <key>CFBundleURLName</key>
+                        |      <string>LibraryZ link</string>
+                        |      <key>CFBundleURLSchemes</key>
+                        |      <array><string>libraryz</string></array>
+                        |    </dict>
+                        |  </array>
+                    """.trimMargin()
+                }
+            }
         }
     }
 }

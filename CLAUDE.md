@@ -96,7 +96,8 @@ Then any of:
 # Install onto a connected device / emulator
 ./gradlew :androidApp:installDebug
 
-# Web (Wasm) dev server on http://localhost:8080
+# Web (Wasm) dev server on http://localhost:8081 (8080 is Kong; emailed
+# links point here in dev via LIBRARYZ_PUBLIC_URL)
 ./gradlew :composeApp:wasmJsBrowserDevelopmentRun
 
 # Web (Wasm) production bundle -> build/dist/wasmJs/productionExecutable/
@@ -108,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (115 each;
-# desktop also has the opt-in ScreenshotsTest, see docs/screenshots).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (121 each;
+# desktop also has DesktopLinksTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -211,8 +212,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 127 backend + 115 frontend
-  tests** (+1 with `-tags=eval`, +11 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-10: 135 backend + 121 frontend
+  tests** (+1 with `-tags=eval`, +13 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -284,6 +285,34 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   refreshes for one session in parallel. `AuthState` is its `SessionHooks`
   and raises `sessionExpired` when renewal fails, which sends `App` to
   sign-in with a snackbar.
+- **Password reset + email verification (2026-10-10)** run on iam's
+  Recovery: `internal/auth/recovery.go` (handlers), `tokens.go`
+  (`one_time_tokens`, an iam `onetime.Store` that must keep passing
+  `storetest.Tokens`), `emails.go` + `templates/` (branded text + HTML,
+  link **and** code). Mail goes through **github.com/kararnab/onemailer**
+  (shared with CodeAtlas; don't vendor a copy back in), configured by
+  `onemailer.LoadConfig(os.Getenv, "LIBRARYZ_")` →
+  `LIBRARYZ_{MAIL_PROVIDER,PUBLIC_URL,MAIL_FROM,MAIL_REPLY_TO,SMTP_*}`;
+  `MAIL_PROVIDER=none` (default) answers requests but sends nothing.
+  The per-account cap (2 min cooldown, 5/day, `account_emails`, row-locked
+  on Postgres) is checked **before** a token is issued — keep it that way.
+  **Never log links or tokens** (logs carry kind + user_id). Compose sends
+  everything to Mailpit (http://localhost:8025); `libraryz mail send-test
+  -to …` checks real SMTP settings. Emailed links point at
+  `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**. **App links
+  (2026-10-10):** platforms hand links to `DeepLinkInbox` (commonMain; `Root`
+  collects it, so links work while the app is open). Android: `libraryz://`
+  intent filter + `singleTask` + `onNewIntent`; verified https App Links only
+  when built with `-Plibraryz.appLinkUrl=…` (a generated manifest in
+  `androidApp/build.gradle.kts`), with `assetlinks.json` generated into the
+  web bundle from `-Plibraryz.androidCertSha256=…`. Desktop: `DesktopLinks.kt`
+  — single instance (file lock + loopback socket with an owner-only key
+  file in `~/.libraryz`; `./gradlew run` uses a separate `instance-dev`),
+  macOS `CFBundleURLTypes` + `setOpenURIHandler`, Linux/Windows register
+  `libraryz://` on first launch of an installed (jpackage) app. Web: "Open in
+  the LibraryZ app" on the reset page (`openInApp`). "Have a code?" still
+  works everywhere.
+  The seed marks demo users verified.
 - **Visual system (2026-10-10): "LibraryZ Visual Refresh" from Claude
   Design** (https://claude.ai/artifact/SvHwbXULQMdr7fr2E8XiEZ). Tokens live in
   `theme/Theme.kt`: M3 light/dark schemes (seed #2E5E4E), Literata (titles,
@@ -298,8 +327,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (second pass). Upload only offers what `sanitize.Validate` accepts
   (PDF/EPUB/TXT, 500 MB); its "safety check" step is the wait between the
   last byte sent and the response, so a 400 then means the content was
-  rejected (`classifyUploadError`). The "Future" board (password reset,
-  email verification, notifications) needs backend work and isn't built.
+  rejected (`classifyUploadError`). Of the "Future" board, password reset
+  and email verification are built; notifications aren't.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the
   single source: it generates `com.libraryz.AppVersion` (Settings › About)
   and is the Android `versionName`. The desktop installer's

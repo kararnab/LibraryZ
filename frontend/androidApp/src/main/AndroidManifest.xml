@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17+: reaching a local-network server (the emulator's 10.0.2.2,
+         a LAN IP, a home server). Asked for only when the server is one;
+         see MainActivity. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <application
         android:label="LibraryZ"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -10,10 +14,23 @@
             android:exported="true"
             android:label="LibraryZ"
             android:theme="@style/Theme.LibraryZ"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- libraryz://reset-password?token=… and libraryz://verify-email?token=…
+                 (the web app's "Open in the LibraryZ app"). The emailed https
+                 links are App Links, added when libraryz.appLinkUrl is set
+                 (build.gradle.kts). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="libraryz" />
+                <data android:host="reset-password" />
+                <data android:host="verify-email" />
             </intent-filter>
         </activity>
     </application>

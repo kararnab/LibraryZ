@@ -1,0 +1,17 @@
+Hi {{.DisplayName}},
+
+Please confirm that {{.Email}} is your email address for LibraryZ, so you can always get back into your account.
+
+Open this link within {{.Lifetime}}:
+
+{{.Link}}
+
+Using the LibraryZ app? On the “Verify your email” banner choose “Have a code?” and enter:
+
+{{.Code}}
+{{if .CanReply}}
+Questions? Reply to this email.
+{{end}}
+—
+LibraryZ
+You're getting this email because {{.Email}} was used to create a LibraryZ account. If that wasn't you, you can ignore it.

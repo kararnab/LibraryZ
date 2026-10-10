@@ -1,6 +1,8 @@
 package com.libraryz.ui
 
 import com.libraryz.data.DeepLink
+import com.libraryz.data.DeepLinkInbox
+import com.libraryz.data.appLinkUrl
 import com.libraryz.data.User
 import com.libraryz.data.api.ApiException
 import com.libraryz.data.parseDeepLink
@@ -32,6 +34,28 @@ class RecoveryTest {
     }
 
     @Test
+    fun appLinksRoundTrip() {
+        val reset = DeepLink.ResetPassword("a b/é+%_~-.")
+        assertEquals("libraryz://reset-password?token=a%20b%2F%C3%A9%2B%25_~-.", appLinkUrl(reset))
+        assertEquals(reset, parseDeepLink(appLinkUrl(reset)))
+        val verify = DeepLink.VerifyEmail("v-9")
+        assertEquals("libraryz://verify-email?token=v-9", appLinkUrl(verify))
+        assertEquals(verify, parseDeepLink(appLinkUrl(verify)))
+    }
+
+    @Test
+    fun inboxHoldsTheLatestLinkUntilTaken() {
+        DeepLinkInbox.take()
+        assertFalse(DeepLinkInbox.deliver(null))
+        assertFalse(DeepLinkInbox.deliver("https://x/somewhere?token=abc"))
+        assertNull(DeepLinkInbox.pending.value)
+        assertTrue(DeepLinkInbox.deliver("libraryz://verify-email?token=old"))
+        assertTrue(DeepLinkInbox.deliver("https://x/reset-password?token=new"))
+        assertEquals(DeepLink.ResetPassword("new"), DeepLinkInbox.take())
+        assertNull(DeepLinkInbox.take())
+    }
+
+    @Test
     fun recoveryErrorsFollowTheContract() {
         fun api(s: Int) = ApiException(s, "", "x")
         assertEquals(RecoveryProblem.Throttled, classifyRecoveryError(api(429)))
@@ -47,5 +71,15 @@ class RecoveryTest {
         assertTrue(old.emailVerified)
         val unverified = json.decodeFromString(User.serializer(), """{"id":1,"email":"a@b.c","name":"A","is_moderator":false,"email_verified":false}""")
         assertFalse(unverified.emailVerified)
+    }
+}
+
+class CodeInputTest {
+    @Test
+    fun acceptsACodeOrAWholeLink() {
+        assertEquals("abc_DEF-123", com.libraryz.ui.screens.codeFromInput("  abc_DEF-123 \n"))
+        assertEquals("tok123", com.libraryz.ui.screens.codeFromInput("http://localhost:8081/reset-password?token=tok123"))
+        assertEquals("v-9", com.libraryz.ui.screens.codeFromInput("https://library.example.org/verify-email?token=v-9"))
+        assertEquals("", com.libraryz.ui.screens.codeFromInput("   "))
     }
 }
