@@ -90,9 +90,23 @@ func sanitizePDFTo(rs io.ReadSeeker, w io.Writer) (retErr error) {
 	// indirect ref) are recursed into so we catch e.g. an inline /Names
 	// subtree with a /JavaScript entry. IndirectRefs are not followed —
 	// they'll be reached when we iterate their own XRef entry.
-	for _, entry := range pdf.XRefTable.Table {
+	//
+	// Objects inside compressed object streams are loaded lazily by
+	// ReadContext. Decode them first: otherwise stripping can't see them,
+	// and WriteContext copies their raw bytes out of the source stream,
+	// which corrupts them (every font in an Acrobat Distiller PDF, say).
+	for nr, entry := range pdf.XRefTable.Table {
 		if entry == nil || entry.Free || entry.Object == nil {
 			continue
+		}
+		if _, lazy := entry.Object.(types.LazyObjectStreamObject); lazy {
+			gen := 0
+			if entry.Generation != nil {
+				gen = *entry.Generation
+			}
+			if _, err := pdf.XRefTable.Dereference(*types.NewIndirectRef(nr, gen)); err != nil {
+				return fmt.Errorf("%w: object %d: %v", ErrInvalidContent, nr, err)
+			}
 		}
 		stripObject(entry.Object)
 	}

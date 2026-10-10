@@ -94,6 +94,7 @@ import com.libraryz.data.resumePage
 import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.components.StarRating
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -499,11 +500,27 @@ private fun PageView(reader: PagedReader, pageIndex: Int, wide: Boolean, onTurn:
         var image by remember(reader, widthPx) {
             mutableStateOf<ImageBitmap?>(null)
         }
+        // A page the renderer chokes on (e.g. a broken font) shows a message
+        // instead of escaping to the UI thread and taking the app down.
+        var renderFailed by remember(reader, widthPx) { mutableStateOf(false) }
         LaunchedEffect(reader, pageIndex, widthPx) {
-            image = reader.renderPage(pageIndex, widthPx)
+            try {
+                image = reader.renderPage(pageIndex, widthPx)
+                renderFailed = false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                renderFailed = true
+            }
         }
         val current = image
-        if (current == null) {
+        if (renderFailed) {
+            Text(
+                "Couldn't render page ${pageIndex + 1}",
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
+        } else if (current == null) {
             CircularProgressIndicator()
         } else {
             Image(

@@ -14,6 +14,8 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
+
+	"github.com/kararnab/libraryZ/internal/sanitize/sanitizetest"
 )
 
 func TestSanitize_TXTPassthrough(t *testing.T) {
@@ -114,6 +116,53 @@ func TestSanitize_PDFStripsNestedKey(t *testing.T) {
 	}
 	if !pdfNamesHas(t, out, "Dests") {
 		t.Fatalf("post-sanitize PDF lost legitimate /Names/Dests")
+	}
+}
+
+func TestSanitize_PDFObjectStreamRoundTrips(t *testing.T) {
+	// pdfcpu loads object-stream objects lazily. Written back undecoded,
+	// they were copied raw and objects referenced only from them were
+	// dropped: here the font (7), reached through the resources (6).
+	body := sanitizetest.ObjStmPDF(
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 6 0 R >>",
+		"<< /Font << /F1 7 0 R >> >>",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+	clean, err := Sanitize("pdf", bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	ctx, page := pdfPage1(t, mustReadAll(t, clean))
+	res, err := ctx.DereferenceDict(page["Resources"])
+	if err != nil || res == nil {
+		t.Fatalf("page lost its resources: %v (err %v)", res, err)
+	}
+	font, err := ctx.DereferenceDict(res.DictEntry("Font")["F1"])
+	if err != nil || font == nil || font.NameEntry("BaseFont") == nil {
+		t.Fatalf("page font F1 lost: %v (err %v)", font, err)
+	}
+}
+
+func TestSanitize_PDFStripsKeyInObjectStream(t *testing.T) {
+	// The page is a plain object; its link annotation (object 6), with an
+	// /AA JavaScript action, lives in an object stream.
+	body := sanitizetest.ObjStmPDF(
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [6 0 R] >>",
+		"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /AA << /O << /S /JavaScript /JS (app.alert('owned')) >> >> >>")
+	clean, err := Sanitize("pdf", bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	ctx, page := pdfPage1(t, mustReadAll(t, clean))
+	annots, err := ctx.DereferenceArray(page["Annots"])
+	if err != nil || len(annots) != 1 {
+		t.Fatalf("page lost its annotation: %v (err %v)", annots, err)
+	}
+	annot, err := ctx.DereferenceDict(annots[0])
+	if err != nil || annot == nil {
+		t.Fatalf("annotation: %v (err %v)", annot, err)
+	}
+	if _, has := annot.Find("AA"); has {
+		t.Fatalf("post-sanitize annotation still has /AA")
 	}
 }
 
@@ -299,6 +348,20 @@ func pdfNamesHas(t *testing.T, body []byte, key string) bool {
 		return ok
 	}
 	return false
+}
+
+// pdfPage1 validates body and returns it with its first page dict.
+func pdfPage1(t *testing.T, body []byte) (*model.Context, types.Dict) {
+	t.Helper()
+	ctx, err := api.ReadAndValidate(context.Background(), bytes.NewReader(body), pdfConf())
+	if err != nil {
+		t.Fatalf("sanitized PDF invalid: %v", err)
+	}
+	page, _, _, err := ctx.PageDict(context.Background(), 1, false)
+	if err != nil || page == nil {
+		t.Fatalf("PageDict(1): %v", err)
+	}
+	return ctx, page
 }
 
 func mustReadAll(t *testing.T, r io.Reader) []byte {
