@@ -86,6 +86,17 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   modal. Optimized with pngquant (~75% size reduction).
 
 ### Changed
+- **Frontend toolchain upgrade.** Kotlin 2.0.21 → 2.4.21, Compose
+  Multiplatform 1.7.3 → 1.12.1, AGP 8.7.3 → 9.4.1, Gradle 8.14.3 → 9.8.1,
+  compileSdk/targetSdk 35 → 37, plus Ktor 3.6.0, kotlinx-coroutines 1.11.0,
+  kotlinx-serialization 1.11.0, kotlinx-browser 0.5.0, PDFBox 3.0.8 and
+  current androidx activity/lifecycle. AGP 9 forbids
+  `com.android.application` in a KMP module, so the Android app shell
+  (`MainActivity`, manifest, res) moved to a new `:androidApp` module and
+  `:composeApp` uses `com.android.kotlin.multiplatform.library`. The APK
+  task is now `:androidApp:assembleDebug`. The `iosX64` target is gone
+  (Compose dropped it). iOS sources now compile on Linux, which caught a
+  wrong `PDFDisplayBox` constant in the iOS PDF reader.
 - **Search results are ranked by relevance** on Postgres (`ts_rank` over a
   title > subtitle/authors > description weighted vector) and accept
   `"phrases"`, `or` and `-exclusions`; the sqlite fallback approximates the

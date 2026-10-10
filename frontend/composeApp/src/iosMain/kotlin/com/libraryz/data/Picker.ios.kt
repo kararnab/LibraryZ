@@ -12,7 +12,8 @@ import platform.UIKit.UIDocumentPickerViewController
 import platform.UniformTypeIdentifiers.UTTypeItem
 import platform.darwin.NSObject
 
-// Drafted, not yet compiled — iosMain only links on macOS. Verify on a Mac.
+// Compiles on Linux (Kotlin >= 2.4 builds iOS klibs off-Mac) but has never
+// run — linking and on-device checks still need a Mac.
 //
 // Presents a UIDocumentPickerViewController over the root view controller and
 // reads the chosen file into a PickedFile. The delegate is held in a remember

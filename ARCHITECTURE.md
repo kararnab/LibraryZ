@@ -355,7 +355,7 @@ A few non-obvious decisions worth knowing before you contribute:
   Look for `awaitHandle` / `awaitBytes`. Don't replace those with `.await()`.
 - **Android cleartext is allow-listed** to `10.0.2.2` (emulator),
   `localhost`, `127.0.0.1`, and a dev LAN IP, in
-  `composeApp/src/androidMain/res/xml/network_security_config.xml`. For
+  `androidApp/src/main/res/xml/network_security_config.xml`. For
   real-device runs against a non-LAN backend, change `BaseUrl.android.kt`
   and add the host to the cleartext config.
 - **iOS targets only link on macOS.** On Linux/Windows the iOS source

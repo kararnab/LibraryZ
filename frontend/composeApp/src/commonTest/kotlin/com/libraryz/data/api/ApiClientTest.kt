@@ -417,7 +417,7 @@ class ApiClientTest {
         assertEquals("Mira K", c.contributorName)
         // Body must wrap the patch under "patch" and preserve value types.
         assertTrue(bodyText!!.contains("\"patch\""), "body missing patch wrapper: $bodyText")
-        assertTrue(bodyText!!.contains("\"publication_year\":1996"),
+        assertTrue(bodyText.contains("\"publication_year\":1996"),
             "expected int-typed year in patch: $bodyText")
     }
 
@@ -496,8 +496,8 @@ class ApiClientTest {
         assertEquals("reading", ub.status)
         // Only the set fields ride the wire — null fields are dropped.
         assertTrue(bodyText!!.contains("\"status\":\"reading\""), "body: $bodyText")
-        assertTrue(bodyText!!.contains("\"progress_percent\":40"), "body: $bodyText")
-        assertTrue(!bodyText!!.contains("\"rating\""), "null fields must not serialize: $bodyText")
+        assertTrue(bodyText.contains("\"progress_percent\":40"), "body: $bodyText")
+        assertTrue(!bodyText.contains("\"rating\""), "null fields must not serialize: $bodyText")
     }
 
     @Test

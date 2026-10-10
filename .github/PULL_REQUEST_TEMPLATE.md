@@ -23,6 +23,7 @@ go test ./...
 - [ ] Tests added or updated (or I've said why none are needed).
 - [ ] `go test ./...` passes locally.
 - [ ] If I touched the frontend, the relevant `./gradlew :composeApp:compile*`
+      / `:androidApp:assembleDebug`
       target still passes.
 - [ ] No new Postgres-only column types without a dialect gate.
 - [ ] No new storage access that bypasses `internal/storage.Storage`.
