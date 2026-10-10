@@ -174,19 +174,23 @@ fun AuthGateScreen(
                             inFlight = true
                             scope.launch {
                                 try {
-                                    if (tab == 1) {
+                                    // Sign-up signs in too: it returns a token pair.
+                                    val session = if (tab == 1) {
                                         api.signUp(SignUpRequest(email = e, password = p, name = n))
+                                    } else {
+                                        api.login(LoginRequest(email = e, password = p))
                                     }
-                                    val session = api.login(LoginRequest(email = e, password = p))
                                     onAuthenticated(session)
                                 } catch (ex: ApiException) {
                                     error = when (ex.status) {
                                         401 -> "Incorrect email or password"
-                                        409, 500 -> if (tab == 1)
-                                            "Could not create account — email may already exist."
+                                        // Server text is user-facing: password too short,
+                                        // email already registered, too many attempts.
+                                        400, 409, 429 -> ex.userMessage
+                                        else -> if (tab == 1)
+                                            "Could not create account (${ex.status})."
                                         else
                                             "Login failed (${ex.status})."
-                                        else -> "Login failed (${ex.status})."
                                     }
                                 } catch (ex: Throwable) {
                                     error = "Network error: ${ex.message ?: "unknown"}"

@@ -9,7 +9,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Holds the current JWT in memory plus mirrors it to a [TokenStore], and
+ * Holds the current session (access + refresh token) in memory, mirrors it
+ * to a [TokenStore], and
  * (once a [userFetcher] is attached) keeps a refreshed [User] snapshot
  * for the UI to gate moderator-only affordances on.
  *
@@ -25,8 +26,7 @@ import kotlinx.serialization.json.Json
  *   raises [sessionExpired] ([onSessionExpired]) so the UI can return to
  *   sign-in and say why.
  *
- * Persistence: the store holds `{"access":…,"refresh":…}`; a bare token
- * (no refresh token, from older backends) is still accepted on load.
+ * Persistence: the store holds `{"access":…,"refresh":…}`.
  *
  * The userFetcher is a `suspend () -> User?` set via [setUserFetcher]
  * after construction because ApiClient itself needs `tokenProvider = {
@@ -113,13 +113,9 @@ private data class StoredSession(val access: String, val refresh: String? = null
 private val sessionJson = Json { ignoreUnknownKeys = true }
 
 private fun encodeSession(s: Session): String =
-    if (s.refreshToken == null) s.token
-    else sessionJson.encodeToString(StoredSession.serializer(), StoredSession(s.token, s.refreshToken))
+    sessionJson.encodeToString(StoredSession.serializer(), StoredSession(s.token, s.refreshToken))
 
-private fun decodeSession(raw: String): Session? {
-    if (raw.isBlank()) return null
-    if (!raw.trimStart().startsWith("{")) return Session(raw)
-    return runCatching { sessionJson.decodeFromString(StoredSession.serializer(), raw) }
+private fun decodeSession(raw: String): Session? =
+    runCatching { sessionJson.decodeFromString(StoredSession.serializer(), raw) }
         .getOrNull()
         ?.let { Session(it.access, it.refresh) }
-}

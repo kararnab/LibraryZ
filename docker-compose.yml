@@ -49,10 +49,11 @@ services:
       AUTH_TYPE: plain
       LISTEN_PORT: "6432"
 
-  # Redis is the shared rate-limit counter store for Kong (Slice 6.2). With
-  # multiple libraryz/Kong instances, a `local` policy would let an attacker
-  # multiply their allowance by the replica count — Redis keeps the counters
-  # global. Not used for anything else.
+  # Redis holds the shared rate-limit counters: Kong's per-IP limits (Slice
+  # 6.2) and libraryz's per-account / per-IP login throttling (iam, Slice 7.5).
+  # With multiple instances, per-process counters would let an attacker
+  # multiply their allowance by the replica count — Redis keeps them global.
+  # Nothing durable lives here; losing it only resets the counters.
   redis:
     image: redis:7-alpine
     healthcheck:
@@ -129,6 +130,8 @@ services:
         condition: service_started
       rustfs:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # `pgbouncer` / `postgres` / `rustfs` are the service hostnames on the
       # compose network. libraryz talks to Postgres through pgbouncer
@@ -150,9 +153,27 @@ services:
       # value here; tokens signed with either verify. Drop it once old access
       # tokens have expired (LIBRARYZ_ACCESS_TOKEN_TTL, default 15m).
       # JWT_SECRET_PREVIOUS: ""
-      # Token lifetimes (Go durations; defaults shown).
+      # Token lifetimes (Go durations; defaults shown). A session ends after
+      # LIBRARYZ_REFRESH_TOKEN_TTL unused (each refresh restarts it), and at
+      # LIBRARYZ_SESSION_MAX_AGE regardless.
       # LIBRARYZ_ACCESS_TOKEN_TTL: "15m"
       # LIBRARYZ_REFRESH_TOKEN_TTL: "720h"
+      # LIBRARYZ_SESSION_MAX_AGE: "8760h"
+      # Access tokens are stateless by default: logout / revocation stops
+      # refreshing at once, but an issued access token works until it expires.
+      # "true" checks the session on every request (one DB lookup) instead.
+      # LIBRARYZ_VERIFY_SESSION_ON_ACCESS: "true"
+      # Roles and disabled accounts are re-read on every request (two small
+      # lookups); "false" uses the access token's roles (≤15 min stale).
+      # LIBRARYZ_LOAD_SUBJECT_ON_ACCESS: "true"
+      # Login throttling (5 failures per account, 100 per IP, per 15 minutes,
+      # then back-off) shared across replicas. Unset = per-process memory.
+      LIBRARYZ_REDIS_ADDR: "redis:6379"
+      # Kong (and anything else on the compose network) is a trusted proxy:
+      # its X-Forwarded-For names the real client IP for per-IP throttling.
+      # Without this every client would share Kong's IP. In production, list
+      # only your gateway / load-balancer networks.
+      LIBRARYZ_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # libraryz uses S3 when LIBRARYZ_S3_ENDPOINT is set, otherwise
       # falls back to a local-filesystem store under LIBRARYZ_STORAGE_DIR.
       # Setting the endpoint here is the entire signal — there is no separate

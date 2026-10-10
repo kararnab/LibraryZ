@@ -7,9 +7,10 @@ _transform: true
 # container is no longer exposed on the host.
 #
 # Rate-limit policy is `redis` so counters are shared across libraryz instances
-# (a `local` policy would reset per replica). All limits are per-IP for now —
-# per-user requires Kong consumers + an `iss`/`kid` claim in our JWT (PLAN.md
-# item 93); revisit if abuse warrants it.
+# (a `local` policy would reset per replica). All limits here are per-IP. Per-
+# account login throttling lives in the app (iam's limiter, also on Redis), on
+# top of these. Per-user Kong limits would need Kong consumers keyed on our
+# JWT's `iss`/`kid` (PLAN.md item 93); revisit if abuse warrants it.
 #
 # Plugin precedence is route > service > global, so the upload route's larger
 # request-size-limiting config overrides the service-wide 5 MB ceiling, and
@@ -93,11 +94,13 @@ services:
               limit_by: ip
               fault_tolerant: true
 
-      # POST /auth/refresh, /auth/logout — clients refresh roughly every
-      # 15 minutes per session, so this is generous; it only blunts guessing
-      # (refresh tokens are 256-bit random, so guessing is hopeless anyway).
-      - name: auth-session
-        paths: ["~/auth/(refresh|logout)$"]
+      # POST /auth/refresh — clients refresh about once per access-token
+      # lifetime (15 min) per session, so this is generous. Refresh tokens are
+      # 256-bit random, so guessing is hopeless; the limit only blunts abuse,
+      # and a replayed token revokes its whole session in the app (iam reuse
+      # detection).
+      - name: auth-refresh
+        paths: ["~/auth/refresh$"]
         methods: [POST]
         strip_path: false
         plugins:
@@ -105,6 +108,22 @@ services:
             config:
               minute: 20
               hour: 300
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+
+      # POST /auth/logout — cheap and unauthenticated (takes a refresh token).
+      - name: auth-logout
+        paths: ["~/auth/logout$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 10
               policy: redis
               redis:
                 host: redis

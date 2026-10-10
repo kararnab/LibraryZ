@@ -116,15 +116,15 @@ signup_idempotent() {
 
 login_token() {
   local email="$1"
-  local tmp; tmp=$(mktemp); local hdr; hdr=$(mktemp)
+  local tmp; tmp=$(mktemp)
   local code
-  code=$(curl -sS -o "$tmp" -D "$hdr" -w '%{http_code}' -X POST "$BASE/auth/login" \
+  code=$(curl -sS -o "$tmp" -w '%{http_code}' -X POST "$BASE/auth/login" \
     -H 'Content-Type: application/json' \
     -d "$(jq -n --arg e "$email" --arg p "$PASS" '{email:$e, password:$p}')" \
     || echo "000")
   if [ "$code" != "200" ]; then
     local body; body=$(cat "$tmp")
-    rm -f "$tmp" "$hdr"
+    rm -f "$tmp"
     if [ "$code" = "429" ]; then
       warn "login $email → 429 rate-limited (Kong: 5/min, 30/hour per IP)"
       warn "  cached tokens at $CACHE_FILE are reused on re-runs — re-run as-is in a minute"
@@ -133,16 +133,13 @@ login_token() {
     fi
     return 1
   fi
-  # Extract the Bearer token from the response Authorization header.
-  # Use character classes for case-insensitivity (works in mawk + gawk +
-  # busybox awk — IGNORECASE is a gawk-only extension).
+  # The token pair is in the JSON body. Only the access token is cached:
+  # it lasts 15 minutes, which covers a seed run.
   local token
-  token=$(awk '/^[Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+/ {
-                 sub(/^[Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+/, "");
-                 sub(/[\r\n]+$/, ""); print; exit }' "$hdr")
-  rm -f "$tmp" "$hdr"
+  token=$(jq -r '.access_token // empty' "$tmp")
+  rm -f "$tmp"
   if [ -z "$token" ]; then
-    warn "login $email → 200 but no Authorization header in response"
+    warn "login $email → 200 but no access_token in the response"
     return 1
   fi
   printf '%s\n' "$token"
@@ -380,7 +377,7 @@ submit_contrib() {
 # ── Moderator promotion ───────────────────────────────────────────────────
 if [ "$DO_MOD" = "1" ]; then
   say "Promoting $MOD_EMAIL to moderator"
-  SQL="UPDATE users SET is_moderator = true WHERE email = '$MOD_EMAIL';"
+  SQL="INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '$MOD_EMAIL' ON CONFLICT DO NOTHING;"
   if docker compose ps postgres 2>/dev/null | grep -qE 'Up|running'; then
     docker compose exec -T postgres psql -U user -d libraryz -c "$SQL" >/dev/null
     ok "promoted via docker compose"

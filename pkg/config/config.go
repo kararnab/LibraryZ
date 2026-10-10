@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -28,7 +30,34 @@ type Config struct {
 	// with a refresh token that lives RefreshTokenTTL.
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
-	MaxUploadBytes  int64
+	// SessionMaxAge caps a session's total lifetime however often it's
+	// refreshed (LIBRARYZ_SESSION_MAX_AGE, default 365 days).
+	SessionMaxAge time.Duration
+	// VerifySessionOnAccess checks the session behind every access token,
+	// so logout / revocation is immediate rather than at access-token
+	// expiry. One extra lookup per authenticated request. Off by default:
+	// LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true.
+	VerifySessionOnAccess bool
+	// LoadSubjectOnAccess reloads the user's roles and disabled flag on
+	// every authenticated request, so promotions, demotions and account
+	// disabling apply at once. On by default; LIBRARYZ_LOAD_SUBJECT_ON_ACCESS
+	// =false saves two lookups per request, and roles then come from the
+	// access token (up to its TTL stale).
+	LoadSubjectOnAccess bool
+	// SessionPurgeInterval is how often expired sessions are deleted.
+	SessionPurgeInterval time.Duration
+	// RedisAddr (host:port) backs the login throttles shared by every
+	// instance (LIBRARYZ_REDIS_ADDR, plus optional LIBRARYZ_REDIS_PASSWORD).
+	// Empty means per-process in-memory throttles — fine for one instance.
+	RedisAddr     string
+	RedisPassword string
+	// TrustedProxies (LIBRARYZ_TRUSTED_PROXIES, comma-separated CIDRs) are
+	// the proxies whose X-Forwarded-For is believed for the client IP. Set
+	// it behind Kong / a load balancer, or every client shares the proxy's
+	// IP for per-IP login throttling.
+	TrustedProxies    []netip.Prefix
+	trustedProxiesErr error
+	MaxUploadBytes    int64
 	// AllowedOrigins is the CORS allowlist (exact-match) for browser clients.
 	// Empty means "dev mode": only localhost / 127.0.0.1 origins are allowed.
 	// Set LIBRARYZ_ALLOWED_ORIGINS (comma-separated) in production.
@@ -79,7 +108,10 @@ type Config struct {
 }
 
 func Load() *Config {
+	proxies, proxiesErr := parsePrefixes(os.Getenv("LIBRARYZ_TRUSTED_PROXIES"))
 	return &Config{
+		TrustedProxies:         proxies,
+		trustedProxiesErr:      proxiesErr,
 		DatabaseURL:            GetDatabaseUrl(),
 		MigrateDatabaseURL:     getMigrateDatabaseURL(),
 		AutoMigrate:            os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
@@ -89,6 +121,12 @@ func Load() *Config {
 		JWTPreviousSecret:      GetJWTPreviousSecret(),
 		AccessTokenTTL:         getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:        getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		SessionMaxAge:          getDurationEnv("LIBRARYZ_SESSION_MAX_AGE", 365*24*time.Hour),
+		VerifySessionOnAccess:  os.Getenv("LIBRARYZ_VERIFY_SESSION_ON_ACCESS") == "true",
+		LoadSubjectOnAccess:    os.Getenv("LIBRARYZ_LOAD_SUBJECT_ON_ACCESS") != "false",
+		SessionPurgeInterval:   getDurationEnv("LIBRARYZ_SESSION_PURGE_INTERVAL", time.Hour),
+		RedisAddr:              os.Getenv("LIBRARYZ_REDIS_ADDR"),
+		RedisPassword:          os.Getenv("LIBRARYZ_REDIS_PASSWORD"),
 		MaxUploadBytes:         GetMaxUploadBytes(),
 		AllowedOrigins:         GetAllowedOrigins(),
 		CORSAllowPrivateLAN:    os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
@@ -238,8 +276,36 @@ func (c *Config) Validate() error {
 		return errors.New("JWT_SECRET_PREVIOUS must be at least 32 bytes when set")
 	case c.JWTPreviousSecret == c.JWTSecret:
 		return errors.New("JWT_SECRET_PREVIOUS must differ from JWT_SECRET")
+	case c.trustedProxiesErr != nil:
+		return c.trustedProxiesErr
 	}
 	return nil
+}
+
+// parsePrefixes parses a comma-separated list of CIDRs; a bare address
+// means just that host.
+func parsePrefixes(v string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.Split(v, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if !strings.Contains(f, "/") {
+			a, err := netip.ParseAddr(f)
+			if err != nil {
+				return nil, fmt.Errorf("LIBRARYZ_TRUSTED_PROXIES: %q: %w", f, err)
+			}
+			out = append(out, netip.PrefixFrom(a, a.BitLen()))
+			continue
+		}
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			return nil, fmt.Errorf("LIBRARYZ_TRUSTED_PROXIES: %q: %w", f, err)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 func GetMaxUploadBytes() int64 {

@@ -8,11 +8,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+/** The store's format: AuthState persists both tokens as JSON. */
+private fun stored(access: String, refresh: String = "r") = """{"access":"$access","refresh":"$refresh"}"""
+
 class AuthStateTest {
 
     @Test
     fun bootstrapWithSavedTokenRestoresSession() = runTest {
-        val store = FakeTokenStore(initial = "x.y.z")
+        val store = FakeTokenStore(initial = stored("x.y.z"))
         val auth = AuthState(store)
 
         assertFalse(auth.bootstrapped)
@@ -39,7 +42,7 @@ class AuthStateTest {
 
     @Test
     fun bootstrapIsIdempotent() = runTest {
-        val store = FakeTokenStore(initial = "tok")
+        val store = FakeTokenStore(initial = stored("tok"))
         val auth = AuthState(store)
 
         auth.bootstrap()
@@ -56,17 +59,26 @@ class AuthStateTest {
         val store = FakeTokenStore()
         val auth = AuthState(store)
 
-        auth.signIn(Session("token-1"))
+        auth.signIn(Session("token-1", "refresh-1"))
 
-        assertEquals("token-1", store.stored)
+        assertEquals(stored("token-1", "refresh-1"), store.stored)
         assertEquals(1, store.saveCount)
         assertTrue(auth.isAuthenticated)
         assertEquals("token-1", auth.token)
+        assertEquals("refresh-1", auth.refreshToken)
+    }
+
+    @Test
+    fun unreadableStoredSessionIsIgnored() = runTest {
+        val auth = AuthState(FakeTokenStore(initial = "not-json"))
+        auth.bootstrap()
+        assertTrue(auth.bootstrapped)
+        assertFalse(auth.isAuthenticated)
     }
 
     @Test
     fun clearWipesMemoryAndStore() = runTest {
-        val store = FakeTokenStore(initial = "x")
+        val store = FakeTokenStore(initial = stored("x"))
         val auth = AuthState(store)
         auth.bootstrap()
 
@@ -80,7 +92,7 @@ class AuthStateTest {
 
     @Test
     fun bootstrapWithSavedTokenPopulatesUserViaFetcher() = runTest {
-        val store = FakeTokenStore(initial = "tok")
+        val store = FakeTokenStore(initial = stored("tok"))
         val auth = AuthState(store)
         val mod = User(id = 1, email = "m@x.com", name = "M", isModerator = true)
         auth.setUserFetcher { mod }
@@ -110,7 +122,7 @@ class AuthStateTest {
 
     @Test
     fun bootstrapSwallowsFetcherFailureButKeepsSession() = runTest {
-        val store = FakeTokenStore(initial = "tok")
+        val store = FakeTokenStore(initial = stored("tok"))
         val auth = AuthState(store)
         auth.setUserFetcher { throw RuntimeException("offline") }
 
