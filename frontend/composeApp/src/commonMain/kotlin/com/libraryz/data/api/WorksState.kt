@@ -53,6 +53,11 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
     // loadMore) is discarded instead of overwriting the newer one.
     private var generation = 0
 
+    // True while a refresh / search waits for its first page. The old list
+    // is still on screen then (and endReached was reset), so the list asks
+    // for more; that must not page the new query onto the old items.
+    private var replacing = false
+
     // Works fetched one by one ([refreshOne]), whatever list is showing.
     private val opened = mutableStateMapOf<String, Work>()
 
@@ -75,6 +80,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         searchQuery = null
         resetPaging()
         val gen = generation
+        replacing = true
         try {
             val page = fetchPage(null, 0)
             if (gen != generation) return // a newer refresh or search replaced it
@@ -82,13 +88,15 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             endReached = page.size < pageSize
         } catch (e: Throwable) {
             if (gen == generation) error = e.message ?: "Failed to load works"
+        } finally {
+            if (gen == generation) replacing = false
         }
     }
 
-    /** Appends the next page of the current list or search. No-op while one is loading or at the end. */
+    /** Appends the next page of the current list or search. No-op while one is loading, a new list is loading, or at the end. */
     suspend fun loadMore() {
         val current = items ?: return
-        if (loadingMore || endReached) return
+        if (loadingMore || endReached || replacing) return
         val gen = generation
         val query = searchQuery
         loadingMore = true
@@ -119,6 +127,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         searchQuery = trimmed
         resetPaging()
         val gen = generation
+        replacing = true
         try {
             val page = fetchPage(trimmed, 0)
             if (gen != generation) return // a newer refresh or search replaced it
@@ -126,6 +135,8 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             endReached = page.size < pageSize
         } catch (e: Throwable) {
             if (gen == generation) error = e.message ?: "Search failed"
+        } finally {
+            if (gen == generation) replacing = false
         }
     }
 

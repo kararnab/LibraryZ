@@ -393,6 +393,40 @@ class WorksStateTest {
     }
 
     @Test
+    fun loadMoreDuringANewSearchDoesNotRestoreTheOldList() = runTest {
+        // A new search resets endReached while the old list is still shown,
+        // so the list asks for more; that must not page the new query onto
+        // the old items (it showed the whole catalog as "12 results").
+        val searchRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val payload = if (req.url.encodedPath == "/works") {
+                worksJson(0..2)
+            } else if (req.url.parameters["offset"] == "0") {
+                searchRequested.complete(Unit)
+                gate.await()
+                worksJson(100..100)
+            } else {
+                "[]"
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 50)
+        state.refresh()
+        assertTrue(state.endReached)
+
+        val search = async { state.search("aigner") }
+        searchRequested.await()
+        state.loadMore() // the list is near its end and endReached was reset
+        gate.complete(Unit)
+        search.await()
+
+        assertEquals(listOf("w100"), state.items?.map { it.id })
+        assertTrue(engine.requestHistory.none { it.url.parameters["offset"] == "3" })
+    }
+
+    @Test
     fun findKeepsAnOpenedWorkThatASearchLeavesOut() = runTest {
         val engine = MockEngine { req ->
             val payload = when (req.url.encodedPath) {
