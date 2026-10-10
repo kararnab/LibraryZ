@@ -632,6 +632,7 @@ internal fun Root(
                             snackbar.showSnackbar("File picker not yet implemented on this platform.")
                         }
                     },
+                    loadQuota = { size -> api.uploadQuota(size) },
                     onSubmit = { submission, onProgress ->
                         when (submission) {
                             is UploadSubmission.NewWork -> {

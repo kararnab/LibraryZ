@@ -39,8 +39,11 @@ info:
 
     **Rate limits.** In the compose/production setup Kong enforces per-IP
     limits (login 5/min, signup 3/min, refresh 20/min, logout 10/min,
-    edition upload 10/hour, everything else 60/min) and answers `429` when
-    exceeded. On top of that the app throttles failed logins per account
+    edition upload 30/hour, everything else 60/min) and answers `429` when
+    exceeded. Edition uploads also count against a per-account quota over a
+    rolling window (default per day: 20 files / 2 GiB, or 5 files / 500 MiB
+    for accounts that are unverified or under a week old; moderators are
+    exempt); see `GET /me/upload-quota`. On top of that the app throttles failed logins per account
     (5 failures in 15 minutes) and per IP (100), with a growing back-off;
     those `429`s carry `Retry-After`. Request bodies are capped at 5 MB
     except edition uploads (500 MiB).
@@ -692,7 +695,23 @@ paths:
             text/plain:
               schema: { type: string }
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          description: >
+            Over the caller's upload quota (checked before the body is read,
+            and again with the stored size), or Kong's per-IP limit. The
+            quota's `429` has a `text/plain` body; both carry `Retry-After`.
+            Nothing is recorded.
+          headers:
+            Retry-After:
+              description: Seconds until the upload would fit
+              schema: { type: integer }
+          content:
+            text/plain:
+              schema: { type: string, example: "upload limit reached: 20 files or 2 GiB per day" }
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: API rate limit exceeded }
 
   /editions/{id}:
     get:
@@ -1069,6 +1088,39 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /me/upload-quota:
+    get:
+      operationId: getUploadQuota
+      tags: [editions]
+      summary: The caller's upload allowance, and whether a file fits now
+      description: |
+        Counts the editions the caller uploaded in the rolling window
+        (taken-down ones included; rejected attempts don't count). Clients
+        call it with the chosen file's size before uploading, so a used-up
+        allowance shows before a long upload rather than after it.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: size
+          description: Size in bytes of the file about to be uploaded (default 0)
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/me/upload-quota?size=1048576" -H "Authorization: Bearer $TOKEN"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadQuota" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /me/recommendations:
     get:
       operationId: listRecommendations
@@ -1320,6 +1372,32 @@ components:
       properties:
         email:    { type: string, format: email }
         password: { type: string }
+
+    UploadQuota:
+      type: object
+      required: [tier, unlimited, fits, retry_after_seconds]
+      properties:
+        tier:
+          type: string
+          enum: [standard, new, moderator, unlimited]
+          description: >
+            `new` = unverified email or account younger than the new-account
+            age; `unlimited` = no quota configured on this server.
+        unlimited: { type: boolean, description: "True for moderators and when no quota is configured; the limit fields are then 0." }
+        window_seconds: { type: integer, format: int64 }
+        files_limit: { type: integer }
+        files_used: { type: integer }
+        bytes_limit: { type: integer, format: int64 }
+        bytes_used: { type: integer, format: int64 }
+        next_free_at:
+          type: string
+          format: date-time
+          description: When the oldest upload in the window ages out; absent when there is none.
+        fits: { type: boolean, description: "Whether a file of the requested `size` would be accepted now." }
+        retry_after_seconds:
+          type: integer
+          format: int64
+          description: Seconds until it would fit (0 when it fits; the whole window if it never can).
 
     DuplicateEdition:
       type: object

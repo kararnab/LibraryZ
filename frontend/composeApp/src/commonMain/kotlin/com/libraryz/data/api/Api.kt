@@ -4,6 +4,7 @@ import com.libraryz.data.Contribution
 import com.libraryz.data.Edition
 import com.libraryz.data.Recommendation
 import com.libraryz.data.User
+import com.libraryz.data.UploadQuota
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import kotlinx.serialization.json.JsonElement
@@ -165,8 +166,13 @@ private fun percentDecodeUtf8(s: String): String? {
     return out.toByteArray().decodeToString()
 }
 
-class ApiException(val status: Int, val body: String, message: String) :
-    RuntimeException("$message [HTTP $status]: $body") {
+class ApiException(
+    val status: Int,
+    val body: String,
+    message: String,
+    /** The `Retry-After` seconds on a 429, when the server sent one. */
+    val retryAfterSeconds: Long? = null,
+) : RuntimeException("$message [HTTP $status]: $body") {
     /**
      * What to show the user. 4xx bodies from the backend are deliberately
      * user-facing validation messages (e.g. "invalid patch: title must not
@@ -579,6 +585,20 @@ class ApiClient(
         }
     }
 
+    /**
+     * Authenticated. The caller's upload allowance, and whether a file of
+     * [size] bytes fits in it right now.
+     */
+    suspend fun uploadQuota(size: Long = 0): UploadQuota {
+        val resp = client.get("$baseUrl/me/upload-quota") {
+            parameter("size", size)
+        }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "upload quota failed")
+        }
+        return resp.body()
+    }
+
     /** Public. Returns the raw edition bytes. */
     suspend fun downloadEdition(id: String): ByteArray = downloadEditionFile(id).bytes
 
@@ -646,7 +666,10 @@ class ApiClient(
             throw DuplicateEditionException(dup?.editionId, dup?.workId)
         }
         if (resp.status != HttpStatusCode.Created) {
-            throw ApiException(resp.status.value, resp.bodyAsText(), "upload edition failed")
+            throw ApiException(
+                resp.status.value, resp.bodyAsText(), "upload edition failed",
+                retryAfterSeconds = resp.headers[HttpHeaders.RetryAfter]?.trim()?.toLongOrNull(),
+            )
         }
         return resp.body()
     }

@@ -185,6 +185,10 @@ services:
               fault_tolerant: true
 
       # POST /works/{id}/editions — large multipart upload (≤500 MiB).
+      # The real allowance is the app's per-account quota (catalog.UploadQuota,
+      # LIBRARYZ_UPLOAD_QUOTA_*); this per-IP limit is only a flood guard, set
+      # well above it so users sharing an IP (NAT, campus) aren't capped as a
+      # group.
       # request_buffering off so the body streams to libraryz instead of being
       # spooled in Kong. allowed_payload_size is slightly above the app cap
       # (LIBRARYZ_MAX_UPLOAD_BYTES = 500 MiB ≈ 524 MB) so libraryz enforces the
@@ -197,7 +201,7 @@ services:
         plugins:
           - name: rate-limiting
             config:
-              hour: 10
+              hour: 30
               policy: redis
               redis:
                 host: redis

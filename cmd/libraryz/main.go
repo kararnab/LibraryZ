@@ -102,9 +102,15 @@ func main() {
 		log.Fatalf("mail: %v", err)
 	}
 	h, err := server.New(server.Deps{
-		DB:                     dbConn,
-		Storage:                store,
-		MaxUploadBytes:         cfg.MaxUploadBytes,
+		DB:             dbConn,
+		Storage:        store,
+		MaxUploadBytes: cfg.MaxUploadBytes,
+		UploadQuota: catalog.UploadQuota{
+			Window:        cfg.UploadQuotaWindow,
+			Standard:      catalog.QuotaLimit{Files: cfg.UploadQuotaFiles, Bytes: cfg.UploadQuotaBytes},
+			NewAccount:    catalog.QuotaLimit{Files: cfg.UploadQuotaNewFiles, Bytes: cfg.UploadQuotaNewBytes},
+			NewAccountAge: cfg.UploadQuotaNewAccountAge,
+		},
 		AllowedOrigins:         cfg.AllowedOrigins,
 		AllowPrivateLAN:        cfg.CORSAllowPrivateLAN,
 		JWTSecret:              cfg.JWTSecret,

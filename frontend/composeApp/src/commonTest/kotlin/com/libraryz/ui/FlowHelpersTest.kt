@@ -1,5 +1,6 @@
 package com.libraryz.ui
 
+import com.libraryz.data.UploadQuota
 import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.DuplicateEditionException
 import com.libraryz.ui.screens.DiffKind
@@ -11,8 +12,11 @@ import com.libraryz.ui.screens.changeSummary
 import com.libraryz.ui.screens.checkUploadFile
 import com.libraryz.ui.screens.classifyUploadError
 import com.libraryz.ui.screens.displayValue
+import com.libraryz.ui.screens.formatWait
 import com.libraryz.ui.screens.joinNatural
 import com.libraryz.ui.screens.message
+import com.libraryz.ui.screens.quotaHint
+import com.libraryz.ui.screens.rateLimitedMessage
 import com.libraryz.ui.screens.submittedAt
 import com.libraryz.ui.screens.wordDiff
 import kotlinx.serialization.json.JsonNull
@@ -21,6 +25,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class FlowHelpersTest {
 
@@ -78,7 +83,8 @@ class FlowHelpersTest {
     fun uploadErrorsMapToWhatTheSheetShows() {
         fun api(status: Int, body: String = "x") = ApiException(status, body, "upload edition failed")
         assertEquals(UploadFailure.Duplicate("w1", "This file is already in the library."), classifyUploadError(DuplicateEditionException("e1", "w1"), afterSend = true))
-        assertEquals(UploadFailure.RateLimited, classifyUploadError(api(429), afterSend = false))
+        assertEquals(UploadFailure.RateLimited(null), classifyUploadError(api(429), afterSend = false))
+        assertEquals(UploadFailure.RateLimited(60), classifyUploadError(ApiException(429, "x", "upload", retryAfterSeconds = 60), afterSend = true))
         assertEquals(UploadFailure.TooLarge, classifyUploadError(api(413), afterSend = true))
         assertEquals(UploadFailure.Unsupported, classifyUploadError(api(415), afterSend = true))
         // A 400 after the whole file arrived is the content check failing...
@@ -86,6 +92,42 @@ class FlowHelpersTest {
         // ...before that, it's a bad request.
         assertIs<UploadFailure.Other>(classifyUploadError(api(400), afterSend = false))
         assertIs<UploadFailure.Other>(classifyUploadError(RuntimeException("offline"), afterSend = false))
+    }
+
+    @Test
+    fun uploadLimitText() {
+        assertEquals("under a minute", formatWait(59))
+        assertEquals("1 min", formatWait(60))
+        assertEquals("2 min", formatWait(61))
+        assertEquals("1 h", formatWait(3600))
+        assertEquals("3 h 12 min", formatWait(3 * 3600 + 11 * 60 + 30))
+
+        val q = UploadQuota(
+            tier = "standard", windowSeconds = 86_400, filesLimit = 20, filesUsed = 19,
+            bytesLimit = 2L shl 30, bytesUsed = (2L shl 30) - (100L shl 20),
+        )
+        assertEquals("1 upload and 100.0 MB left of 20 files · 2.0 GB per day.", quotaHint(q))
+        assertNull(quotaHint(q.copy(unlimited = true)))
+        assertTrue(quotaHint(q.copy(tier = "new"))!!.endsWith("once your email is verified and the account is a week old."))
+
+        val full = UploadFailure.RateLimited(7200, q.copy(filesUsed = 20))
+        assertEquals(
+            "You can upload 20 files per day, and you’ve used them all. Try again in 1 h 30 min. Your details are kept here.",
+            rateLimitedMessage(full, fileSize = null, secondsLeft = 5400),
+        )
+        assertEquals(
+            "This file needs 300.0 MB, and 100.0 MB of your 2.0 GB per day is left. Try again later. Your details are kept here.",
+            rateLimitedMessage(UploadFailure.RateLimited(null, q), fileSize = 300L shl 20, secondsLeft = null),
+        )
+        assertEquals(
+            "This file is larger than your whole allowance of 2.0 GB per day. Choose a smaller file.",
+            rateLimitedMessage(UploadFailure.RateLimited(86_400, q), fileSize = 3L shl 30, secondsLeft = 86_400),
+        )
+        // The gateway's per-IP limit: no quota to explain it.
+        assertEquals(
+            "There have been too many uploads from your network. Try again in 5 min. Your details are kept here.",
+            rateLimitedMessage(UploadFailure.RateLimited(300), fileSize = 10, secondsLeft = 300),
+        )
     }
 
     @Test

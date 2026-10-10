@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -141,6 +142,18 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refuse before reading the body when the quota is already used up, so
+	// a client that didn't check GET /me/upload-quota first wastes as
+	// little as possible. ContentLength includes the multipart framing, so
+	// this errs slightly on the strict side; AddEdition re-checks with the
+	// stored size.
+	if err := h.service.CheckUploadQuota(r.Context(), userID, max(r.ContentLength, 0)); err != nil {
+		if !writeQuotaExceeded(w, err) {
+			httpx.ServerError(w, r, "upload quota", err)
+		}
+		return
+	}
+
 	// A large upload over a slow link can legitimately exceed the server's
 	// global ReadTimeout. Clear the read deadline for this handler so the
 	// timeout protects normal requests without truncating big uploads — abuse
@@ -218,6 +231,9 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work not found", http.StatusNotFound)
 		return
 	}
+	if writeQuotaExceeded(w, err) {
+		return
+	}
 	if errors.Is(err, ErrRemoved) {
 		// Same 409 shape as a duplicate, minus the edition/work to link to.
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -237,6 +253,62 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, ed)
+}
+
+// UploadQuotaResponse is GET /me/upload-quota's body: the status, plus
+// whether a file of the requested size fits now and, if not, when it will.
+type UploadQuotaResponse struct {
+	QuotaStatus
+	Fits              bool  `json:"fits"`
+	RetryAfterSeconds int64 `json:"retry_after_seconds"`
+}
+
+// UploadQuota is GET /me/upload-quota[?size=N]: the caller's standing
+// against their upload quota, so clients can check a file before a large
+// upload starts. size defaults to 0 (is there room for another file?).
+func (h *Handler) UploadQuota(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	var size int64
+	if v := r.URL.Query().Get("size"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			http.Error(w, "size must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		size = n
+	}
+	st, err := h.service.UploadQuotaStatus(r.Context(), userID)
+	if err != nil {
+		httpx.ServerError(w, r, "upload quota", err)
+		return
+	}
+	resp := UploadQuotaResponse{QuotaStatus: st, Fits: true}
+	var q *QuotaExceededError
+	if errors.As(st.Admit(size), &q) {
+		resp.Fits = false
+		resp.RetryAfterSeconds = retryAfterSeconds(q.RetryAfter)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func retryAfterSeconds(d time.Duration) int64 {
+	return max(int64(math.Ceil(d.Seconds())), 1)
+}
+
+// writeQuotaExceeded writes the 429 for a *QuotaExceededError, with
+// Retry-After in whole seconds, and reports whether err was one.
+func writeQuotaExceeded(w http.ResponseWriter, err error) bool {
+	var q *QuotaExceededError
+	if !errors.As(err, &q) {
+		return false
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(retryAfterSeconds(q.RetryAfter), 10))
+	http.Error(w, q.Error(), http.StatusTooManyRequests)
+	return true
 }
 
 // DuplicateEditionResponse is the 409 body for an upload whose content is
