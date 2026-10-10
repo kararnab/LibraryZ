@@ -144,6 +144,12 @@ kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(generateAssetLinks)
 compose.desktop {
     application {
         mainClass = "com.libraryz.MainKt"
+        // Lets Main.kt name the X11 window "LibraryZ" (WM_CLASS) instead of
+        // "com-libraryz-MainKt". The package only exists in Linux JDKs, so
+        // other hosts would warn about it at every launch.
+        if (System.getProperty("os.name").startsWith("Linux")) {
+            jvmArgs += "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED"
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "LibraryZ"
