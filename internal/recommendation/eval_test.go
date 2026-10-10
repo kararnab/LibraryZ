@@ -15,9 +15,34 @@ import (
 // items better than ranking by global popularity — popularity can't tell which
 // cluster a given user belongs to. Run with: go test -tags=eval ./internal/recommendation/...
 func TestMFBeatsPopularityBaseline(t *testing.T) {
-	db := newTestDB(t)
+	// Several holdout draws, not one: a single seed passed or failed by luck
+	// while the model was under-regularized, which hid the problem.
+	const seeds = 10
+	var mfTotal float64
+	for seed := int64(1); seed <= seeds; seed++ {
+		res := evaluatePlantedClusters(t, seed)
+		t.Logf("seed %2d  users=%d  MF hit@%d=%.3f prec=%.3f  |  pop hit@%d=%.3f prec=%.3f",
+			seed, res.Users, res.K, res.MFHitRate, res.MFPrecision, res.K, res.PopHitRate, res.PopPrecision)
+		if res.Users == 0 {
+			t.Fatalf("seed %d: no users evaluated", seed)
+		}
+		if !(res.MFHitRate > res.PopHitRate) {
+			t.Errorf("seed %d: expected MF hit-rate (%.3f) > popularity baseline (%.3f)", seed, res.MFHitRate, res.PopHitRate)
+		}
+		mfTotal += res.MFHitRate
+	}
+	// Each user's held-out items are exactly the unseen works of their own
+	// cluster, so a working model recovers nearly all of them.
+	if mean := mfTotal / seeds; mean < 0.9 {
+		t.Fatalf("mean MF hit-rate %.3f < 0.9 — the model isn't recovering planted clusters", mean)
+	}
+}
 
-	// 4 clusters × 5 works = 20 works; 8 users per cluster each like all 5.
+// evaluatePlantedClusters builds 4 clusters × 5 works with 8 users per cluster
+// who each like their whole cluster, then runs the holdout evaluation.
+func evaluatePlantedClusters(t *testing.T, seed int64) recommendation.EvalResult {
+	t.Helper()
+	db := newTestDB(t)
 	const clusters, perCluster, usersPerCluster = 4, 5, 8
 	works := make([][]uuid.UUID, clusters)
 	uid := uint(1)
@@ -34,20 +59,11 @@ func TestMFBeatsPopularityBaseline(t *testing.T) {
 			uid++
 		}
 	}
-
 	res, err := recommendation.Evaluate(
 		context.Background(), db, recommendation.DefaultConfig(),
-		10 /*K*/, 0.4 /*holdout*/, 7 /*seed*/)
+		10 /*K*/, 0.4 /*holdout*/, seed)
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	t.Logf("users=%d  MF hit@%d=%.3f prec=%.3f  |  pop hit@%d=%.3f prec=%.3f",
-		res.Users, res.K, res.MFHitRate, res.MFPrecision, res.K, res.PopHitRate, res.PopPrecision)
-
-	if res.Users == 0 {
-		t.Fatalf("no users evaluated")
-	}
-	if !(res.MFHitRate > res.PopHitRate) {
-		t.Fatalf("expected MF hit-rate (%.3f) > popularity baseline (%.3f)", res.MFHitRate, res.PopHitRate)
-	}
+	return res
 }

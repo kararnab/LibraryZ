@@ -7,7 +7,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/catalog"
-	"github.com/kararnab/libraryZ/internal/library"
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"gorm.io/gorm"
 )
@@ -18,14 +18,8 @@ func newTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if err := catalog.Migrate(db); err != nil {
-		t.Fatalf("catalog migrate: %v", err)
-	}
-	if err := library.Migrate(db); err != nil {
-		t.Fatalf("library migrate: %v", err)
-	}
-	if err := recommendation.Migrate(db); err != nil {
-		t.Fatalf("recommendation migrate: %v", err)
+	if err := migrations.Up(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	return db
 }

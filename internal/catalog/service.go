@@ -3,17 +3,25 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/kararnab/libraryZ/internal/middleware"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound = errors.New("not found")
+	// ErrRemoved is returned when uploading bytes identical to an edition a
+	// moderator took down — a takedown shouldn't be undone by re-uploading.
+	ErrRemoved = errors.New("this file was removed by a moderator and can't be re-uploaded")
+)
 
 // DuplicateEditionError is returned by AddEdition when the uploaded bytes
 // (after sanitization) are already stored as an edition, on this work or
@@ -93,7 +101,7 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 	if dup, err := s.findDuplicate(ctx, "", sourceSHA); err != nil {
 		return nil, err
 	} else if dup != nil {
-		return nil, &DuplicateEditionError{Existing: dup}
+		return nil, asDuplicate(dup)
 	}
 
 	obj, err := s.store.Put(ctx, r)
@@ -104,7 +112,7 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 	if dup, err := s.findDuplicate(ctx, obj.SHA256, ""); err != nil {
 		return nil, err
 	} else if dup != nil {
-		return nil, &DuplicateEditionError{Existing: dup}
+		return nil, asDuplicate(dup)
 	}
 
 	var src *string
@@ -129,11 +137,20 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		// lookups above and this insert; a unique index then rejects ours.
 		// Re-check instead of parsing dialect-specific errors.
 		if dup, findErr := s.findDuplicate(ctx, obj.SHA256, sourceSHA); findErr == nil && dup != nil {
-			return nil, &DuplicateEditionError{Existing: dup}
+			return nil, asDuplicate(dup)
 		}
 		return nil, err
 	}
 	return &ed, nil
+}
+
+// asDuplicate maps a matching edition to the error AddEdition returns: a
+// takedown can't be undone by re-uploading the same file.
+func asDuplicate(dup *Edition) error {
+	if dup.DeletedAt.Valid {
+		return ErrRemoved
+	}
+	return &DuplicateEditionError{Existing: dup}
 }
 
 // findDuplicate returns an edition whose stored-bytes hash equals sha or
@@ -151,8 +168,11 @@ func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Ed
 	default:
 		return nil, nil
 	}
+	// Unscoped: hashes stay unique across removed editions too, so a removed
+	// one must be found here (and reported as ErrRemoved by asDuplicate)
+	// rather than tripping the unique index.
 	var e Edition
-	err := q.First(&e).Error
+	err := q.Unscoped().First(&e).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -162,13 +182,16 @@ func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Ed
 	return &e, nil
 }
 
-// SearchWorks finds works whose title/authors/description match q.
+// SearchWorks finds works whose title/subtitle/authors/description match q,
+// most relevant first.
 //
-// Driver-aware: on Postgres uses the `search_vector` tsvector column +
-// GIN index installed by MigratePostgresExtras; on sqlite (the test DB)
-// falls back to `LOWER(col) LIKE LOWER(pattern)` across all three text
-// columns. Both paths order by `created_at DESC` for parity — ts_rank
-// ranking is a follow-up once there's a real corpus to evaluate against.
+// Driver-aware: on Postgres it matches the weighted `search_vector` tsvector
+// (GIN-indexed; see internal/migrations) with websearch_to_tsquery — so
+// users can type `"exact phrase"`, `or`, and `-exclude` — and orders by
+// ts_rank, which prefers title hits over author hits over description hits.
+// On sqlite (the test DB) it falls back to `LOWER(col) LIKE` and
+// approximates the ranking: title matches, then subtitle/author matches,
+// then description-only matches. Ties break newest-first on both.
 //
 // Empty q is the handler's concern (returns 400); the service treats it
 // as a no-op returning an empty slice rather than scanning the table.
@@ -178,15 +201,21 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 		return []Work{}, nil
 	}
 	var works []Work
-	db := s.db.WithContext(ctx).Preload("Editions").Order("created_at DESC")
+	db := s.db.WithContext(ctx).Preload("Editions")
 	if s.db.Dialector.Name() == "postgres" {
-		db = db.Where("search_vector @@ plainto_tsquery('simple', ?)", q)
+		const tsq = "websearch_to_tsquery('simple', ?)"
+		db = db.Where("search_vector @@ "+tsq, q).
+			Clauses(orderBy("ts_rank(search_vector, "+tsq+") DESC, created_at DESC", q))
 	} else {
-		pattern := "%" + strings.ToLower(q) + "%"
+		const like = `LIKE ? ESCAPE '\'`
+		pattern := "%" + escapeLike(strings.ToLower(q)) + "%"
 		db = db.Where(
-			"LOWER(title) LIKE ? OR LOWER(authors) LIKE ? OR LOWER(description) LIKE ?",
+			"LOWER(title) "+like+" OR LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" OR LOWER(description) "+like,
+			pattern, pattern, pattern, pattern,
+		).Clauses(orderBy(
+			"CASE WHEN LOWER(title) "+like+" THEN 0 WHEN LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" THEN 1 ELSE 2 END, created_at DESC",
 			pattern, pattern, pattern,
-		)
+		))
 	}
 	if limit > 0 {
 		db = db.Limit(limit)
@@ -197,18 +226,130 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 	return works, db.Find(&works).Error
 }
 
-// OpenEdition returns the edition metadata, an open reader for its bytes, and
-// the size of those bytes as reported by the storage backend (which may differ
-// from ed.SizeBytes if the stored object has drifted — the handler uses this
-// value, not the recorded one, to frame the response).
-func (s *Service) OpenEdition(ctx context.Context, id uuid.UUID) (*Edition, io.ReadCloser, int64, error) {
+// orderBy builds a parameterized ORDER BY. db.Order only accepts plain
+// columns/strings, and a clause.OrderBy carrying an Expression drops any
+// columns merged into it later — so the tiebreak lives in the same SQL.
+func orderBy(sql string, vars ...any) clause.OrderBy {
+	return clause.OrderBy{Expression: clause.Expr{SQL: sql, Vars: vars, WithoutParentheses: true}}
+}
+
+// likeEscaper escapes the LIKE metacharacters so user input matches
+// literally; pair with `ESCAPE '\'` in the SQL.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
+
+// Download is an open edition plus what the handler needs to frame it.
+type Download struct {
+	Edition *Edition
+	// WorkTitle / WorkAuthors name the downloaded file.
+	WorkTitle   string
+	WorkAuthors string
+	Body        io.ReadCloser
+	// Size is what the storage backend reports, which may differ from
+	// Edition.SizeBytes if the stored object has drifted — the handler uses
+	// this value, not the recorded one, to frame the response.
+	Size int64
+}
+
+// OpenEdition loads the edition and its parent work's naming fields and opens
+// the stored bytes. The caller must close Body.
+func (s *Service) OpenEdition(ctx context.Context, id uuid.UUID) (*Download, error) {
 	ed, err := s.GetEdition(ctx, id)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
+	}
+	var work struct{ Title, Authors string }
+	if err := s.db.WithContext(ctx).Model(&Work{}).Select("title", "authors").
+		Where("id = ?", ed.WorkID).Take(&work).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 	rc, size, err := s.store.Get(ctx, ed.FileKey)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
 	}
-	return ed, rc, size, nil
+	return &Download{Edition: ed, WorkTitle: work.Title, WorkAuthors: work.Authors, Body: rc, Size: size}, nil
+}
+
+// maxDeleteReasonRunes caps the takedown note moderators attach.
+const maxDeleteReasonRunes = 1000
+
+// ErrForbidden is returned when the caller may not remove the work.
+var ErrForbidden = errors.New("only a moderator, or the creator of a work with no editions, can remove it")
+
+// ErrReasonRequired is returned when a takedown has no (or an over-long)
+// reason; the audit trail is the point of soft deletion.
+var ErrReasonRequired = fmt.Errorf("a reason (1-%d characters) is required", maxDeleteReasonRunes)
+
+func validReason(reason string) bool {
+	n := utf8.RuneCountInString(strings.TrimSpace(reason))
+	return n > 0 && n <= maxDeleteReasonRunes
+}
+
+func removal(by uint, reason string) map[string]any {
+	return map[string]any{
+		"deleted_at":    time.Now(),
+		"deleted_by":    by,
+		"delete_reason": strings.TrimSpace(reason),
+	}
+}
+
+// DeleteWork takes a work down along with all its editions. The rows are
+// soft-deleted (hidden from list/search/get/download, library and
+// recommendations) and the blobs are purged later by CollectGarbage.
+//
+// Moderators can remove any work. Anyone else can only remove a work they
+// created that has no editions at all — which is how the new-work upload
+// flow cleans up after its first upload is rejected (e.g. a duplicate).
+func (s *Service) DeleteWork(ctx context.Context, id uuid.UUID, by uint, reason string) error {
+	if !validReason(reason) {
+		return ErrReasonRequired
+	}
+	isMod, err := middleware.IsModerator(ctx, s.db, by)
+	if err != nil {
+		return err
+	}
+	if !isMod {
+		var w Work
+		if err := s.db.WithContext(ctx).Select("id", "created_by_user_id").First(&w, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		var editions int64
+		if err := s.db.WithContext(ctx).Unscoped().Model(&Edition{}).Where("work_id = ?", id).Count(&editions).Error; err != nil {
+			return err
+		}
+		if w.CreatedByUserID == nil || *w.CreatedByUserID != by || editions > 0 {
+			return ErrForbidden
+		}
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Model(&Work{}) scopes to deleted_at IS NULL, so removing an
+		// already-removed work is a 404, not a silent re-stamp.
+		res := tx.Model(&Work{}).Where("id = ?", id).Updates(removal(by, reason))
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return tx.Model(&Edition{}).Where("work_id = ?", id).Updates(removal(by, reason)).Error
+	})
+}
+
+// DeleteEdition takes a single edition down (see DeleteWork).
+func (s *Service) DeleteEdition(ctx context.Context, id uuid.UUID, by uint, reason string) error {
+	if !validReason(reason) {
+		return ErrReasonRequired
+	}
+	res := s.db.WithContext(ctx).Model(&Edition{}).Where("id = ?", id).Updates(removal(by, reason))
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

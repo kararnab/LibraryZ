@@ -14,10 +14,11 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// S3Config configures the S3/MinIO-backed Storage. Works against MinIO, AWS S3,
-// Cloudflare R2, Backblaze B2 — anything S3-API-compatible.
+// S3Config configures the S3-backed Storage. Works against RustFS (compose),
+// AWS S3, Cloudflare R2, Backblaze B2, SeaweedFS — anything S3-API-compatible.
+// minio-go is used purely as a generic S3 client.
 type S3Config struct {
-	Endpoint  string // host:port, no scheme (e.g. "minio:9000")
+	Endpoint  string // host:port, no scheme (e.g. "rustfs:9000")
 	AccessKey string
 	SecretKey string
 	Bucket    string
@@ -33,15 +34,15 @@ type S3 struct {
 }
 
 // NewS3 builds the client and ensures the bucket exists. It retries the initial
-// reach for ~30s so it tolerates being started alongside MinIO (compose) before
-// MinIO is accepting connections.
+// reach for ~30s so it tolerates being started alongside the S3 server
+// (compose) before it is accepting connections.
 func NewS3(ctx context.Context, cfg S3Config) (*S3, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("minio client: %w", err)
+		return nil, fmt.Errorf("s3 client: %w", err)
 	}
 
 	var lastErr error
@@ -62,7 +63,7 @@ func NewS3(ctx context.Context, cfg S3Config) (*S3, error) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return nil, fmt.Errorf("minio not reachable at %s: %w", cfg.Endpoint, lastErr)
+	return nil, fmt.Errorf("s3 endpoint not reachable at %s: %w", cfg.Endpoint, lastErr)
 }
 
 // Put streams r to a temp file while hashing, so the object can be keyed by its
@@ -132,6 +133,20 @@ func (s *S3) Delete(ctx context.Context, key string) error {
 		return ErrInvalidKey
 	}
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+func (s *S3) List(ctx context.Context, fn func(ObjectInfo) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // stops the listing goroutine if fn bails early
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		if err := fn(ObjectInfo{Key: obj.Key, Size: obj.Size, ModTime: obj.LastModified}); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 func (s *S3) Exists(ctx context.Context, key string) (bool, error) {

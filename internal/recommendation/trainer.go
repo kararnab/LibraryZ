@@ -3,12 +3,14 @@ package recommendation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"math/rand"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kararnab/libraryZ/internal/runlock"
 	"gonum.org/v1/gonum/mat"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -23,10 +25,20 @@ type Config struct {
 	Alpha         float64 // confidence scaling: c = 1 + alpha*weight
 	NeighborsTopN int     // item-item edges stored per work
 	Seed          int64   // RNG seed for reproducible factors
+	// MinRetrainAge skips a Train call when the persisted model is younger
+	// than this. With several instances on independent tickers it stops
+	// each of them retraining every interval. Zero = always train.
+	MinRetrainAge time.Duration
 }
 
+// DefaultConfig's Lambda is sized against Alpha: observed confidences reach
+// 1+40·5 = 201, and with λ=0.1 that left the model effectively
+// unregularized — with more factors than items it reproduced each user's
+// training row exactly and scored every unseen work ≈0, so held-out items
+// ranked no better than popularity (TestMFBeatsPopularityBaseline lost on
+// ~half of seeds). λ=10 recovers held-out items reliably at k=8..32.
 func DefaultConfig() Config {
-	return Config{Factors: 32, Iterations: 15, Lambda: 0.1, Alpha: 40, NeighborsTopN: 20, Seed: 42}
+	return Config{Factors: 32, Iterations: 15, Lambda: 10, Alpha: 40, NeighborsTopN: 20, Seed: 42}
 }
 
 // Trainer fits an implicit-feedback ALS model (Hu–Koren–Volinsky) over the
@@ -67,19 +79,50 @@ type entry struct {
 	conf float64
 }
 
+// ErrFresh is returned by Train when the persisted model is younger than
+// Config.MinRetrainAge, so training was skipped.
+var ErrFresh = errors.New("recommendation model is fresh; skipped retrain")
+
 // Train fits the model and atomically replaces the factor/neighbor tables.
 // A corpus with no interactions clears the tables (serving then falls back to
 // the v0 content+popularity path).
+//
+// Only one instance trains at a time: the whole run holds a cluster-wide
+// lock (runlock.KeyRecTrainer), and a caller that can't take it gets
+// runlock.ErrBusy immediately instead of racing the winner's DELETE + bulk
+// insert. Returns ErrFresh if another instance trained recently.
 func (t *Trainer) Train(ctx context.Context) error {
+	return runlock.Exclusive(ctx, t.db, runlock.KeyRecTrainer, func(tx *gorm.DB) error {
+		if t.cfg.MinRetrainAge > 0 {
+			// Every persist stamps all factor rows, so the newest one is the
+			// model's age. (Read a row rather than MAX(): sqlite returns
+			// aggregated timestamps as text.)
+			var newest UserFactors
+			err := tx.Order("updated_at DESC").Take(&newest).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if err == nil && time.Since(newest.UpdatedAt) < t.cfg.MinRetrainAge {
+				return ErrFresh
+			}
+		}
+		return t.train(tx)
+	})
+}
+
+func (t *Trainer) train(tx *gorm.DB) error {
 	var rows []trainRow
-	if err := t.db.WithContext(ctx).
+	// Removed works are left out so the model doesn't spend factors on them
+	// (serving would drop them anyway).
+	if err := tx.
 		Table("user_books").
 		Select("user_id, work_id, status, rating").
+		Where("work_id IN (SELECT id FROM works WHERE deleted_at IS NULL)").
 		Find(&rows).Error; err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		return t.persist(ctx, nil, nil, nil)
+		return persist(tx, nil, nil, nil)
 	}
 
 	// Index users and items to dense 0..n ranges.
@@ -137,7 +180,7 @@ func (t *Trainer) Train(ctx context.Context) error {
 
 	neighbors := buildNeighbors(Y, workIDs, t.cfg.NeighborsTopN)
 
-	return t.persist(ctx, workFactors, userFactors, neighbors)
+	return persist(tx, workFactors, userFactors, neighbors)
 }
 
 // buildNeighbors computes each work's top-N most cosine-similar works.
@@ -177,32 +220,30 @@ func buildNeighbors(Y *mat.Dense, workIDs []uuid.UUID, topN int) []WorkNeighbor 
 	return out
 }
 
-// persist replaces all three tables in one transaction so readers never see a
-// half-trained model.
-func (t *Trainer) persist(ctx context.Context, wf []WorkFactors, uf []UserFactors, nb []WorkNeighbor) error {
-	return t.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, tbl := range []string{"rec_work_factors", "rec_user_factors", "rec_work_neighbors"} {
-			if err := tx.Exec("DELETE FROM " + tbl).Error; err != nil {
-				return err
-			}
+// persist replaces all three tables. It runs inside Train's transaction, so
+// readers never see a half-trained model.
+func persist(tx *gorm.DB, wf []WorkFactors, uf []UserFactors, nb []WorkNeighbor) error {
+	for _, tbl := range []string{"rec_work_factors", "rec_user_factors", "rec_work_neighbors"} {
+		if err := tx.Exec("DELETE FROM " + tbl).Error; err != nil {
+			return err
 		}
-		if len(wf) > 0 {
-			if err := tx.CreateInBatches(wf, 200).Error; err != nil {
-				return err
-			}
+	}
+	if len(wf) > 0 {
+		if err := tx.CreateInBatches(wf, 200).Error; err != nil {
+			return err
 		}
-		if len(uf) > 0 {
-			if err := tx.CreateInBatches(uf, 200).Error; err != nil {
-				return err
-			}
+	}
+	if len(uf) > 0 {
+		if err := tx.CreateInBatches(uf, 200).Error; err != nil {
+			return err
 		}
-		if len(nb) > 0 {
-			if err := tx.CreateInBatches(nb, 200).Error; err != nil {
-				return err
-			}
+	}
+	if len(nb) > 0 {
+		if err := tx.CreateInBatches(nb, 200).Error; err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // --- linear algebra helpers (k is small; gonum keeps the solves clean) ---

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -169,6 +170,9 @@ func TestSmokeHappyPath(t *testing.T) {
 	if dlResp.Header.Get("X-Content-SHA256") != ed.SHA256 {
 		t.Fatalf("download: sha header mismatch")
 	}
+	if cd := dlResp.Header.Get("Content-Disposition"); !strings.Contains(cd, `filename="Moby-Dick - Herman Melville.txt"`) {
+		t.Fatalf("download: Content-Disposition should name the work, got %q", cd)
+	}
 
 	// GET work shows the edition
 	getWorkResp, _ := http.Get(ts.URL + "/works/" + work.ID)
@@ -178,6 +182,62 @@ func TestSmokeHappyPath(t *testing.T) {
 	_ = json.NewDecoder(getWorkResp.Body).Decode(&withEd)
 	if len(withEd.Editions) != 1 || withEd.Editions[0].ID != ed.ID {
 		t.Fatalf("get work: editions missing or wrong: %+v", withEd)
+	}
+}
+
+func TestReadyReportsDependencies(t *testing.T) {
+	ts, _ := newTestServer(t)
+	resp, err := http.Get(ts.URL + "/ready")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("ready: err=%v code=%d body=%s", err, statusOf(resp), readBody(resp))
+	}
+	var body struct {
+		Status string            `json:"status"`
+		Checks map[string]string `json:"checks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "ready" || body.Checks["database"] != "ok" || body.Checks["storage"] != "ok" {
+		t.Fatalf("unexpected body: %+v", body)
+	}
+}
+
+// failingStore is a Storage whose backend is unreachable.
+type failingStore struct{ storage.Storage }
+
+func (failingStore) Exists(context.Context, string) (bool, error) {
+	return false, errors.New("dial tcp: connection refused")
+}
+
+func TestReadyReturns503WhenADependencyIsDown(t *testing.T) {
+	deps, db := newTestDeps(t)
+	deps.Storage = failingStore{deps.Storage}
+	ts := httptest.NewServer(server.New(deps))
+	t.Cleanup(ts.Close)
+
+	resp, _ := http.Get(ts.URL + "/ready")
+	body := readBody(resp)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("storage down: want 503, got %d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, `"storage":"unavailable"`) || !strings.Contains(body, `"database":"ok"`) {
+		t.Fatalf("storage down: body = %s", body)
+	}
+	if strings.Contains(body, "connection refused") {
+		t.Fatalf("error details leaked: %s", body)
+	}
+	// Liveness is unaffected.
+	if r, _ := http.Get(ts.URL + "/health"); r.StatusCode != http.StatusOK {
+		t.Fatalf("health should stay 200, got %d", r.StatusCode)
+	}
+
+	// Database down too.
+	sqlDB, _ := db.DB()
+	sqlDB.Close()
+	resp, _ = http.Get(ts.URL + "/ready")
+	if body := readBody(resp); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"database":"unavailable"`) {
+		t.Fatalf("db down: got %d %s", resp.StatusCode, body)
 	}
 }
 
@@ -561,32 +621,36 @@ func TestContributionDoubleApproveReturns409(t *testing.T) {
 	}
 }
 
-func TestContributionInvalidPatchFieldsAreIgnored(t *testing.T) {
-	ts, db := newTestServer(t)
+func TestContributionInvalidPatchRejectedAtSubmit(t *testing.T) {
+	ts, _ := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "contrib5@x.com", "hunter22", "C5")
-	promoteModerator(t, db, "contrib5@x.com")
 	workID := createWork(t, ts.URL, auth, "Title A", "")
 
-	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{
-		"title": "Real Update",
-		"bogus": "junk-string-that-should-not-leak",
-	})
-	var c struct {
-		ID string `json:"id"`
+	for name, patch := range map[string]map[string]any{
+		"unknown key":    {"title": "Real Update", "bogus": "junk"},
+		"only unknown":   {"bogus": "junk"},
+		"year as string": {"publication_year": "abc"},
+		"empty title":    {"title": ""},
+	} {
+		resp := submitContribution(t, ts.URL, auth, workID, patch)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: want 400, got %d body=%s", name, resp.StatusCode, readBody(resp))
+		}
+		if body := readBody(resp); !strings.Contains(body, "invalid patch") {
+			t.Fatalf("%s: want a descriptive message, got %q", name, body)
+		}
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&c)
 
-	if r := postAuthed(t, ts.URL+"/contributions/"+c.ID+"/approve", auth); r.StatusCode != http.StatusOK {
-		t.Fatalf("approve: code=%d body=%s", r.StatusCode, readBody(r))
+	// Nothing was queued.
+	resp, _ := http.Get(ts.URL + "/contributions?status=pending")
+	var cs []struct {
+		WorkID string `json:"work_id"`
 	}
-
-	workResp, _ := http.Get(ts.URL + "/works/" + workID)
-	body := readBody(workResp)
-	if !strings.Contains(body, "Real Update") {
-		t.Fatalf("whitelisted title not applied: %s", body)
-	}
-	if strings.Contains(body, "junk-string-that-should-not-leak") {
-		t.Fatalf("non-whitelisted field leaked into work: %s", body)
+	_ = json.NewDecoder(resp.Body).Decode(&cs)
+	for _, c := range cs {
+		if c.WorkID == workID {
+			t.Fatalf("invalid patch was queued: %+v", cs)
+		}
 	}
 }
 
@@ -752,6 +816,48 @@ func TestSearchWorksOrderedByCreatedAtDesc(t *testing.T) {
 	}
 	if got[0] != "Gamma test book" || got[1] != "Beta test book" || got[2] != "Alpha test book" {
 		t.Fatalf("ordering: want Gamma,Beta,Alpha (DESC), got %v", got)
+	}
+}
+
+// The sqlite fallback approximates ts_rank: a title hit outranks an author
+// hit, which outranks a description-only hit — regardless of recency.
+func TestSearchWorksRanksTitleMatchesFirst(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupAndLogin(t, ts.URL, "search5@x.com", "hunter22", "S5")
+
+	createWorkFull(t, ts.URL, auth, "Leviathan", "Thomas Hobbes", "")
+	createWorkFull(t, ts.URL, auth, "Whale Facts", "Leviathan Press", "")
+	createWorkFull(t, ts.URL, auth, "Sea Stories", "", "Mentions a leviathan once.")
+
+	got := searchTitles(t, ts.URL, "leviathan")
+	want := []string{"Leviathan", "Whale Facts", "Sea Stories"}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ranking: want %v, got %v", want, got)
+	}
+}
+
+func TestSearchWorksTreatsLikeWildcardsLiterally(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupAndLogin(t, ts.URL, "search4@x.com", "hunter22", "S4")
+
+	createWorkFull(t, ts.URL, auth, "snake_case handbook", "", "")
+	createWorkFull(t, ts.URL, auth, "100% Pure Prose", "", "")
+	createWorkFull(t, ts.URL, auth, "Plain title without metachars", "", "")
+
+	underscore := searchTitles(t, ts.URL, "_")
+	if !contains(underscore, "snake_case handbook") {
+		t.Fatalf("'_' should match the literal underscore title, got %v", underscore)
+	}
+	if contains(underscore, "Plain title without metachars") || contains(underscore, "100% Pure Prose") {
+		t.Fatalf("'_' must not act as a wildcard, got %v", underscore)
+	}
+
+	percent := searchTitles(t, ts.URL, "%")
+	if !contains(percent, "100% Pure Prose") {
+		t.Fatalf("'%%' should match the literal percent title, got %v", percent)
+	}
+	if contains(percent, "Plain title without metachars") || contains(percent, "snake_case handbook") {
+		t.Fatalf("'%%' must not act as a wildcard, got %v", percent)
 	}
 }
 
@@ -945,7 +1051,6 @@ func TestRecommendationsReturnsContentMatch(t *testing.T) {
 
 func TestRecommendationsMatrixFactorizationPersonalized(t *testing.T) {
 	ts, db := newTestServer(t)
-	// First signup → user id 1; that's the user we fetch recommendations for.
 	auth := signupAndLogin(t, ts.URL, "mfmain@x.com", "hunter22", "Main")
 
 	// Cluster A (3 works) and cluster B (3 works).
@@ -964,14 +1069,17 @@ func TestRecommendationsMatrixFactorizationPersonalized(t *testing.T) {
 	putLibrary(t, ts.URL, auth, a[0], map[string]any{"status": "read", "rating": 5})
 	putLibrary(t, ts.URL, auth, a[1], map[string]any{"status": "read", "rating": 5})
 
-	// Synthetic co-users establish the collaborative pattern: 2–7 like all of
-	// A, 8–13 like all of B. Seeded directly (the trainer only reads user_books).
-	for u := uint(2); u <= 7; u++ {
+	// Synthetic co-users establish the collaborative pattern: six like all of
+	// A, six like all of B. Seeded directly (the trainer only reads
+	// user_books) under ids far above any real signup — the smoke tests share
+	// one database, so the main user's id depends on which tests ran first.
+	const coUser = uint(1_000_000)
+	for u := coUser; u < coUser+6; u++ {
 		for _, w := range a {
 			seedUserBook(t, db, u, w, "read", 5)
 		}
 	}
-	for u := uint(8); u <= 13; u++ {
+	for u := coUser + 6; u < coUser+12; u++ {
 		for _, w := range b {
 			seedUserBook(t, db, u, w, "read", 5)
 		}
@@ -1233,4 +1341,252 @@ func readBody(r *http.Response) string {
 	}
 	b, _ := io.ReadAll(r.Body)
 	return string(b)
+}
+
+// --- Moderation takedowns (#13) ---------------------------------------------
+
+func deleteAuthed(t *testing.T, url, auth string, body any) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if body != nil {
+		rdr = mustJSON(t, body)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, url, rdr)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", auth)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete %s: %v", url, err)
+	}
+	return resp
+}
+
+func editionID(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: code=%d body=%s", resp.StatusCode, readBody(resp))
+	}
+	var ed struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ed)
+	return ed.ID
+}
+
+func TestModeratorRemovesEdition(t *testing.T) {
+	ts, db := newTestServer(t)
+	mod := signupAndLogin(t, ts.URL, "takedown1@x.com", "hunter22", "Mod")
+	promoteModerator(t, db, "takedown1@x.com")
+	user := signupAndLogin(t, ts.URL, "takedown1u@x.com", "hunter22", "User")
+	workID := createWork(t, ts.URL, user, "Takedown Work", "")
+	content := []byte("infringing bytes\n")
+	keep := editionID(t, uploadEdition(t, ts.URL, user, workID, "txt", "en", []byte("fine bytes\n")))
+	gone := editionID(t, uploadEdition(t, ts.URL, user, workID, "txt", "en", content))
+	url := ts.URL + "/editions/" + gone
+
+	if r := deleteAuthed(t, url, user, map[string]string{"reason": "dmca"}); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-moderator: want 403, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "  "}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("blank reason: want 400, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "DMCA notice #42"}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "again"}); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("remove twice: want 404, got %d", r.StatusCode)
+	}
+
+	for _, path := range []string{"/editions/" + gone, "/editions/" + gone + "/download"} {
+		if r, _ := http.Get(ts.URL + path); r.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s after removal: want 404, got %d", path, r.StatusCode)
+		}
+	}
+	workResp, _ := http.Get(ts.URL + "/works/" + workID)
+	if body := readBody(workResp); strings.Contains(body, gone) || !strings.Contains(body, keep) {
+		t.Fatalf("work should list only the surviving edition: %s", body)
+	}
+
+	// Re-uploading the removed bytes doesn't resurrect them.
+	if r := uploadEdition(t, ts.URL, user, workID, "txt", "en", content); r.StatusCode != http.StatusConflict {
+		t.Fatalf("re-upload of removed file: want 409, got %d %s", r.StatusCode, readBody(r))
+	}
+
+	// The audit trail is kept.
+	var row struct {
+		DeletedBy    uint
+		DeleteReason string
+	}
+	db.Table("editions").Select("deleted_by, delete_reason").Where("id = ?", gone).Take(&row)
+	if row.DeleteReason != "DMCA notice #42" || row.DeletedBy == 0 {
+		t.Fatalf("audit fields not recorded: %+v", row)
+	}
+}
+
+func TestModeratorRemovesWork(t *testing.T) {
+	ts, db := newTestServer(t)
+	mod := signupAndLogin(t, ts.URL, "takedown2@x.com", "hunter22", "Mod")
+	promoteModerator(t, db, "takedown2@x.com")
+	workID := createWork(t, ts.URL, mod, "Zyzzyva Removed Title", "")
+	ed := editionID(t, uploadEdition(t, ts.URL, mod, workID, "txt", "en", []byte("zyzzyva\n")))
+	putLibrary(t, ts.URL, mod, workID, map[string]any{"status": "reading"})
+
+	if r := deleteAuthed(t, ts.URL+"/works/"+workID, mod, map[string]string{"reason": "spam"}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove work: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+
+	if r, _ := http.Get(ts.URL + "/works/" + workID); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET work: want 404, got %d", r.StatusCode)
+	}
+	if r, _ := http.Get(ts.URL + "/editions/" + ed + "/download"); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("download edition of removed work: want 404, got %d", r.StatusCode)
+	}
+	if titles := searchTitles(t, ts.URL, "zyzzyva"); len(titles) != 0 {
+		t.Fatalf("search still finds removed work: %v", titles)
+	}
+	listResp, _ := http.Get(ts.URL + "/works?limit=200")
+	if strings.Contains(readBody(listResp), workID) {
+		t.Fatalf("list still includes removed work")
+	}
+
+	// Personal library hides it; library writes and contributions 404.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/me/library", nil)
+	req.Header.Set("Authorization", mod)
+	libResp, _ := http.DefaultClient.Do(req)
+	if strings.Contains(readBody(libResp), workID) {
+		t.Fatalf("library still lists removed work")
+	}
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+"/me/library/"+workID, mustJSON(t, map[string]any{"status": "read"}))
+	req.Header.Set("Authorization", mod)
+	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("library upsert on removed work: want 404, got %d", r.StatusCode)
+	}
+	if r := submitContribution(t, ts.URL, mod, workID, map[string]any{"title": "x"}); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("contribution on removed work: want 404, got %d", r.StatusCode)
+	}
+}
+
+// --- Sessions: refresh + revocation (#15) ------------------------------------
+
+type tokenPair struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+func loginPair(t *testing.T, base, email, password string) tokenPair {
+	t.Helper()
+	resp, err := http.Post(base+"/auth/login", "application/json",
+		mustJSON(t, map[string]string{"email": email, "password": password}))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("login: err=%v code=%d", err, statusOf(resp))
+	}
+	var p tokenPair
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Header.Get("Authorization") != "Bearer "+p.AccessToken {
+		t.Fatalf("Authorization header should mirror access_token")
+	}
+	return p
+}
+
+func getMe(t *testing.T, base, access string) int {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode
+}
+
+func postJSON(t *testing.T, url string, body any) *http.Response {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", mustJSON(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestRefreshLogoutAndLogoutAll(t *testing.T) {
+	ts, _ := newTestServer(t)
+	signupAndLogin(t, ts.URL, "session1@x.com", "hunter22", "S")
+	a := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	b := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	if a.RefreshToken == "" || a.ExpiresIn != 900 {
+		t.Fatalf("login pair: %+v", a)
+	}
+
+	// Refresh rotates.
+	resp := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: %d %s", resp.StatusCode, readBody(resp))
+	}
+	var a2 tokenPair
+	_ = json.NewDecoder(resp.Body).Decode(&a2)
+	if a2.RefreshToken == a.RefreshToken || getMe(t, ts.URL, a2.AccessToken) != http.StatusOK {
+		t.Fatalf("rotated pair unusable: %+v", a2)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("spent refresh token: want 401, got %d", r.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing refresh token: want 400, got %d", r.StatusCode)
+	}
+
+	// Logout ends session b only.
+	if r := postJSON(t, ts.URL+"/auth/logout", map[string]string{"refresh_token": b.RefreshToken}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout: %d", r.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": b.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh after logout: want 401, got %d", r.StatusCode)
+	}
+
+	// Logout-all kills outstanding access tokens immediately.
+	c := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout-all: %d", r.StatusCode)
+	}
+	for name, tok := range map[string]string{"a2": a2.AccessToken, "c": c.AccessToken} {
+		if code := getMe(t, ts.URL, tok); code != http.StatusUnauthorized {
+			t.Fatalf("access token %s after logout-all: want 401, got %d", name, code)
+		}
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": c.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh after logout-all: want 401, got %d", r.StatusCode)
+	}
+	if code := getMe(t, ts.URL, loginPair(t, ts.URL, "session1@x.com", "hunter22").AccessToken); code != http.StatusOK {
+		t.Fatalf("fresh login after logout-all: %d", code)
+	}
+}
+
+// A non-moderator may remove only a work they created that has no editions —
+// what the new-work upload flow does when its first upload is rejected.
+func TestCreatorCanRemoveOwnEmptyWorkOnly(t *testing.T) {
+	ts, _ := newTestServer(t)
+	creator := signupAndLogin(t, ts.URL, "creator1@x.com", "hunter22", "C")
+	other := signupAndLogin(t, ts.URL, "creator2@x.com", "hunter22", "O")
+	reason := map[string]string{"reason": "upload failed"}
+
+	empty := createWork(t, ts.URL, creator, "Empty Work", "")
+	if r := deleteAuthed(t, ts.URL+"/works/"+empty, other, reason); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("someone else's work: want 403, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, ts.URL+"/works/"+empty, creator, reason); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("own empty work: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+
+	withEdition := createWork(t, ts.URL, creator, "Has Edition", "")
+	editionID(t, uploadEdition(t, ts.URL, creator, withEdition, "txt", "en", []byte("creator1 content\n")))
+	if r := deleteAuthed(t, ts.URL+"/works/"+withEdition, creator, reason); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("own work with an edition: want 403, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, ts.URL+"/works/"+uuid.NewString(), creator, reason); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown work: want 404, got %d", r.StatusCode)
+	}
 }

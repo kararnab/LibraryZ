@@ -42,6 +42,9 @@ func (h *Handler) Submit(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrEmptyPatch):
 		http.Error(w, "patch is required", http.StatusBadRequest)
 		return
+	case errors.Is(err, ErrInvalidPatch):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	case errors.Is(err, ErrWorkNotFound):
 		http.Error(w, "work not found", http.StatusNotFound)
 		return

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -115,6 +117,9 @@ func (h *Handler) CreateWork(w http.ResponseWriter, r *http.Request) {
 		ISBN:            req.ISBN,
 		OpenLibraryID:   req.OpenLibraryID,
 	}
+	if uid, ok := middleware.UserID(r.Context()); ok {
+		work.CreatedByUserID = &uid
+	}
 	if err := h.service.CreateWork(r.Context(), &work); err != nil {
 		httpx.ServerError(w, r, "create work", err)
 		return
@@ -213,6 +218,11 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "work not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, ErrRemoved) {
+		// Same 409 shape as a duplicate, minus the edition/work to link to.
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
 	var dup *DuplicateEditionError
 	if errors.As(err, &dup) {
 		writeJSON(w, http.StatusConflict, DuplicateEditionResponse{
@@ -261,7 +271,7 @@ func (h *Handler) DownloadEdition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	ed, rc, size, err := h.service.OpenEdition(r.Context(), id)
+	dl, err := h.service.OpenEdition(r.Context(), id)
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -270,7 +280,8 @@ func (h *Handler) DownloadEdition(w http.ResponseWriter, r *http.Request) {
 		httpx.ServerError(w, r, "open edition", err)
 		return
 	}
-	defer rc.Close()
+	defer dl.Body.Close()
+	ed, rc, size := dl.Edition, dl.Body, dl.Size
 
 	// Editions can be up to 500 MiB; streaming one over a slow link can exceed
 	// the server WriteTimeout. Clear the write deadline for this handler so the
@@ -285,16 +296,133 @@ func (h *Handler) DownloadEdition(w http.ResponseWriter, r *http.Request) {
 		log.Printf("download edition %s: storage size %d != recorded size_bytes %d", ed.ID, size, ed.SizeBytes)
 	}
 
-	filename := fmt.Sprintf("%s.%s", ed.ID, ed.Format)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if size >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("Content-Disposition", contentDisposition(downloadFilename(dl.WorkTitle, dl.WorkAuthors, ed)))
 	w.Header().Set("X-Content-SHA256", ed.SHA256)
 	if _, err := io.Copy(w, rc); err != nil {
 		log.Printf("download edition %s: streaming aborted after headers sent: %v", ed.ID, err)
 	}
+}
+
+// DeleteWork removes a work and all its editions: a moderator takedown, or
+// a creator discarding their own still-empty work. Body: {"reason": "..."}
+// (required).
+func (h *Handler) DeleteWork(w http.ResponseWriter, r *http.Request) {
+	h.remove(w, r, h.service.DeleteWork)
+}
+
+// DeleteEdition is the moderator takedown for one edition.
+// Body: {"reason": "..."} (required).
+func (h *Handler) DeleteEdition(w http.ResponseWriter, r *http.Request) {
+	h.remove(w, r, h.service.DeleteEdition)
+}
+
+func (h *Handler) remove(w http.ResponseWriter, r *http.Request, fn func(context.Context, uuid.UUID, uint, string) error) {
+	id, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	userID, ok := middleware.UserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	switch err := fn(r.Context(), id, userID, body.Reason); {
+	case errors.Is(err, ErrReasonRequired):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, ErrForbidden):
+		http.Error(w, err.Error(), http.StatusForbidden)
+	case errors.Is(err, ErrNotFound):
+		http.Error(w, "not found", http.StatusNotFound)
+	case err != nil:
+		httpx.ServerError(w, r, "remove", err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// maxFilenameStem caps the "<Title> - <Authors>" part of a download name (in
+// runes), well under common 255-byte filesystem limits once UTF-8 encoded.
+const maxFilenameStem = 120
+
+// downloadFilename builds "<Title> - <Authors>.<format>" for a download,
+// falling back to the edition id when the work has no usable title.
+func downloadFilename(title, authors string, ed *Edition) string {
+	stem := cleanFilenamePart(title)
+	if a := cleanFilenamePart(authors); stem != "" && a != "" {
+		stem += " - " + a
+	}
+	if stem == "" {
+		stem = ed.ID.String()
+	}
+	if r := []rune(stem); len(r) > maxFilenameStem {
+		stem = strings.TrimSpace(string(r[:maxFilenameStem]))
+	}
+	return stem + "." + cleanFilenamePart(strings.ToLower(ed.Format))
+}
+
+// cleanFilenamePart drops path separators, control characters, and
+// characters Windows forbids, collapses whitespace, and strips leading dots
+// so the result can't escape a directory or become a hidden file.
+func cleanFilenamePart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case unicode.IsControl(r), strings.ContainsRune(`/\:*?"<>|`, r):
+			b.WriteRune(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	words := strings.Fields(b.String())
+	kept := words[:0]
+	for _, w := range words {
+		if strings.Trim(w, ".") != "" { // drop "." / ".." path segments
+			kept = append(kept, w)
+		}
+	}
+	return strings.TrimSpace(strings.TrimLeft(strings.Join(kept, " "), "."))
+}
+
+// contentDisposition renders an RFC 6266 attachment header: an ASCII-only
+// `filename` for old clients plus a UTF-8 `filename*` (RFC 8187) that modern
+// clients prefer, so non-ASCII titles survive.
+func contentDisposition(name string) string {
+	var ascii strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			ascii.WriteByte('_')
+		} else {
+			ascii.WriteRune(r)
+		}
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, ascii.String(), encodeRFC8187(name))
+}
+
+// encodeRFC8187 percent-encodes every byte outside RFC 8187's attr-char set.
+func encodeRFC8187(s string) string {
+	const attrChars = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x80 && (unicode.IsLetter(rune(c)) || unicode.IsDigit(rune(c)) || strings.IndexByte(attrChars, c) >= 0) {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

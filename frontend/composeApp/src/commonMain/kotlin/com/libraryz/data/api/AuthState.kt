@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.libraryz.data.User
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * Holds the current JWT in memory plus mirrors it to a [TokenStore], and
@@ -17,7 +19,14 @@ import com.libraryz.data.User
  * - [signIn] is called after a successful login. Suspends until the token
  *   is written, so the caller (App.kt) can navigate to Browse with the
  *   guarantee that a restart will restore the session.
- * - [clear] is called on logout and on 401s.
+ * - [clear] is called on logout.
+ * - As the [SessionHooks] of [ApiClient] it persists rotated tokens
+ *   ([onRefreshed]) and, when the session can't be renewed, clears it and
+ *   raises [sessionExpired] ([onSessionExpired]) so the UI can return to
+ *   sign-in and say why.
+ *
+ * Persistence: the store holds `{"access":…,"refresh":…}`; a bare token
+ * (no refresh token, from older backends) is still accepted on load.
  *
  * The userFetcher is a `suspend () -> User?` set via [setUserFetcher]
  * after construction because ApiClient itself needs `tokenProvider = {
@@ -27,7 +36,7 @@ import com.libraryz.data.User
  * just remains null until a later refresh succeeds.
  */
 @Stable
-class AuthState(private val store: TokenStore) {
+class AuthState(private val store: TokenStore) : SessionHooks {
     var session: Session? by mutableStateOf(null)
         private set
 
@@ -37,10 +46,15 @@ class AuthState(private val store: TokenStore) {
     var user: User? by mutableStateOf(null)
         private set
 
+    /** True after the session was ended because it couldn't be renewed. */
+    var sessionExpired: Boolean by mutableStateOf(false)
+        private set
+
     private var userFetcher: (suspend () -> User?)? = null
 
     val isAuthenticated: Boolean get() = session != null
     val token: String? get() = session?.token
+    override val refreshToken: String? get() = session?.refreshToken
     val isModerator: Boolean get() = user?.isModerator == true
 
     /** Attach the fetcher used to populate [user] after bootstrap / signIn. */
@@ -50,17 +64,18 @@ class AuthState(private val store: TokenStore) {
 
     suspend fun bootstrap() {
         if (bootstrapped) return
-        val saved = store.load()
+        val saved = store.load()?.let(::decodeSession)
         if (saved != null) {
-            session = Session(saved)
+            session = saved
             refreshUser()
         }
         bootstrapped = true
     }
 
     suspend fun signIn(s: Session) {
-        store.save(s.token)
+        store.save(encodeSession(s))
         session = s
+        sessionExpired = false
         refreshUser()
     }
 
@@ -70,8 +85,41 @@ class AuthState(private val store: TokenStore) {
         user = null
     }
 
+    override suspend fun onRefreshed(session: Session) {
+        store.save(encodeSession(session))
+        this.session = session
+    }
+
+    override suspend fun onSessionExpired() {
+        if (session == null) return // already cleared by a concurrent call
+        clear()
+        sessionExpired = true
+    }
+
+    /** The UI calls this once it has told the user their session expired. */
+    fun acknowledgeSessionExpired() {
+        sessionExpired = false
+    }
+
     private suspend fun refreshUser() {
         val fetch = userFetcher ?: return
         user = runCatching { fetch.invoke() }.getOrNull()
     }
+}
+
+@Serializable
+private data class StoredSession(val access: String, val refresh: String? = null)
+
+private val sessionJson = Json { ignoreUnknownKeys = true }
+
+private fun encodeSession(s: Session): String =
+    if (s.refreshToken == null) s.token
+    else sessionJson.encodeToString(StoredSession.serializer(), StoredSession(s.token, s.refreshToken))
+
+private fun decodeSession(raw: String): Session? {
+    if (raw.isBlank()) return null
+    if (!raw.trimStart().startsWith("{")) return Session(raw)
+    return runCatching { sessionJson.decodeFromString(StoredSession.serializer(), raw) }
+        .getOrNull()
+        ?.let { Session(it.access, it.refresh) }
 }

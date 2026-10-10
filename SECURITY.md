@@ -50,7 +50,7 @@ In scope:
 Out of scope:
 
 - Third-party services LibraryZ talks to in your deployment (Postgres,
-  MinIO/S3, Redis, Kong). Report those to their respective projects.
+  RustFS/S3, Redis, Kong). Report those to their respective projects.
 - Issues that require an already-compromised machine, a malicious admin,
   or physical access.
 - Findings from automated scanners with no demonstrated impact.
@@ -77,7 +77,7 @@ re-reported:
   limits require Kong consumers + `iss`/`kid` claims in the JWT, which
   isn't wired yet. If your deployment lives behind a NAT, all users share
   the same bucket — be aware.
-- **`docker compose up` exposes MinIO** on `:9000` / `:9001` with default
+- **`docker compose up` exposes the S3 store (RustFS)** on `:9100` / `:9101` with default
   credentials. Change them, or don't expose those ports, in any
   deployment past your laptop.
 
@@ -86,7 +86,7 @@ re-reported:
 Before pointing this at the public internet:
 
 - [ ] Set a long random `JWT_SECRET` (≥32 bytes from `/dev/urandom`).
-- [ ] Change Postgres + MinIO default credentials in `docker-compose.yml`.
+- [ ] Change Postgres + RustFS (S3) default credentials in `docker-compose.yml`.
 - [ ] Put the stack behind a TLS-terminating reverse proxy (Caddy, Nginx,
       Cloudflare Tunnel — whatever you trust).
 - [ ] Restrict Kong's exposed port to the proxy, not the open internet.

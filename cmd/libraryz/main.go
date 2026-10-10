@@ -10,7 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kararnab/libraryZ/internal/catalog"
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
+	"github.com/kararnab/libraryZ/internal/runlock"
 	"github.com/kararnab/libraryZ/internal/sanitize"
 	"github.com/kararnab/libraryZ/internal/server"
 	"github.com/kararnab/libraryZ/internal/storage"
@@ -25,8 +28,26 @@ func main() {
 	sanitize.RunChildIfRequested()
 
 	cfg := config.Load()
+
+	// `libraryz migrate` applies pending schema migrations and exits — for
+	// running them as a one-shot deploy step (with LIBRARYZ_AUTO_MIGRATE=false
+	// on the servers) instead of on every instance's startup.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		if err := migrate(cfg); err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
+		log.Printf("migrations up to date")
+		return
+	}
+
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if cfg.AutoMigrate {
+		if err := migrate(cfg); err != nil {
+			log.Fatalf("migrate: %v", err)
+		}
 	}
 
 	dbConn, err := db.InitDB(cfg.DatabaseURL, db.PoolConfig{
@@ -36,9 +57,6 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("db: %v", err)
-	}
-	if err := server.Migrate(dbConn); err != nil {
-		log.Fatalf("migrate: %v", err)
 	}
 
 	// Hostile PDFs can inflate to gigabytes inside pdfcpu; sanitize them in a
@@ -62,9 +80,12 @@ func main() {
 		MaxUploadBytes:  cfg.MaxUploadBytes,
 		AllowedOrigins:  cfg.AllowedOrigins,
 		AllowPrivateLAN: cfg.CORSAllowPrivateLAN,
+		AccessTokenTTL:  cfg.AccessTokenTTL,
+		RefreshTokenTTL: cfg.RefreshTokenTTL,
 	})
 
 	startRecommendationTraining(dbConn, cfg)
+	startBlobGC(catalog.NewService(dbConn, store), cfg)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -102,7 +123,21 @@ func main() {
 	}
 }
 
-// newStorage picks the blob backend implicitly from config: S3/MinIO when
+// migrate runs schema migrations over a short-lived connection to
+// MigrateDatabaseURL (direct Postgres — see config.MigrateDatabaseURL).
+// Concurrent instances are serialized by an advisory lock in migrations.Up.
+func migrate(cfg *config.Config) error {
+	conn, err := db.InitDB(cfg.MigrateDatabaseURL, db.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnMaxLifetime: time.Minute})
+	if err != nil {
+		return err
+	}
+	if sqlDB, err := conn.DB(); err == nil {
+		defer sqlDB.Close()
+	}
+	return migrations.Up(context.Background(), conn)
+}
+
+// newStorage picks the blob backend implicitly from config: S3 when
 // LIBRARYZ_S3_ENDPOINT is set (production path — docker-compose, real envs),
 // else the local filesystem under LIBRARYZ_STORAGE_DIR (host-mode dev
 // fallback; also the backend used by smoke tests via storage.NewLocal). There
@@ -118,13 +153,34 @@ func newStorage(cfg *config.Config) (storage.Storage, error) {
 			UseSSL:    cfg.S3UseSSL,
 		})
 	}
-	log.Printf("storage: local backend (dir=%s; set LIBRARYZ_S3_ENDPOINT to use S3/MinIO)", cfg.StorageDir)
+	log.Printf("storage: local backend (dir=%s; set LIBRARYZ_S3_ENDPOINT to use S3)", cfg.StorageDir)
 	return storage.NewLocal(cfg.StorageDir)
+}
+
+// startBlobGC sweeps orphaned and long-removed blobs on a ticker (not at
+// startup — there's no urgency, and it keeps rolling restarts cheap). Safe on
+// every replica: CollectGarbage holds a cluster-wide lock and skips if busy.
+func startBlobGC(svc *catalog.Service, cfg *config.Config) {
+	go func() {
+		ticker := time.NewTicker(cfg.BlobGCInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			stats, err := svc.CollectGarbage(context.Background(), cfg.BlobGCRetention)
+			switch {
+			case errors.Is(err, runlock.ErrBusy):
+				log.Printf("blob gc: another instance is sweeping; skipped")
+			case err != nil:
+				log.Printf("blob gc: failed after deleting %d blobs: %v", stats.Deleted, err)
+			default:
+				log.Printf("blob gc: scanned %d, deleted %d", stats.Scanned, stats.Deleted)
+			}
+		}
+	}()
 }
 
 // startRecommendationTraining trains the MF model once on startup (non-blocking
 // — serving falls back to content/popularity until the first model lands) and
-// re-trains on a ticker. In-process is fine until the matrix outgrows one pass;
+// re-trains on a ticker. Safe to run on every replica (see Trainer.Train). In-process is fine until the matrix outgrows one pass;
 // the scale path is a separate cmd/rectrain job.
 func startRecommendationTraining(dbConn *gorm.DB, cfg *config.Config) {
 	recCfg := recommendation.DefaultConfig()
@@ -134,13 +190,23 @@ func startRecommendationTraining(dbConn *gorm.DB, cfg *config.Config) {
 	if cfg.RecAlpha > 0 {
 		recCfg.Alpha = cfg.RecAlpha
 	}
+	// Every instance runs this loop, but Train holds a cluster-wide lock and
+	// skips if another instance trained within half an interval — so with N
+	// replicas the model is still trained ~once per interval, by whichever
+	// instance gets there first, with no single designated trainer to lose.
+	recCfg.MinRetrainAge = cfg.RecRetrainInterval / 2
 	trainer := recommendation.NewTrainer(dbConn, recCfg)
 
 	train := func() {
-		if err := trainer.Train(context.Background()); err != nil {
-			log.Printf("rec: train failed: %v", err)
-		} else {
+		switch err := trainer.Train(context.Background()); {
+		case err == nil:
 			log.Printf("rec: model retrained")
+		case errors.Is(err, runlock.ErrBusy):
+			log.Printf("rec: another instance is training; skipped")
+		case errors.Is(err, recommendation.ErrFresh):
+			log.Printf("rec: model is fresh; skipped")
+		default:
+			log.Printf("rec: train failed: %v", err)
 		}
 	}
 	go func() {

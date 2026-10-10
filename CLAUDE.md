@@ -45,11 +45,11 @@ go build ./...
 # Tests (uses in-memory sqlite — no Postgres / Docker needed)
 go test ./...
 
-# Postgres-only tests (currently: full-text-search tsvector path in
-# internal/catalog/search_postgres_test.go). Skipped by default.
-# DROPS AND RECREATES catalog tables — do NOT point at production.
+# Postgres-only tests (FTS ranking, concurrent approve/reject, advisory
+# locks, migrations). Skipped by default. -p 1: packages share the DB.
+# DROPS AND RECREATES the public schema — do NOT point at production.
 DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' \
-  go test -tags=postgres ./internal/catalog/...
+  go test -tags=postgres -p 1 ./...
 
 # Recommendation offline eval (sqlite, no Postgres). Holdout precision/recall/
 # hit-rate@K, MF vs popularity baseline. Tagged so it's off by default.
@@ -107,12 +107,13 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
 ## Conventions
 
 - **Pre-alpha: data loss is OK until the first production deployment.**
-  Don't spend effort on schema migrations, backfills, or backward
-  compatibility (API or data) for existing rows. AutoMigrate's additive
-  changes are enough. For anything else, wipe with `docker compose down -v`
-  and re-seed with `scripts/seed.sh`. Versioned migrations
-  ([#16](https://github.com/kararnab/LibraryZ/issues/16)) are deferred until
-  prod. See "Pre-alpha data policy" in PLAN.md Phase 7.
+  Don't spend effort on backfills or backward compatibility (API or data)
+  for existing rows. The versioned-migration framework (#16,
+  `internal/migrations`) is in place, but until the first production
+  deployment schema changes **edit the baseline snapshot in place** rather
+  than adding numbered migrations; an existing dev DB then needs a wipe
+  (`docker compose down -v`) and re-seed (`scripts/seed.sh`). See
+  "Pre-alpha data policy" in PLAN.md Phase 7.
 - **PDF sanitization is out of process.** `cmd/libraryz` calls
   `sanitize.EnableIsolation`, and PDFs are then sanitized by re-running the
   binary in child mode under a hard memory cap. `sanitize.RunChildIfRequested()`
@@ -128,18 +129,30 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
 - **Don't add Postgres-specific column types** (arrays, tsvector) without
   also changing the test DB strategy — smoke tests run against SQLite.
   Slice 2.3's full-text search is the precedent: the `search_vector`
-  column + GIN index + trigger live in `internal/catalog/search.go` as a
-  dialect-gated migration that no-ops on sqlite, and `SearchWorks` has a
+  column + GIN index + trigger live in `internal/migrations` as a
+  dialect-gated step that no-ops on sqlite, and `SearchWorks` has a
   `LOWER(LIKE)` fallback for the sqlite path. Postgres-only verification
   lives in `//go:build postgres`-tagged files (see `go test -tags=postgres`
   command above).
-- **Storage: S3/MinIO is the production backend; `Local` is the test seam.**
+- **Schema = versioned migrations, not AutoMigrate.** `internal/migrations`
+  (goose, Go migrations over GORM, runs on sqlite + Postgres). Migration
+  00001 `AutoMigrate`s the **frozen** structs in
+  `internal/migrations/baseline` — not the live models — so editing a
+  model never silently changes history. Adding a model field means adding
+  a migration; `TestLiveModelsMatchMigratedSchema` fails otherwise.
+  **Pre-v0.1.0 there's no data to preserve, so the baseline is still edited
+  in place**; after v0.1.0 it's frozen and changes go in new versions.
+  `migrations.Up` takes a Postgres session advisory lock, so it must use a
+  **direct** connection (`LIBRARYZ_MIGRATE_DATABASE_URL`, compose points it
+  at `postgres:5432`, not pgbouncer). Runs on startup unless
+  `LIBRARYZ_AUTO_MIGRATE=false`; `libraryz migrate` runs it one-shot.
+- **Storage: S3 is the production backend; `Local` is the test seam.**
   `internal/storage.Storage` (Put/Get/Delete/Exists, content-addressed by
   sha256) is implemented by `S3` (`s3.go` via `minio-go`, used by
-  docker-compose against MinIO and by every real deployment) and `Local`
+  docker-compose against RustFS and by every real deployment) and `Local`
   (`local.go`, filesystem under `LIBRARYZ_STORAGE_DIR`). `Local` exists so
   `internal/server/smoke_test.go` can do a full HTTP-level round-trip
-  without needing MinIO running — that's what preserves the "no Docker
+  without needing an S3 server running — that's what preserves the "no Docker
   for `go test`" property. It's also the fallback when running
   `go run ./cmd/libraryz` on the host without S3 env. **Selection is
   implicit**: if `LIBRARYZ_S3_ENDPOINT` is set the S3 backend is used
@@ -148,14 +161,23 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   reintroduce one. **Downloads stream through the backend**
   (`GET /editions/{id}/download` → `store.Get` → `io.Copy`); there are
   **no presigned URLs** — fine at the current scale (public downloads,
-  500 MiB cap). Adding minio-go pulled newer `golang.org/x/*` deps that
-  require **go 1.25** (go.mod directive + the `golang:1.25-alpine`
-  builder).
+  500 MiB cap). Current `golang.org/x/*`, pdfcpu and goose releases
+  require **go 1.26** (the go.mod directive); the Docker builder
+  (`golang:1.27-alpine`) and CI build with Go 1.27. pdfcpu ≥0.16 takes a
+  `context.Context` on `api.ReadContext`/`WriteContext`.
+  **Compose runs RustFS, not MinIO** (`rustfs/rustfs`, pinned): MinIO stopped
+  publishing images and archived its repo in 2026, so `minio/minio` doesn't
+  pull. The client library is still `minio-go` — it's a generic S3 client.
+  `go test ./internal/storage -run S3` runs against any S3 endpoint via
+  `LIBRARYZ_S3_{ENDPOINT,ACCESS_KEY,SECRET_KEY}`.
 - **Recommendations are a trained model, not a pure query.** `cmd/libraryz`
   trains implicit-ALS in-process (goroutine on startup + `time.Ticker`), writing
   the `rec_*` factor/neighbor tables; `Recommend` reads those. Factor vectors are
   `datatypes.JSON` (`[]float64`) for sqlite/Postgres parity — **don't** switch to
-  pgvector without a test-DB plan. The Phase 4 content+popularity scorer is
+  pgvector without a test-DB plan. Every replica runs the ticker, but
+  `Trainer.Train` holds `runlock.KeyRecTrainer` (`pg_try_advisory_xact_lock`
+  — pgbouncer-safe) and skips if another instance is training or the model
+  is younger than half the interval. The Phase 4 content+popularity scorer is
   **kept on purpose** as the cold-start fallback (user with no trained vector) —
   don't delete it. Knobs: `LIBRARYZ_REC_{RETRAIN_INTERVAL,FACTORS,ALPHA}`.
   Whether MF actually helps is gated by `go test -tags=eval` (above).
@@ -174,9 +196,18 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of Phase 5 (2026-05-27): 56 backend + 61 frontend
-  tests** (57 backend with `-tags=eval`). See [PLAN.md](PLAN.md) for the
+  `FakeTokenStore`. **As of 2026-10-08: 127 backend + 88 frontend
+  tests** (+1 with `-tags=eval`, +9 with `-tags=postgres`, which CI runs
+  against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
+- **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
+  (`gorm.DeletedAt` + `deleted_by` + `delete_reason`), so GORM queries on
+  those models skip removed rows automatically — but **raw
+  `Table("works")` queries must add `deleted_at IS NULL` themselves**
+  (library, contribution, recommendation do). Blob GC
+  (`catalog.Service.CollectGarbage`, `runlock.KeyBlobGC`) deletes blobs no
+  live edition references after `LIBRARYZ_BLOB_GC_RETENTION`; it needs
+  `storage.Storage.List`.
 - **Moderator promotion (v0): there is no admin endpoint.** Update the
   DB directly. Postgres or sqlite:
   ```sql
@@ -208,6 +239,16 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
     resolve callback, JS invokes it, Kotlin wraps in
     `suspendCancellableCoroutine`. Look for `awaitHandle` / `awaitBytes`
     in that file. Don't replace those with `.await()`.
+- **Sessions = short access JWT + rotating refresh token.** Access tokens
+  (15m, `kid` header, `tv` claim) are checked against `users.token_version`
+  by `middleware.Auth(db)` — bump it to revoke everything
+  (`/auth/logout-all`). Refresh tokens are opaque, stored as sha256, single
+  use; presenting a spent one revokes its whole family. Frontend:
+  `ApiClient` wraps authed calls in `authed {}` (one serialized refresh on
+  401, then retry); `AuthState` is its `SessionHooks` and raises
+  `sessionExpired` when renewal fails, which sends `App` to sign-in. Never
+  run two refreshes for one session in parallel. Secret rotation:
+  `JWT_SECRET_PREVIOUS`.
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

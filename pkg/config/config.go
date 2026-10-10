@@ -9,11 +9,26 @@ import (
 )
 
 type Config struct {
-	DatabaseURL    string
-	ListenAddr     string
-	StorageDir     string
-	JWTSecret      string
-	MaxUploadBytes int64
+	DatabaseURL string
+	// MigrateDatabaseURL is the DSN schema migrations run over. It must reach
+	// Postgres directly (not pgbouncer in transaction-pooling mode): the
+	// migrator holds a session advisory lock. Defaults to DatabaseURL.
+	MigrateDatabaseURL string
+	// AutoMigrate runs migrations on server startup (default). Set
+	// LIBRARYZ_AUTO_MIGRATE=false when migrations run as a separate
+	// `libraryz migrate` step instead.
+	AutoMigrate bool
+	ListenAddr  string
+	StorageDir  string
+	JWTSecret   string
+	// JWTPreviousSecret still verifies (but never signs) tokens, for
+	// zero-downtime rotation. Optional.
+	JWTPreviousSecret string
+	// AccessTokenTTL bounds a leaked access token's usefulness; clients renew
+	// with a refresh token that lives RefreshTokenTTL.
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+	MaxUploadBytes  int64
 	// AllowedOrigins is the CORS allowlist (exact-match) for browser clients.
 	// Empty means "dev mode": only localhost / 127.0.0.1 origins are allowed.
 	// Set LIBRARYZ_ALLOWED_ORIGINS (comma-separated) in production.
@@ -29,6 +44,11 @@ type Config struct {
 	S3SecretKey         string
 	S3Bucket            string
 	S3UseSSL            bool
+	// Blob garbage collection: how often to sweep storage, and how long a
+	// moderator-removed edition's file is kept (so the removal can still be
+	// reverted) before it's purged.
+	BlobGCInterval  time.Duration
+	BlobGCRetention time.Duration
 	// Recommendation training knobs.
 	RecRetrainInterval time.Duration
 	RecFactors         int
@@ -61,9 +81,14 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		DatabaseURL:            GetDatabaseUrl(),
+		MigrateDatabaseURL:     getMigrateDatabaseURL(),
+		AutoMigrate:            os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
 		ListenAddr:             GetListenAddr(),
 		StorageDir:             GetStorageDir(),
 		JWTSecret:              GetJWTSecret(),
+		JWTPreviousSecret:      GetJWTPreviousSecret(),
+		AccessTokenTTL:         getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:        getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		MaxUploadBytes:         GetMaxUploadBytes(),
 		AllowedOrigins:         GetAllowedOrigins(),
 		CORSAllowPrivateLAN:    os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
@@ -72,6 +97,8 @@ func Load() *Config {
 		S3SecretKey:            os.Getenv("LIBRARYZ_S3_SECRET_KEY"),
 		S3Bucket:               getEnv("LIBRARYZ_S3_BUCKET", "libraryz"),
 		S3UseSSL:               os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
+		BlobGCInterval:         getDurationEnv("LIBRARYZ_BLOB_GC_INTERVAL", 24*time.Hour),
+		BlobGCRetention:        getDurationEnv("LIBRARYZ_BLOB_GC_RETENTION", 30*24*time.Hour),
 		RecRetrainInterval:     GetRecRetrainInterval(),
 		RecFactors:             GetRecFactors(),
 		RecAlpha:               GetRecAlpha(),
@@ -141,6 +168,16 @@ func GetRecAlpha() float64 {
 	return 0
 }
 
+// getMigrateDatabaseURL is LIBRARYZ_MIGRATE_DATABASE_URL, falling back to
+// DATABASE_URL when unset *or empty* — an empty value (e.g. a blank compose
+// variable) would otherwise leave migrations with no DSN at all.
+func getMigrateDatabaseURL() string {
+	if v := os.Getenv("LIBRARYZ_MIGRATE_DATABASE_URL"); v != "" {
+		return v
+	}
+	return GetDatabaseUrl()
+}
+
 func GetDatabaseUrl() string {
 	return getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/libraryz?sslmode=disable")
 }
@@ -179,6 +216,12 @@ func GetJWTSecret() string {
 	return getEnv("JWT_SECRET", InsecureDefaultJWTSecret)
 }
 
+// GetJWTPreviousSecret is the rotated-out secret that still verifies tokens
+// (JWT_SECRET_PREVIOUS). Empty when not rotating.
+func GetJWTPreviousSecret() string {
+	return os.Getenv("JWT_SECRET_PREVIOUS")
+}
+
 // Validate fails fast on configuration that is safe for tests but dangerous in
 // a real deployment. Call it from main() before serving; the library path
 // (server.New, used by tests) deliberately does not, so the dev fallback
@@ -191,6 +234,10 @@ func (c *Config) Validate() error {
 		return errors.New("JWT_SECRET is set to the insecure built-in default; set a real secret")
 	case len(c.JWTSecret) < 32:
 		return errors.New("JWT_SECRET must be at least 32 bytes")
+	case c.JWTPreviousSecret != "" && len(c.JWTPreviousSecret) < 32:
+		return errors.New("JWT_SECRET_PREVIOUS must be at least 32 bytes when set")
+	case c.JWTPreviousSecret == c.JWTSecret:
+		return errors.New("JWT_SECRET_PREVIOUS must differ from JWT_SECRET")
 	}
 	return nil
 }

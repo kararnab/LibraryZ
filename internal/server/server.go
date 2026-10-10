@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/kararnab/libraryZ/internal/auth"
@@ -11,6 +13,7 @@ import (
 	"github.com/kararnab/libraryZ/internal/contribution"
 	"github.com/kararnab/libraryZ/internal/library"
 	"github.com/kararnab/libraryZ/internal/middleware"
+	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/storage"
 	"gorm.io/gorm"
@@ -26,12 +29,15 @@ type Deps struct {
 	// AllowPrivateLAN additionally permits RFC-1918 private-IP origins in dev
 	// mode (when AllowedOrigins is empty). Ignored otherwise.
 	AllowPrivateLAN bool
+	// Token lifetimes; zero means the auth package defaults.
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 // New builds the HTTP handler with all routes wired. Used by cmd/libraryz and
 // integration tests so production and tests exercise the same router.
 func New(d Deps) http.Handler {
-	authSvc := auth.NewService(d.DB)
+	authSvc := auth.NewService(d.DB, d.AccessTokenTTL, d.RefreshTokenTTL)
 	authH := auth.NewHandler(authSvc)
 
 	catSvc := catalog.NewService(d.DB, d.Storage)
@@ -48,8 +54,11 @@ func New(d Deps) http.Handler {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", authH.HealthCheck).Methods(http.MethodGet)
+	r.HandleFunc("/ready", ready(d.DB, d.Storage)).Methods(http.MethodGet)
 	r.HandleFunc("/auth/signup", authH.SignUp).Methods(http.MethodPost)
 	r.HandleFunc("/auth/login", authH.Login).Methods(http.MethodPost)
+	r.HandleFunc("/auth/refresh", authH.Refresh).Methods(http.MethodPost)
+	r.HandleFunc("/auth/logout", authH.Logout).Methods(http.MethodPost)
 
 	r.HandleFunc("/works", catH.ListWorks).Methods(http.MethodGet)
 	// /works/search before /works/{id} so mux matches "search" as a
@@ -64,10 +73,13 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("/contributions/{id}", contribH.Get).Methods(http.MethodGet)
 
 	authed := r.NewRoute().Subrouter()
-	authed.Use(middleware.Auth)
+	authed.Use(middleware.Auth(d.DB))
 	authed.HandleFunc("/auth/me", authH.Me).Methods(http.MethodGet)
+	authed.HandleFunc("/auth/logout-all", authH.LogoutAll).Methods(http.MethodPost)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)
 	authed.HandleFunc("/works/{id}/editions", catH.UploadEdition).Methods(http.MethodPost)
+	// Moderators, or the creator of a still-empty work; checked in the service.
+	authed.HandleFunc("/works/{id}", catH.DeleteWork).Methods(http.MethodDelete)
 	authed.HandleFunc("/works/{id}/contributions", contribH.Submit).Methods(http.MethodPost)
 	authed.HandleFunc("/me/contributions", contribH.ListMine).Methods(http.MethodGet)
 
@@ -90,6 +102,7 @@ func New(d Deps) http.Handler {
 	mod.Use(middleware.Moderator(d.DB))
 	mod.HandleFunc("/contributions/{id}/approve", contribH.Approve).Methods(http.MethodPost)
 	mod.HandleFunc("/contributions/{id}/reject", contribH.Reject).Methods(http.MethodPost)
+	mod.HandleFunc("/editions/{id}", catH.DeleteEdition).Methods(http.MethodDelete)
 
 	// Wrap the whole router so OPTIONS preflights are handled by us before
 	// mux's method matcher returns 405. r.Use(...) would run AFTER routing.
@@ -117,7 +130,7 @@ func cors(next http.Handler, allowed []string, allowPrivateLAN bool) http.Handle
 				"GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers",
 				"Authorization, Content-Type, X-Requested-With")
-			w.Header().Set("Access-Control-Expose-Headers", "Authorization, X-Content-SHA256")
+			w.Header().Set("Access-Control-Expose-Headers", "Authorization, Content-Disposition, X-Content-SHA256")
 		}
 		// Preflights are always answered 204 (a disallowed origin simply gets
 		// no Allow-Origin header, so the browser blocks it). Non-OPTIONS
@@ -165,19 +178,7 @@ func allowOrigin(allowed []string, allowPrivateLAN bool) func(string) bool {
 	}
 }
 
-// Migrate runs all schema migrations needed by the routes New() exposes.
+// Migrate brings the schema up to date. See internal/migrations.
 func Migrate(db *gorm.DB) error {
-	if err := auth.Migrate(db); err != nil {
-		return err
-	}
-	if err := catalog.Migrate(db); err != nil {
-		return err
-	}
-	if err := contribution.Migrate(db); err != nil {
-		return err
-	}
-	if err := library.Migrate(db); err != nil {
-		return err
-	}
-	return recommendation.Migrate(db)
+	return migrations.Up(context.Background(), db)
 }

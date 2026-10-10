@@ -3,8 +3,10 @@ package recommendation_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/recommendation"
@@ -129,5 +131,30 @@ func TestTrainEmptyCorpusClearsTables(t *testing.T) {
 	db.Model(&recommendation.WorkFactors{}).Count(&n)
 	if n != 0 {
 		t.Fatalf("empty-corpus train should clear factor tables, got %d rows", n)
+	}
+}
+
+func TestTrainSkipsWhenModelIsFresh(t *testing.T) {
+	db := newTestDB(t)
+	w := seedWork(t, db, "Solo", "X")
+	addToLibrary(t, db, 1, w, "read", ratingPtr(5))
+
+	cfg := recommendation.DefaultConfig()
+	cfg.MinRetrainAge = time.Hour
+	tr := recommendation.NewTrainer(db, cfg)
+	if err := tr.Train(context.Background()); err != nil {
+		t.Fatalf("first train: %v", err)
+	}
+	if err := tr.Train(context.Background()); !errors.Is(err, recommendation.ErrFresh) {
+		t.Fatalf("second train: err = %v, want ErrFresh", err)
+	}
+
+	// Once the model ages past MinRetrainAge it retrains.
+	if err := db.Model(&recommendation.UserFactors{}).Where("1 = 1").
+		Update("updated_at", time.Now().Add(-2*time.Hour)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Train(context.Background()); err != nil {
+		t.Fatalf("stale train: %v", err)
 	}
 }

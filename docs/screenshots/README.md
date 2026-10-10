@@ -7,17 +7,17 @@ these names and they'll render automatically:
 Files are named with `snake_case.png`. The README's grid references the
 filenames below — keep the names in sync if you add or rename shots.
 
-| Filename             | What it should show                                                   |
-|----------------------|-----------------------------------------------------------------------|
-| `browse.png`         | Browse + Work Detail (the adaptive list-detail at ≥840dp).            |
-| `my_library.png`     | Personal library — a grid with mixed shelves / statuses / progress.   |
-| `review.png`         | Moderator review queue with pending edits and diff cards.             |
-| `pdf_preview.png`    | `PagedReader` rendering a PDF — chevron page controls, dark mat.      |
-| `text_preview.png`   | `TextReader` rendering a TXT — scrolling serif body on a light surface.|
-| `login.png`          | Auth gate / Log in tab — clean first-run hero.                        |
-| `upload_screen.png`  | "Add edition" modal — format picker, language, file picker.           |
-| `for_you.png`        | (optional) "For You" recommendations screen.                          |
-| `web.png`            | (optional) The Wasm web build in a browser.                           |
+| Filename            | What it should show                                                     |
+|---------------------|-------------------------------------------------------------------------|
+| `browse.png`        | Browse + Work Detail (the adaptive list-detail at ≥840dp).              |
+| `my_library.png`    | Personal library — a grid with mixed shelves / statuses / progress.     |
+| `review.png`        | Moderator review queue with pending edits and diff cards.               |
+| `pdf_preview.png`   | `PagedReader` rendering a PDF — chevron page controls, dark mat.        |
+| `text_preview.png`  | `TextReader` rendering a TXT — scrolling serif body on a light surface. |
+| `login.png`         | Auth gate / Log in tab — clean first-run hero.                          |
+| `upload_screen.png` | "Add edition" modal — format picker, language, file picker.             |
+| `for_you.png`       | (optional) "For You" recommendations screen.                            |
+| `web.png`           | (optional) The Wasm web build in a browser.                             |
 
 ## Step 1 — seed the instance
 

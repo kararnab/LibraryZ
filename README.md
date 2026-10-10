@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://github.com/kararnab/libraryZ/actions/workflows/ci.yml"><img src="https://github.com/kararnab/libraryZ/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/go-1.25-00ADD8?logo=go" alt="Go 1.25">
+  <img src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go" alt="Go 1.26+">
   <img src="https://img.shields.io/badge/kotlin-2.0.21-7F52FF?logo=kotlin" alt="Kotlin 2.0.21">
   <img src="https://img.shields.io/badge/compose--multiplatform-1.7.3-4285F4" alt="Compose Multiplatform 1.7.3">
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
@@ -77,13 +77,16 @@ That's it. The stack comes up with:
 
 - **API** on <http://localhost:8080> (Go backend)
 - **Postgres** on `:5432` (metadata)
-- **MinIO** on `:9000` / console `:9001` (S3-compatible blob store)
+- **RustFS** on `:9100` / console `:9101` (S3-compatible blob store;
+  MinIO no longer publishes images — any S3-compatible store works)
 
 Smoke-test it:
 
 ```bash
-curl -s localhost:8080/health
+curl -s localhost:8080/health   # liveness: process is up
 # {"status":"Healthy","time":"..."}
+curl -s localhost:8080/ready    # readiness: Postgres + blob storage reachable (503 if not)
+# {"status":"ready","checks":{"database":"ok","storage":"ok"}}
 
 curl -s -X POST localhost:8080/auth/signup \
   -H 'Content-Type: application/json' \
@@ -122,7 +125,7 @@ state the screenshot grid above expects.
 └──────────────────────────────────────────────────────────────┘
          │                       │                       │
          ▼                       ▼                       ▼
-   PostgreSQL            Local FS  or  S3 / MinIO       (no
+   PostgreSQL            Local FS  or  S3-compatible    (no
    (metadata, FTS,    (file blobs, sha256-addressed,    external
     rec_* tables)     content-deduped, streamed)        ML svc)
 ```
@@ -132,8 +135,9 @@ Design notes worth knowing before you contribute:
 - **Modular monolith.** One Go binary, domain packages under `internal/`.
   Add new functionality as a package there, not a new `cmd/`.
 - **Two storage backends, one interface.** `internal/storage.Storage` is
-  implemented by `Local` (filesystem) and `S3` (MinIO / any S3-compatible
-  store via minio-go). Selected by `LIBRARYZ_STORAGE_BACKEND=local|s3`.
+  implemented by `Local` (filesystem) and `S3` (any S3-compatible store
+  via minio-go — RustFS in compose, AWS S3, R2, B2, …). Selected implicitly:
+  `S3` when `LIBRARYZ_S3_ENDPOINT` is set, else `Local`.
 - **Downloads stream through the backend** (`GET /editions/{id}/download`
   → `store.Get` → `io.Copy`). No presigned URLs.
 - **Recommendations are a trained model.** Implicit ALS trains in-process
@@ -157,14 +161,14 @@ recommender pipeline, per-platform frontend shims — in
 
 ## Tech stack
 
-**Backend** — Go 1.25 · gorilla/mux · GORM · Postgres 16 (SQLite for tests
+**Backend** — Go 1.26+ · gorilla/mux · GORM · Postgres 16 (SQLite for tests
 via `glebarez/sqlite`) · golang-jwt · bcrypt · minio-go · gonum (for ALS).
 
 **Frontend** — Kotlin 2.0.21 · Compose Multiplatform 1.7.3 · Ktor client ·
 kotlinx.serialization · AGP 8.7.3 · PDFBox (Desktop) / `PdfRenderer`
 (Android) / pdf.js (Wasm) / PDFKit (iOS).
 
-**Ops** — Docker / docker-compose · MinIO · OpenAPI 3.1 spec at
+**Ops** — Docker / docker-compose · RustFS (S3) · Kong · OpenAPI 3.1 spec at
 [openapi/libraryz.yaml](openapi/libraryz.yaml).
 
 ## Configuration
@@ -175,9 +179,8 @@ All via environment variables. Defaults work for `docker compose up`.
 |-------------------------------------------|--------------------------------------------------------------------|
 | `DATABASE_URL`                            | `postgres://user:password@localhost:5432/libraryz?sslmode=disable` |
 | `LIBRARYZ_LISTEN_ADDR`                    | `:8080`                                                            |
-| `LIBRARYZ_STORAGE_BACKEND`                | `local` (`s3` for MinIO / S3-compatible)                           |
-| `LIBRARYZ_STORAGE_DIR`                    | `./data/blobs` (local backend only)                                |
-| `LIBRARYZ_S3_ENDPOINT`                    | _(unset)_ — e.g. `minio:9000`, `s3.amazonaws.com`                  |
+| `LIBRARYZ_STORAGE_DIR`                    | `./data/blobs` (local backend, used when no S3 endpoint is set)    |
+| `LIBRARYZ_S3_ENDPOINT`                    | _(unset)_ — e.g. `rustfs:9000`, `s3.amazonaws.com`; setting it selects S3 |
 | `LIBRARYZ_S3_ACCESS_KEY` / `_SECRET_KEY`  | _(unset)_                                                          |
 | `LIBRARYZ_S3_BUCKET`                      | `libraryz`                                                         |
 | `LIBRARYZ_S3_USE_SSL`                     | `false`                                                            |
@@ -218,9 +221,12 @@ Full spec: [openapi/libraryz.yaml](openapi/libraryz.yaml).
 **Public**
 
 ```
-GET  /health
+GET  /health                       liveness
+GET  /ready                        readiness (DB + storage), 503 when degraded
 POST /auth/signup                  {email, password, name}
-POST /auth/login                   {email, password}     -> Authorization: Bearer <jwt>
+POST /auth/login                   {email, password}     -> {access_token, refresh_token, expires_in}
+POST /auth/refresh                 {refresh_token}       -> new pair (single-use, rotating)
+POST /auth/logout                  {refresh_token}       ends that session
 GET  /works[?limit=&offset=]
 GET  /works/search?q=...           full-text search (FTS on Postgres, LIKE on SQLite)
 GET  /works/{id}
@@ -234,6 +240,7 @@ GET  /contributions/{id}
 
 ```
 GET  /auth/me
+POST /auth/logout-all                      ends every session (revokes all tokens)
 POST /works                                {title, authors, description, ...}
 POST /works/{id}/editions                  multipart: format, language?, file
 POST /works/{id}/contributions             {patch: {field: value, ...}}
@@ -251,7 +258,15 @@ POST /me/recommendations/{work_id}/dismiss
 ```
 POST /contributions/{id}/approve
 POST /contributions/{id}/reject
+DEL  /works/{id}                           {reason}  takedown: work + all editions (soft delete);
+                                                     creators may also remove their own empty work
+DEL  /editions/{id}                        {reason}  takedown: one edition (soft delete)
 ```
+
+Takedowns are soft deletes (who/when/why is kept) and hide the item
+everywhere. The stored files are purged by a background sweep after
+`LIBRARYZ_BLOB_GC_RETENTION` (default 30 days), which also removes orphaned
+blobs.
 
 Example:
 
@@ -278,10 +293,11 @@ curl -X POST localhost:8080/works/<work-id>/editions \
 # Backend — in-memory SQLite, no Docker required
 go test ./...
 
-# Postgres-only paths (full-text search tsvector). DROPS catalog tables —
-# never point at production.
+# Postgres-only paths (FTS ranking, concurrent approve, advisory locks,
+# migrations). DROPS AND RECREATES the public schema — never point at
+# production.
 DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' \
-  go test -tags=postgres ./internal/catalog/...
+  go test -tags=postgres -p 1 ./...
 
 # Recommendation offline eval (MF vs popularity baseline)
 go test -tags=eval ./internal/recommendation/...

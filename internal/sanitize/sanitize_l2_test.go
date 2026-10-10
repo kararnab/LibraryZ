@@ -3,6 +3,7 @@ package sanitize
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"math/rand"
@@ -42,7 +43,7 @@ func TestSanitize_PDFRoundTripsCleanFile(t *testing.T) {
 		t.Fatalf("sanitized output is not a PDF: starts with %q", out[:min(16, len(out))])
 	}
 	// Reparse to confirm pdfcpu can read what it wrote.
-	if _, err := api.ReadContext(bytes.NewReader(out), pdfConf()); err != nil {
+	if _, err := api.ReadContext(context.Background(), bytes.NewReader(out), pdfConf()); err != nil {
 		t.Fatalf("sanitized PDF unreadable: %v", err)
 	}
 }
@@ -248,7 +249,7 @@ func buildPDF(t *testing.T, extraCatalogKeys map[string]types.Object) []byte {
 		}
 	}
 	var buf bytes.Buffer
-	if err := api.WriteContext(ctx, &buf); err != nil {
+	if err := api.WriteContext(context.Background(), ctx, &buf); err != nil {
 		t.Fatalf("WriteContext: %v", err)
 	}
 	return buf.Bytes()
@@ -257,7 +258,7 @@ func buildPDF(t *testing.T, extraCatalogKeys map[string]types.Object) []byte {
 // pdfCatalogHas reports whether the PDF's catalog (RootDict) has key.
 func pdfCatalogHas(t *testing.T, body []byte, key string) bool {
 	t.Helper()
-	ctx, err := api.ReadContext(bytes.NewReader(body), pdfConf())
+	ctx, err := api.ReadContext(context.Background(), bytes.NewReader(body), pdfConf())
 	if err != nil {
 		t.Fatalf("ReadContext: %v", err)
 	}
@@ -272,7 +273,7 @@ func pdfCatalogHas(t *testing.T, body []byte, key string) bool {
 // pdfNamesHas reports whether the catalog's /Names sub-dict has key.
 func pdfNamesHas(t *testing.T, body []byte, key string) bool {
 	t.Helper()
-	ctx, err := api.ReadContext(bytes.NewReader(body), pdfConf())
+	ctx, err := api.ReadContext(context.Background(), bytes.NewReader(body), pdfConf())
 	if err != nil {
 		t.Fatalf("ReadContext: %v", err)
 	}

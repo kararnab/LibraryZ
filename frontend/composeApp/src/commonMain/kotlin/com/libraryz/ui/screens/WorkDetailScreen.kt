@@ -51,7 +51,9 @@ import com.libraryz.data.LibraryStatus
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import com.libraryz.data.api.UpsertLibraryRequest
+import com.libraryz.data.prettySize
 import com.libraryz.ui.components.EditionRow
+import com.libraryz.ui.components.RemoveDialog
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,9 +71,14 @@ fun WorkDetailScreen(
     libraryEntry: UserBook? = null,
     onLibraryUpsert: (UpsertLibraryRequest) -> Unit = {},
     onLibraryRemove: () -> Unit = {},
+    // Moderator takedowns; null hides the affordance (non-moderators).
+    onRemoveWork: ((reason: String) -> Unit)? = null,
+    onRemoveEdition: ((Edition, reason: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    var confirmRemoveWork by remember { mutableStateOf(false) }
+    var editionToRemove by remember { mutableStateOf<Edition?>(null) }
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -85,7 +92,7 @@ fun WorkDetailScreen(
                     }
                 },
                 actions = {
-                    if (onSuggestEdit != null) {
+                    if (onSuggestEdit != null || onRemoveWork != null) {
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Outlined.MoreVert, contentDescription = "More")
                         }
@@ -93,13 +100,24 @@ fun WorkDetailScreen(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false },
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Suggest edit") },
-                                onClick = {
-                                    menuOpen = false
-                                    onSuggestEdit()
-                                },
-                            )
+                            if (onSuggestEdit != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Suggest edit") },
+                                    onClick = {
+                                        menuOpen = false
+                                        onSuggestEdit()
+                                    },
+                                )
+                            }
+                            if (onRemoveWork != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Remove work", color = MaterialTheme.colorScheme.error) },
+                                    onClick = {
+                                        menuOpen = false
+                                        confirmRemoveWork = true
+                                    },
+                                )
+                            }
                         }
                     }
                 },
@@ -168,10 +186,38 @@ fun WorkDetailScreen(
                     edition = ed,
                     onDownload = { onDownload(ed) },
                     onPreview = { onPreview(ed) },
+                    onRemove = onRemoveEdition?.let { { editionToRemove = ed } },
                 )
             }
 
             Spacer(Modifier.height(96.dp))
+        }
+    }
+
+    if (confirmRemoveWork && onRemoveWork != null) {
+        RemoveDialog(
+            title = "Remove this work?",
+            body = "“${work.title}” and all ${work.editions.size} of its editions will be hidden from everyone. " +
+                "The files are kept for a while in case this needs to be undone.",
+            onConfirm = { reason ->
+                confirmRemoveWork = false
+                onRemoveWork(reason)
+            },
+            onDismiss = { confirmRemoveWork = false },
+        )
+    }
+    editionToRemove?.let { ed ->
+        if (onRemoveEdition != null) {
+            RemoveDialog(
+                title = "Remove this edition?",
+                body = "The ${ed.format.uppercase()} edition (${ed.prettySize}) will be hidden from everyone, " +
+                    "and the same file can't be uploaded again.",
+                onConfirm = { reason ->
+                    editionToRemove = null
+                    onRemoveEdition(ed, reason)
+                },
+                onDismiss = { editionToRemove = null },
+            )
         }
     }
 }

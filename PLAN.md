@@ -586,7 +586,10 @@ moved 1.23 → 1.24, gonum's minimum).
     sets strength). Per-iteration `YᵀY`/`XᵀX` precompute + per-row gonum Cholesky
     solve (`SolveVec`). Builds top-N item-item cosine neighbors. **Atomic swap**:
     all tables rewritten in one transaction so readers never see a half-trained
-    model. `Config{Factors=32, Iterations=15, Lambda=0.1, Alpha=40, Seed=42}`. ✓
+    model. `Config{Factors=32, Iterations=15, Lambda=10, Alpha=40, Seed=42}`. ✓
+    (Lambda was 0.1 until 2026-10-08: too weak against α=40 confidences, so
+    the model memorized each user's row and the eval gate passed only by
+    luck on ~half of holdout draws.)
 81. Tests: clustering (intra-cluster work-vector cosine > cross; a cluster user
     scores its cluster's works higher) + empty-corpus clears tables. ✓
 
@@ -792,26 +795,29 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
 99. **Atomic contribution decisions** ([#4](https://github.com/kararnab/LibraryZ/issues/4)).
     Use a conditional `UPDATE … WHERE status='pending'` and check
     `RowsAffected`, so two moderators deciding at once can't double-apply.
-    Needs a Postgres-tagged concurrency test, because sqlite serializes writers.
+    Needs a Postgres-tagged concurrency test, because sqlite serializes writers. ✓
 100. **Validate contribution patches at submit** ([#5](https://github.com/kararnab/LibraryZ/issues/5)).
      Reject unknown keys, wrong types, an empty title, and over-long strings
      with 400. The stored patch stays verbatim (for auditing), and approve
-     keeps its whitelist filter as defense-in-depth.
+     keeps its whitelist filter as defense-in-depth. ✓
 101. **Frontend clears expired sessions** ([#6](https://github.com/kararnab/LibraryZ/issues/6)).
      A central 401 handler in `ApiClient` calls `auth.clear()` and sends the
-     user back to AuthGate (`/auth/login` excluded).
+     user back to AuthGate (`/auth/login` excluded). Landed together with #15:
+     on 401 the client first tries one serialized refresh, and only clears the
+     session (with a "session expired" snackbar) if that's rejected. ✓
 102. **Browse pagination** ([#7](https://github.com/kararnab/LibraryZ/issues/7)).
      Infinite scroll for list and search. Today only the newest 50 works are
-     reachable.
+     reachable. ✓
 103. **Auth header parsing + stricter JWT validation** ([#8](https://github.com/kararnab/LibraryZ/issues/8)).
-     Match the scheme case-insensitively, require `exp`, and pin HS256.
-104. **Escape `LIKE` wildcards in the sqlite search fallback** ([#9](https://github.com/kararnab/LibraryZ/issues/9)).
+     Match the scheme case-insensitively, require `exp`, and pin HS256. ✓
+104. **Escape `LIKE` wildcards in the sqlite search fallback** ([#9](https://github.com/kararnab/LibraryZ/issues/9)). ✓
 
 **Slice 7.3 — 2-instance readiness (the next steps after Phase 6).**
 105. **Single-runner recommendation training** ([#10](https://github.com/kararnab/LibraryZ/issues/10)).
      Use `pg_try_advisory_xact_lock`, which is safe under pgbouncer
      transaction pooling. Instances that don't get the lock skip the tick.
-     No-op on sqlite.
+     No-op on sqlite. Also skips if the model is younger than half
+     the retrain interval, so drifting tickers don't each retrain. ✓
 106. **S2 — bound resource use during upload sanitization.** (DONE
      2026-10-04; was tracked privately until the fix landed.) pdfcpu fully
      inflates compressed object streams while parsing, and it has no limit
@@ -830,36 +836,45 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      fixed. ✓
 107. **Liveness vs readiness** ([#11](https://github.com/kararnab/LibraryZ/issues/11)).
      `/health` stays shallow. A new `/ready` pings the DB and storage and
-     backs the docker-compose healthcheck and Kong's upstream health checks.
+     backs the docker-compose healthcheck and Kong's upstream health checks. ✓
 
 **Slice 7.4 — features + release hygiene.**
-108. Download filename from the work title ([#12](https://github.com/kararnab/LibraryZ/issues/12)).
+108. Download filename from the work title ([#12](https://github.com/kararnab/LibraryZ/issues/12)). ✓
 109. Moderator delete/takedown (soft delete, audited) + GC for orphaned
-     blobs ([#13](https://github.com/kararnab/LibraryZ/issues/13)).
-110. Weighted `ts_rank` relevance ordering on Postgres search ([#14](https://github.com/kararnab/LibraryZ/issues/14)).
-111. Short-lived access tokens + refresh + revocation ([#15](https://github.com/kararnab/LibraryZ/issues/15)).
+     blobs ([#13](https://github.com/kararnab/LibraryZ/issues/13)). Also closes
+     item 97's known gap: a creator may remove their own still-empty work, and
+     the NewWork upload flow does so when its upload is rejected. ✓
+110. Weighted `ts_rank` relevance ordering on Postgres search ([#14](https://github.com/kararnab/LibraryZ/issues/14)). ✓
+111. Short-lived access tokens + refresh + revocation ([#15](https://github.com/kararnab/LibraryZ/issues/15)). ✓
 112. Versioned migrations (sqlite + Postgres), run under a lock
-     ([#16](https://github.com/kararnab/LibraryZ/issues/16)). **Deferred
-     until the first production deployment** under the pre-alpha data policy
-     below. Not a blocker for `v0.1.0`.
+     ([#16](https://github.com/kararnab/LibraryZ/issues/16)). **Framework
+     landed early** (goose, Go migrations over GORM, Postgres advisory lock,
+     `libraryz migrate`), but under the pre-alpha data policy below the
+     baseline (`internal/migrations/baseline`) is still edited in place —
+     no numbered migrations or backfills until the first production
+     deployment. ✓
 113. Unit tests for `catalog`, `auth`, `middleware`, `config`
      ([#17](https://github.com/kararnab/LibraryZ/issues/17)). Each slice above
-     adds its own regression tests as it lands; this item covers the rest.
+     adds its own regression tests as it lands; this item covers the rest. Landed:
+     package tests for catalog, auth, middleware, config, utils (JWT),
+     migrations and runlock; CI reports coverage (not gated) and runs the
+     `-tags=postgres` suite against a Postgres service container. ✓
 114. Tag **`v0.1.0`** once 7.1–7.3 are merged (CHANGELOG `[Unreleased]` →
      dated section).
 
 **Sequencing.** 7.1 → 7.2 → 7.3 are each one PR-sized slice and land in
 order. 7.4 items are independent and can go in any order after that. Schema
-changes (#13, #15) go straight in through AutoMigrate. #16 waits for prod.
+changes (#13, #15) went straight into the migration baseline.
 
 **Pre-alpha data policy (decided 2026-10-04).** LibraryZ is not even alpha,
 and there is no deployment whose data matters. **Data loss is acceptable
 until the first production deployment.** So schema changes don't need
-migration, backfill or compatibility work: if a change doesn't fit
-AutoMigrate's additive model, drop the database and blob volume
-(`docker compose down -v`) and re-run `scripts/seed.sh`. The same goes for
+migration, backfill or compatibility work: edit the migration baseline in
+place, drop the database and blob volume (`docker compose down -v`) and
+re-run `scripts/seed.sh`. The same goes for
 API contract changes: old clients aren't supported. This ends when there's a
-prod deployment; #16 (versioned migrations) is the gate for that.
+prod deployment; from then on the baseline is frozen and every schema change
+is a new numbered migration (#16).
 
 **Non-goals (Phase 7):** no new product surface beyond takedown, and no
 change to the storage backend or to Kong's per-IP rate-limit decision (item 93).

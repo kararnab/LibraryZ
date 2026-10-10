@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
 import com.libraryz.data.Work
 import com.libraryz.data.api.ApiClient
+import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.AuthState
 import com.libraryz.data.api.ContributionsState
 import com.libraryz.data.api.CreateWorkRequest
@@ -56,6 +57,7 @@ import com.libraryz.data.api.WorksState
 import com.libraryz.data.api.createTokenStore
 import com.libraryz.data.canPreview
 import com.libraryz.data.isDownloadSupported
+import com.libraryz.data.safeDownloadName
 import com.libraryz.data.sanitizeFilename
 import com.libraryz.data.saveDownload
 import com.libraryz.nav.Navigator
@@ -96,7 +98,9 @@ fun App() {
             // Break the circular construction by attaching the fetcher
             // post-hoc — me() failures are swallowed inside AuthState so
             // offline starts don't drop the session.
-            ApiClient(DefaultBaseUrl, tokenProvider = { auth.token }).also { client ->
+            // auth is also the client's SessionHooks: on a 401 the client
+            // refreshes the session through it, or reports it expired.
+            ApiClient(DefaultBaseUrl, tokenProvider = { auth.token }, sessionHooks = auth).also { client ->
                 auth.setUserFetcher { runCatching { client.me() }.getOrNull() }
             }
         }
@@ -162,10 +166,28 @@ private fun Root(
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbar.current
 
-    // If bootstrap restored a session, jump straight to Browse.
+    // Follow the session: a restored one jumps straight to Browse; losing it
+    // (logout, or expiry detected by ApiClient anywhere in the app) returns
+    // to sign-in.
     LaunchedEffect(auth.isAuthenticated) {
-        if (auth.isAuthenticated && nav.current == Screen.Auth) {
-            nav.replace(Screen.Browse)
+        if (auth.isAuthenticated) {
+            if (nav.current == Screen.Auth) nav.replace(Screen.Browse)
+        } else if (nav.current != Screen.Auth) {
+            nav.replace(Screen.Auth)
+        }
+    }
+    LaunchedEffect(auth.sessionExpired) {
+        if (auth.sessionExpired) {
+            auth.acknowledgeSessionExpired()
+            snackbar.showSnackbar("Your session expired. Please sign in again.")
+        }
+    }
+    // Ends the session server-side too (best effort — offline still logs out
+    // locally), then clears it; the effect above navigates to sign-in.
+    val logout: () -> Unit = {
+        scope.launch {
+            auth.refreshToken?.let { rt -> runCatching { api.logout(rt) } }
+            auth.clear()
         }
     }
 
@@ -187,10 +209,13 @@ private fun Root(
         } else {
             scope.launch {
                 try {
-                    val name = "${sanitizeFilename(work.title)}.${ed.format.lowercase()}"
-                    snackbar.showSnackbar("Downloading $name…")
-                    val bytes = api.downloadEdition(ed.id)
-                    val path = saveDownload(name, bytes)
+                    snackbar.showSnackbar("Downloading ${work.title}…")
+                    val file = api.downloadEditionFile(ed.id)
+                    // Server names the file ("<Title> - <Authors>.<format>");
+                    // the local name is only a fallback for older backends.
+                    val name = file.filename?.let(::safeDownloadName)
+                        ?: "${sanitizeFilename(work.title)}.${ed.format.lowercase()}"
+                    val path = saveDownload(name, file.bytes)
                     snackbar.showSnackbar("Saved to $path")
                 } catch (e: Throwable) {
                     snackbar.showSnackbar("Download failed: ${e.message ?: "unknown"}")
@@ -220,6 +245,37 @@ private fun Root(
         }
     }
 
+    // Moderator takedowns, shared by compact + expanded WorkDetail. Null for
+    // everyone else, which hides the Remove affordances.
+    val removeWork: ((Work, String) -> Unit)? = if (auth.isModerator) {
+        { work, reason ->
+            scope.launch {
+                try {
+                    works.removeWork(work.id, reason)
+                    // Leave the now-404 detail screen.
+                    if (nav.current.let { it is Screen.WorkDetail && it.workId == work.id }) {
+                        if (!nav.pop()) nav.replace(Screen.Browse)
+                    }
+                    snackbar.showSnackbar("Removed “${work.title}”.")
+                } catch (e: Throwable) {
+                    snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                }
+            }
+        }
+    } else null
+    val removeEdition: ((Work, Edition, String) -> Unit)? = if (auth.isModerator) {
+        { work, ed, reason ->
+            scope.launch {
+                try {
+                    works.removeEdition(work.id, ed.id, reason)
+                    snackbar.showSnackbar("Removed the ${ed.format.uppercase()} edition.")
+                } catch (e: Throwable) {
+                    snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                }
+            }
+        }
+    } else null
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val expanded = maxWidth.value >= EXPANDED_DP
 
@@ -247,6 +303,9 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onLogout = logout,
+                            onRemoveWork = removeWork,
+                            onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
@@ -254,7 +313,7 @@ private fun Root(
                         works = works,
                         onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
                         onUploadClick = { nav.push(Screen.Upload()) },
-                        onLogout = { scope.launch { auth.clear(); nav.replace(Screen.Auth) } },
+                        onLogout = logout,
                         showRefresh = false,
                         onReviewClick = if (auth.isModerator) {
                             { nav.push(Screen.ContributionQueue) }
@@ -296,6 +355,9 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onLogout = logout,
+                            onRemoveWork = removeWork,
+                            onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
@@ -310,6 +372,8 @@ private fun Root(
                         libraryEntry = library.entryFor(s.workId),
                         onLibraryUpsert = { req -> libraryUpsert(s.workId, req) },
                         onLibraryRemove = { libraryRemove(s.workId) },
+                        onRemoveWork = removeWork?.let { rm -> { reason -> rm(work, reason) } },
+                        onRemoveEdition = removeEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
                     )
                 }
             }
@@ -340,6 +404,9 @@ private fun Root(
                                 onDownload = downloadEdition,
                                 onLibraryUpsert = libraryUpsert,
                                 onLibraryRemove = libraryRemove,
+                                onLogout = logout,
+                                onRemoveWork = removeWork,
+                                onRemoveEdition = removeEdition,
                             )
                         }
                     } else {
@@ -383,6 +450,9 @@ private fun Root(
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
+                            onLogout = logout,
+                            onRemoveWork = removeWork,
+                            onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
@@ -422,9 +492,14 @@ private fun Root(
                                         fileName = submission.file.name,
                                         bytes = submission.file.bytes,
                                     )
+                                } catch (e: Throwable) {
+                                    // Don't leave an empty work behind when its
+                                    // only upload was rejected (e.g. duplicate
+                                    // file). Creators may remove their own
+                                    // still-empty work. Best effort.
+                                    runCatching { api.deleteWork(created.id, "Upload failed; discarding the empty work") }
+                                    throw e
                                 } finally {
-                                    // The work exists even if the upload was
-                                    // rejected (e.g. duplicate file), so show it.
                                     works.refresh()
                                 }
                             }
@@ -575,6 +650,10 @@ private fun DataDrivenBrowse(
             onForYouClick = onForYouClick,
             onSearch = { q -> works.search(q) },
             activeSearchQuery = works.searchQuery,
+            onLoadMore = { scope.launch { works.loadMore() } },
+            loadingMore = works.loadingMore,
+            endReached = works.endReached,
+            loadMoreError = works.loadMoreError,
         )
     }
 }
@@ -699,8 +778,10 @@ private fun ListDetailLayout(
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
+    onLogout: () -> Unit,
+    onRemoveWork: ((Work, String) -> Unit)? = null,
+    onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
 ) {
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(selectedWorkId) {
         if (selectedWorkId != null) {
@@ -716,7 +797,7 @@ private fun ListDetailLayout(
                 works = works,
                 onWorkClick = onSelect,
                 onUploadClick = { nav.push(Screen.Upload()) },
-                onLogout = { scope.launch { auth.clear(); nav.replace(Screen.Auth) } },
+                onLogout = onLogout,
                 showRefresh = true,
             )
         }
@@ -743,6 +824,8 @@ private fun ListDetailLayout(
                     libraryEntry = library.entryFor(work.id),
                     onLibraryUpsert = { req -> onLibraryUpsert(work.id, req) },
                     onLibraryRemove = { onLibraryRemove(work.id) },
+                    onRemoveWork = onRemoveWork?.let { rm -> { reason -> rm(work, reason) } },
+                    onRemoveEdition = onRemoveEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
                 )
             }
         }

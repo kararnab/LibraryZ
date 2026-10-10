@@ -2,6 +2,7 @@ package sanitize
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 
@@ -67,16 +68,20 @@ func sanitizePDFTo(rs io.ReadSeeker, w io.Writer) (retErr error) {
 	if _, err := rs.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("seek: %w", err)
 	}
-	ctx, err := api.ReadContext(rs, conf)
+	// Background context: this runs in the isolated child process (see
+	// isolate.go), which the parent bounds with a timeout and kills on
+	// cancellation, so there's nothing to propagate here.
+	bg := context.Background()
+	pdf, err := api.ReadContext(bg, rs, conf)
 	if err != nil {
 		return fmt.Errorf("%w: pdfcpu parse: %v", ErrInvalidContent, err)
 	}
-	if ctx == nil || ctx.XRefTable == nil {
+	if pdf == nil || pdf.XRefTable == nil {
 		return fmt.Errorf("%w: PDF parsed to empty context", ErrInvalidContent)
 	}
 	// A PDF without a resolvable catalog can't be safely re-serialized —
 	// pdfcpu will panic on Write. Reject before we get there.
-	if _, err := ctx.XRefTable.Catalog(); err != nil {
+	if _, err := pdf.XRefTable.Catalog(); err != nil {
 		return fmt.Errorf("%w: PDF has no catalog: %v", ErrInvalidContent, err)
 	}
 
@@ -85,7 +90,7 @@ func sanitizePDFTo(rs io.ReadSeeker, w io.Writer) (retErr error) {
 	// indirect ref) are recursed into so we catch e.g. an inline /Names
 	// subtree with a /JavaScript entry. IndirectRefs are not followed —
 	// they'll be reached when we iterate their own XRef entry.
-	for _, entry := range ctx.XRefTable.Table {
+	for _, entry := range pdf.XRefTable.Table {
 		if entry == nil || entry.Free || entry.Object == nil {
 			continue
 		}
@@ -95,11 +100,11 @@ func sanitizePDFTo(rs io.ReadSeeker, w io.Writer) (retErr error) {
 	// RootDict is a cached copy of the catalog dict, used for top-level
 	// lookups. Strip it too so a re-serialization that reads through
 	// RootDict (rather than re-resolving Root) sees the cleaned version.
-	if ctx.XRefTable.RootDict != nil {
-		stripDict(ctx.XRefTable.RootDict)
+	if pdf.XRefTable.RootDict != nil {
+		stripDict(pdf.XRefTable.RootDict)
 	}
 
-	if err := api.WriteContext(ctx, w); err != nil {
+	if err := api.WriteContext(bg, pdf, w); err != nil {
 		return fmt.Errorf("%w: pdfcpu serialize: %v", ErrInvalidContent, err)
 	}
 	return nil

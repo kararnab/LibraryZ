@@ -16,10 +16,10 @@ import (
 
 // s3TestConfig reads connection details from the environment; the test skips
 // unless LIBRARYZ_S3_ENDPOINT is set, so default `go test` (and CI) don't need
-// MinIO. Run against the compose MinIO with, e.g.:
+// an S3 server. Run against the compose RustFS with, e.g.:
 //
-//	LIBRARYZ_S3_ENDPOINT=localhost:9000 LIBRARYZ_S3_ACCESS_KEY=minioadmin \
-//	LIBRARYZ_S3_SECRET_KEY=minioadmin go test ./internal/storage/ -run S3 -v
+//	LIBRARYZ_S3_ENDPOINT=localhost:9100 LIBRARYZ_S3_ACCESS_KEY=rustfsadmin \
+//	LIBRARYZ_S3_SECRET_KEY=rustfsadmin go test ./internal/storage/ -run S3 -v
 func s3TestConfig(t *testing.T) S3Config {
 	t.Helper()
 	ep := os.Getenv("LIBRARYZ_S3_ENDPOINT")
@@ -34,8 +34,8 @@ func s3TestConfig(t *testing.T) S3Config {
 	}
 	return S3Config{
 		Endpoint:  ep,
-		AccessKey: getOr("LIBRARYZ_S3_ACCESS_KEY", "minioadmin"),
-		SecretKey: getOr("LIBRARYZ_S3_SECRET_KEY", "minioadmin"),
+		AccessKey: getOr("LIBRARYZ_S3_ACCESS_KEY", "rustfsadmin"),
+		SecretKey: getOr("LIBRARYZ_S3_SECRET_KEY", "rustfsadmin"),
 		// Unique bucket per run so parallel/repeat runs don't collide.
 		Bucket: "libraryz-test-" + uuid.NewString()[:8],
 		UseSSL: os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
@@ -69,6 +69,15 @@ func TestS3RoundTripAndDedup(t *testing.T) {
 	ok, err := s.Exists(ctx, obj.Key)
 	if err != nil || !ok {
 		t.Fatalf("Exists = %v, %v; want true", ok, err)
+	}
+
+	// List sees the object.
+	var listed []ObjectInfo
+	if err := s.List(ctx, func(o ObjectInfo) error { listed = append(listed, o); return nil }); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Key != obj.Key || listed[0].Size != int64(len(payload)) {
+		t.Fatalf("List = %+v, want just %s", listed, obj.Key)
 	}
 
 	// Get round-trips the exact bytes.
