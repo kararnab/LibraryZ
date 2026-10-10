@@ -38,6 +38,13 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   the apps take either through "Have a code?" on the "Check your email"
   screen and the verification banner. A finished reset signs the account
   out everywhere.
+- **The apps open emailed links.** Android handles `libraryz://` links and,
+  when built with `-Plibraryz.appLinkUrl=…`, the emailed https links as
+  verified App Links (the web bundle can serve the `assetlinks.json`). The
+  desktop app registers `libraryz://`, and the web reset page offers "Open in
+  the LibraryZ app". A link that arrives while the app is open opens its
+  screen. The desktop app now runs as a single copy; a second launch brings
+  the first forward.
 - **Email delivery** through
   [onemailer](https://github.com/kararnab/onemailer) over plain SMTP, so any
   provider works. Configured with `LIBRARYZ_MAIL_PROVIDER`,

@@ -109,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (119 each;
-# desktop also has the opt-in ScreenshotsTest, see docs/screenshots).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (121 each;
+# desktop also has DesktopLinksTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -212,7 +212,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 135 backend + 119 frontend
+  `FakeTokenStore`. **As of 2026-10-10: 135 backend + 121 frontend
   tests** (+1 with `-tags=eval`, +13 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -299,8 +299,19 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   **Never log links or tokens** (logs carry kind + user_id). Compose sends
   everything to Mailpit (http://localhost:8025); `libraryz mail send-test
   -to …` checks real SMTP settings. Emailed links point at
-  `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**; Android and
-  Desktop don't handle the links yet, they take the code via "Have a code?".
+  `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**. **App links
+  (2026-10-10):** platforms hand links to `DeepLinkInbox` (commonMain; `Root`
+  collects it, so links work while the app is open). Android: `libraryz://`
+  intent filter + `singleTask` + `onNewIntent`; verified https App Links only
+  when built with `-Plibraryz.appLinkUrl=…` (a generated manifest in
+  `androidApp/build.gradle.kts`), with `assetlinks.json` generated into the
+  web bundle from `-Plibraryz.androidCertSha256=…`. Desktop: `DesktopLinks.kt`
+  — single instance (file lock + loopback socket with an owner-only key
+  file in `~/.libraryz`; `./gradlew run` uses a separate `instance-dev`),
+  macOS `CFBundleURLTypes` + `setOpenURIHandler`, Linux/Windows register
+  `libraryz://` on first launch of an installed (jpackage) app. Web: "Open in
+  the LibraryZ app" on the reset page (`openInApp`). "Have a code?" still
+  works everywhere.
   The seed marks demo users verified.
 - **Visual system (2026-10-10): "LibraryZ Visual Refresh" from Claude
   Design** (https://claude.ai/artifact/SvHwbXULQMdr7fr2E8XiEZ). Tokens live in

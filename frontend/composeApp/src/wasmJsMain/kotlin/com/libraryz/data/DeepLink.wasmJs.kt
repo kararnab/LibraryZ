@@ -12,3 +12,6 @@ actual fun launchDeepLink(): DeepLink? {
     window.history.replaceState(null, "", "/")
     return link
 }
+
+/** The browser asks whether to open the app; with no app installed, nothing happens. */
+actual val openInApp: ((url: String) -> Unit)? = { url -> window.location.href = url }

@@ -1,6 +1,8 @@
 package com.libraryz.ui
 
 import com.libraryz.data.DeepLink
+import com.libraryz.data.DeepLinkInbox
+import com.libraryz.data.appLinkUrl
 import com.libraryz.data.User
 import com.libraryz.data.api.ApiException
 import com.libraryz.data.parseDeepLink
@@ -29,6 +31,28 @@ class RecoveryTest {
         assertNull(parseDeepLink("https://x/reset-password"))
         assertNull(parseDeepLink("https://x/reset-password?token="))
         assertNull(parseDeepLink("https://x/somewhere?token=abc"))
+    }
+
+    @Test
+    fun appLinksRoundTrip() {
+        val reset = DeepLink.ResetPassword("a b/é+%_~-.")
+        assertEquals("libraryz://reset-password?token=a%20b%2F%C3%A9%2B%25_~-.", appLinkUrl(reset))
+        assertEquals(reset, parseDeepLink(appLinkUrl(reset)))
+        val verify = DeepLink.VerifyEmail("v-9")
+        assertEquals("libraryz://verify-email?token=v-9", appLinkUrl(verify))
+        assertEquals(verify, parseDeepLink(appLinkUrl(verify)))
+    }
+
+    @Test
+    fun inboxHoldsTheLatestLinkUntilTaken() {
+        DeepLinkInbox.take()
+        assertFalse(DeepLinkInbox.deliver(null))
+        assertFalse(DeepLinkInbox.deliver("https://x/somewhere?token=abc"))
+        assertNull(DeepLinkInbox.pending.value)
+        assertTrue(DeepLinkInbox.deliver("libraryz://verify-email?token=old"))
+        assertTrue(DeepLinkInbox.deliver("https://x/reset-password?token=new"))
+        assertEquals(DeepLink.ResetPassword("new"), DeepLinkInbox.take())
+        assertNull(DeepLinkInbox.take())
     }
 
     @Test

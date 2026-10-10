@@ -270,6 +270,40 @@ The default base URL is wired to `localhost:8080` (Desktop / Web), `10.0.2.2`
 (Android emulator), and a dev LAN IP (real Android device — edit
 `BaseUrl.android.kt`).
 
+### Opening emailed links in the apps
+
+Reset and verification emails link to the web app
+(`$LIBRARYZ_PUBLIC_URL/reset-password?token=…`) and carry the same token as
+a code, which every app accepts through "Have a code?". The apps can also
+open the links directly:
+
+- **Android** handles `libraryz://reset-password?token=…` and
+  `libraryz://verify-email?token=…`. To have the **emailed https links** open
+  the app (Android App Links), build with the deployment's public URL and
+  publish the matching `assetlinks.json`:
+
+  ```bash
+  ./gradlew :androidApp:assembleRelease -Plibraryz.appLinkUrl=https://library.example.org
+  # the web bundle then serves /.well-known/assetlinks.json for that app's signing key
+  ./gradlew :composeApp:wasmJsBrowserDistribution \
+      -Plibraryz.androidCertSha256=AA:BB:…   # comma-separate several keys
+  ```
+
+  The fingerprint is the SHA-256 of the signing certificate
+  (`keytool -list -v -keystore …`). `assetlinks.json` must be served from the
+  root of that host. Without `libraryz.appLinkUrl` the https links open in
+  the browser as before.
+- **Desktop**: the installed app registers `libraryz://` (macOS from its
+  Info.plist; Linux and Windows on first launch, for the current user). The
+  web app's "Choose a new password" page has an **Open in the LibraryZ app**
+  button that hands the link over. Only one copy of the desktop app runs: a
+  second launch passes its link to the first and brings it forward.
+
+To try a link without an email:
+`adb shell am start -a android.intent.action.VIEW -d 'libraryz://reset-password?token=…'`
+(Android) or `xdg-open 'libraryz://reset-password?token=…'` (installed
+desktop app on Linux).
+
 ## API
 
 Full spec: [openapi/libraryz.yaml](openapi/libraryz.yaml).

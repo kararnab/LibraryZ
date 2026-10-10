@@ -1,4 +1,6 @@
 package com.libraryz.data
 
-// No app links registered yet; see DeepLink.kt.
+// Desktop hands links to DeepLinkInbox (DesktopLinks).
 actual fun launchDeepLink(): DeepLink? = null
+
+actual val openInApp: ((url: String) -> Unit)? = null

@@ -10,10 +10,23 @@
             android:exported="true"
             android:label="LibraryZ"
             android:theme="@style/Theme.LibraryZ"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- libraryz://reset-password?token=… and libraryz://verify-email?token=…
+                 (the web app's "Open in the LibraryZ app"). The emailed https
+                 links are App Links, added when libraryz.appLinkUrl is set
+                 (build.gradle.kts). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="libraryz" />
+                <data android:host="reset-password" />
+                <data android:host="verify-email" />
             </intent-filter>
         </activity>
     </application>

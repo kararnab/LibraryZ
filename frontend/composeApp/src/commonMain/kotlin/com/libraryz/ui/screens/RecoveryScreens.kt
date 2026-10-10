@@ -234,6 +234,7 @@ fun ResetPasswordScreen(
     token: String,
     onDone: () -> Unit,
     onRequestNewLink: () -> Unit,
+    onOpenInApp: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var password by remember { mutableStateOf("") }
@@ -310,6 +311,12 @@ fun ResetPasswordScreen(
                 Spacer(Modifier.width(10.dp))
             }
             Text(if (saving) "Saving…" else "Save new password", style = MaterialTheme.typography.titleMedium)
+        }
+        // Web only: hand the link to the desktop or Android app instead.
+        if (onOpenInApp != null) {
+            TextButton(onClick = onOpenInApp, enabled = !saving, modifier = Modifier.fillMaxWidth()) {
+                Text("Open in the LibraryZ app")
+            }
         }
     }
 }
