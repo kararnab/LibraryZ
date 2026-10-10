@@ -31,8 +31,14 @@ to rediscover the toolchain each session.
 
 `frontend/local.properties` already points at the Android SDK; don't
 overwrite it. `frontend/gradle.properties` already silences the
-"iOS targets disabled on this Linux host" and "KMP <-> AGP compatibility"
-warnings — that's intentional, leave alone.
+"iOS targets disabled on this Linux host" warning — that's intentional,
+leave alone.
+
+Frontend modules: `:composeApp` is the shared KMP module (all UI + data,
+Android via `com.android.kotlin.multiplatform.library`); `:androidApp` is
+the thin Android application shell (`MainActivity`, manifest, res). AGP 9
+doesn't allow `com.android.application` inside a KMP module — don't merge
+them back.
 
 ## Run / test commands
 
@@ -83,11 +89,11 @@ Then any of:
 # Desktop — opens a native window
 ./gradlew :composeApp:run
 
-# Android APK -> build/outputs/apk/debug/composeApp-debug.apk
-./gradlew :composeApp:assembleDebug
+# Android APK -> androidApp/build/outputs/apk/debug/androidApp-debug.apk
+./gradlew :androidApp:assembleDebug
 
 # Install onto a connected device / emulator
-./gradlew :composeApp:installDebug
+./gradlew :androidApp:installDebug
 
 # Web (Wasm) dev server on http://localhost:8080
 ./gradlew :composeApp:wasmJsBrowserDevelopmentRun
@@ -96,13 +102,20 @@ Then any of:
 ./gradlew :composeApp:wasmJsBrowserDistribution
 
 # Compile-only sanity sweep across all host-buildable targets
-./gradlew :composeApp:compileDebugKotlinAndroid \
+./gradlew :composeApp:compileAndroidMain \
           :composeApp:compileKotlinDesktop \
-          :composeApp:compileKotlinWasmJs
+          :composeApp:compileKotlinWasmJs \
+          :composeApp:compileKotlinIosSimulatorArm64
+
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (88 each).
+# wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
+# that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
+./gradlew :composeApp:allTests
 ```
 
-iOS targets are declared but only link on a macOS host. On Linux they're
-auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
+iOS targets (`iosArm64`, `iosSimulatorArm64`; Compose 1.12 dropped
+`iosX64`) **compile** on Linux since Kotlin 2.4, but only **link** on a
+macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
 
 ## Conventions
 
@@ -220,10 +233,9 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   preview** all real. PDF preview uses pdf.js v3.11.174 (UMD global)
   loaded from cdnjs in `index.html`; Wasm `PdfBackend` bridges via
   `@JsFun` + `Promise.await()` + Skia `Image.makeFromEncoded`.
-  iOS picker/download/PDF actuals are **drafted (2026-05-27) but
-  unverified** — `iosMain` only links on macOS, and
-  `compileIosMainKotlinMetadata` is SKIPPED on this Linux host, so the
-  Kotlin/Native interop is type-checked only on a Mac. Wasm gotchas to
+  iOS picker/download/PDF actuals are **drafted (2026-05-27), compiled on
+  Linux since the Kotlin 2.4 upgrade, but never run** — linking and
+  on-device checks still need a Mac. Wasm gotchas to
   remember:
   - `ByteArray` can't be a `@JsFun` parameter type — copy into
     `Int8Array` first.
@@ -258,7 +270,10 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   `127.0.0.1`, and `192.168.29.234` (dev LAN IP). For real-device runs,
   change `BaseUrl.android.kt` to the LAN IP — the cleartext rule is
   already in place at
-  `composeApp/src/androidMain/res/xml/network_security_config.xml`.
+  `androidApp/src/main/res/xml/network_security_config.xml`.
 - **Versions are pinned in `frontend/gradle/libs.versions.toml`** —
-  Kotlin 2.0.21, Compose Multiplatform 1.7.3, AGP 8.7.3. Bumping any of
+  Kotlin 2.4.21, Compose Multiplatform 1.12.1, AGP 9.4.1 (Gradle 9.8.1,
+  compileSdk 37). Compose deps use direct coordinates, not the deprecated
+  `compose.*` accessors; material-icons-extended is frozen at 1.7.3
+  upstream. Bumping any of
   these is a deliberate change, not a side-effect.

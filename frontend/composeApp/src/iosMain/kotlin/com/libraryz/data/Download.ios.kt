@@ -7,7 +7,8 @@ import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
 import platform.Foundation.writeToFile
 
-// Drafted, not yet compiled — iosMain only links on macOS. Verify on a Mac.
+// Compiles on Linux (Kotlin >= 2.4 builds iOS klibs off-Mac) but has never
+// run — linking and on-device checks still need a Mac.
 //
 // Writes into the app's Documents directory, which surfaces in the Files app
 // when Info.plist sets UIFileSharingEnabled + LSSupportsOpeningDocumentsInPlace

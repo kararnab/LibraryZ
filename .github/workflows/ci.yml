@@ -113,13 +113,15 @@ jobs:
         with:
           gradle-home-cache-cleanup: true
 
-      - name: Compile sweep (Desktop + Web + Android)
+      - name: Compile sweep (Desktop + Web + Android + iOS klibs)
         working-directory: frontend
         run: |
           ./gradlew --no-daemon \
             :composeApp:compileKotlinDesktop \
             :composeApp:compileKotlinWasmJs \
-            :composeApp:compileDebugKotlinAndroid
+            :composeApp:compileAndroidMain \
+            :composeApp:compileKotlinIosSimulatorArm64 \
+            :androidApp:assembleDebug
 
       - name: Tests (commonTest)
         working-directory: frontend

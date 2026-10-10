@@ -9,10 +9,11 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.skia.Image
 import platform.CoreGraphics.CGSizeMake
 import platform.PDFKit.PDFDocument
-import platform.PDFKit.PDFDisplayBox
+import platform.PDFKit.kPDFDisplayBoxMediaBox
 import platform.UIKit.UIImagePNGRepresentation
 
-// Drafted, not yet compiled — iosMain only links on macOS. Verify on a Mac.
+// Compiles on Linux (Kotlin >= 2.4 builds iOS klibs off-Mac) but has never
+// run — linking and on-device checks still need a Mac.
 //
 // Mirrors the Android (PdfRenderer) and Desktop (PDFBox) actuals: render a page
 // to a platform image, PNG-encode it, then go bytes -> Skia Image -> Compose
@@ -38,7 +39,7 @@ private class IosPdfReader(private val doc: PDFDocument) : PagedReader {
                 ?: error("no page at index $pageIndex")
 
             // Preserve the page aspect ratio: scale the media box to widthPx.
-            val box = PDFDisplayBox.kPDFDisplayBoxMediaBox
+            val box = kPDFDisplayBoxMediaBox
             val (w, h) = page.boundsForBox(box).useContents { size.width to size.height }
             val scale = if (w > 0) widthPx / w else 1.0
             val targetSize = CGSizeMake(widthPx.toDouble(), h * scale)

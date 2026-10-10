@@ -55,7 +55,7 @@ export PATH=$JAVA_HOME/bin:$PATH
 cd frontend
 
 ./gradlew :composeApp:run                 # Desktop window
-./gradlew :composeApp:assembleDebug       # Android APK
+./gradlew :androidApp:assembleDebug       # Android APK
 ./gradlew :composeApp:wasmJsBrowserDevelopmentRun   # Web at :8080
 ```
 

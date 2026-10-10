@@ -16,8 +16,8 @@
   <a href="https://github.com/kararnab/libraryZ/actions/workflows/ci.yml"><img src="https://github.com/kararnab/libraryZ/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go" alt="Go 1.26+">
-  <img src="https://img.shields.io/badge/kotlin-2.0.21-7F52FF?logo=kotlin" alt="Kotlin 2.0.21">
-  <img src="https://img.shields.io/badge/compose--multiplatform-1.7.3-4285F4" alt="Compose Multiplatform 1.7.3">
+  <img src="https://img.shields.io/badge/kotlin-2.4.21-7F52FF?logo=kotlin" alt="Kotlin 2.4.21">
+  <img src="https://img.shields.io/badge/compose--multiplatform-1.12.1-4285F4" alt="Compose Multiplatform 1.12.1">
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
 </p>
 
@@ -164,8 +164,8 @@ recommender pipeline, per-platform frontend shims — in
 **Backend** — Go 1.26+ · gorilla/mux · GORM · Postgres 16 (SQLite for tests
 via `glebarez/sqlite`) · golang-jwt · bcrypt · minio-go · gonum (for ALS).
 
-**Frontend** — Kotlin 2.0.21 · Compose Multiplatform 1.7.3 · Ktor client ·
-kotlinx.serialization · AGP 8.7.3 · PDFBox (Desktop) / `PdfRenderer`
+**Frontend** — Kotlin 2.4.21 · Compose Multiplatform 1.12.1 · Ktor client ·
+kotlinx.serialization · AGP 9.4.1 · PDFBox (Desktop) / `PdfRenderer`
 (Android) / pdf.js (Wasm) / PDFKit (iOS).
 
 **Ops** — Docker / docker-compose · RustFS (S3) · Kong · OpenAPI 3.1 spec at
@@ -202,8 +202,8 @@ JDK 21 and (for Android) the Android SDK. Once `JAVA_HOME` is set:
 cd frontend
 
 ./gradlew :composeApp:run                              # Desktop window
-./gradlew :composeApp:assembleDebug                    # Android APK
-./gradlew :composeApp:installDebug                     # Push to device/emulator
+./gradlew :androidApp:assembleDebug                    # Android APK
+./gradlew :androidApp:installDebug                     # Push to device/emulator
 ./gradlew :composeApp:wasmJsBrowserDevelopmentRun      # Web at :8080
 ./gradlew :composeApp:wasmJsBrowserDistribution        # Static web bundle
 ```

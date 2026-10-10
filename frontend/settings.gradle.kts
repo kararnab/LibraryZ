@@ -27,3 +27,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "LibraryZ"
 include(":composeApp")
+include(":androidApp")
