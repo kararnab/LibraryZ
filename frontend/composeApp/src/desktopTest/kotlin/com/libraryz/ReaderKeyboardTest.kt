@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -31,6 +33,11 @@ import kotlin.test.assertTrue
 /** Reader keys: arrows turn PDF pages (single and spread), F11 and Esc drive full screen. */
 class ReaderKeyboardTest {
 
+    private companion object {
+        /** The last icon in the PDF reader's top bar at 1280 wide: 12dp end padding, 48dp button. */
+        val FULLSCREEN_BUTTON = Offset(1280f - 12 - 24, 32f)
+    }
+
     private fun pdf(pages: Int): ByteArray = PDDocument().use { doc ->
         repeat(pages) { doc.addPage(PDPage()) }
         ByteArrayOutputStream().also { doc.save(it) }.toByteArray()
@@ -44,7 +51,11 @@ class ReaderKeyboardTest {
     private class FakeFullscreen : Fullscreen {
         override val isSupported = true
         override var isOn by mutableStateOf(false)
-        override fun set(on: Boolean) { isOn = on }
+        var entered = 0
+        override fun set(on: Boolean) {
+            if (on && !isOn) entered++
+            isOn = on
+        }
     }
 
     /** What a reading session did: the last reported position, and whether the reader asked to close. */
@@ -59,6 +70,7 @@ class ReaderKeyboardTest {
         height: Int,
         keys: List<Key>,
         fullscreen: Fullscreen = FakeFullscreen(),
+        clickFirst: Offset? = null,
     ): Session {
         val body = pdf(10)
         var downloaded = false
@@ -90,6 +102,11 @@ class ReaderKeyboardTest {
             val loadBy = System.currentTimeMillis() + 10_000
             while (!downloaded && System.currentTimeMillis() < loadBy) frames(50)
             frames(1_000)
+            clickFirst?.let {
+                scene.sendPointerEvent(PointerEventType.Press, it)
+                scene.sendPointerEvent(PointerEventType.Release, it)
+                frames(300)
+            }
             keys.forEach {
                 scene.sendKeyEvent(keyDown(it))
                 frames(100)
@@ -133,6 +150,17 @@ class ReaderKeyboardTest {
         assertFalse(oneEsc.closed)
         val twoEsc = read(1280, 800, listOf(Key.F11, Key.Escape, Key.Escape))
         assertTrue(twoEsc.closed)
+    }
+
+    @Test
+    fun arrowsStillTurnAfterClickingFullScreen() {
+        // Clicking the button focuses it; full screen then hides the bars and
+        // the button with them. The keys must still reach the reader.
+        val fullscreen = FakeFullscreen()
+        val right = Key.DirectionRight
+        val session = read(1280, 800, listOf(right, right), fullscreen, clickFirst = FULLSCREEN_BUTTON)
+        assertEquals(1, fullscreen.entered, "the click should have entered full screen")
+        assertEquals(ReadingPosition(4, 10), session.reported)
     }
 
     @Test

@@ -209,9 +209,15 @@ fun ReaderScreen(
     val textScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
-    LaunchedEffect(reader) { runCatching { focus.requestFocus() } }
     var chrome by remember { mutableStateOf(true) }
     var settingsOpen by remember { mutableStateOf(false) }
+    // Keys go to the reader. Hiding the bars or closing the settings panel
+    // can remove the control that had focus (e.g. the fullscreen button just
+    // clicked), which would leave the arrows with nowhere to go; take focus
+    // back each time. Not while settings are open: they may be a sheet.
+    LaunchedEffect(reader, chrome, settingsOpen) {
+        if (!settingsOpen) runCatching { focus.requestFocus() }
+    }
     // Null follows the window (see autoSpread); the toggle overrides it for this session.
     var spreadChoice by remember { mutableStateOf<Boolean?>(null) }
     val fullscreen = LocalFullscreen.current
