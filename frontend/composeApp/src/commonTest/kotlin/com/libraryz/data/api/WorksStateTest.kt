@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -424,6 +425,39 @@ class WorksStateTest {
 
         assertEquals(listOf("w100"), state.items?.map { it.id })
         assertTrue(engine.requestHistory.none { it.url.parameters["offset"] == "3" })
+    }
+
+    @Test
+    fun searchWhoseCallerIsCancelledStillLandsItsResults() = runTest {
+        // An author link's search ran in the detail layout's scope, which
+        // the nav change disposed: the query switched but the old list
+        // stayed under it until the user typed.
+        val searchRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val payload = if (req.url.encodedPath == "/works") {
+                worksJson(0..2)
+            } else {
+                searchRequested.complete(Unit)
+                gate.await()
+                worksJson(100..100)
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+        state.refresh()
+
+        val caller = launch { state.search("isakova") }
+        searchRequested.await()
+        caller.cancel()
+        gate.complete(Unit)
+        caller.join()
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("isakova", state.searchQuery)
+        assertEquals(listOf("w100"), state.items?.map { it.id })
+        assertNull(state.error)
     }
 
     @Test

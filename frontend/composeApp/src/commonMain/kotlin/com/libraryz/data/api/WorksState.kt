@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.libraryz.data.Work
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  * Holds the works list + per-work cache. UI-friendly tri-state:
@@ -82,7 +84,9 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         val gen = generation
         replacing = true
         try {
-            val page = fetchPage(null, 0)
+            // Not cancellable: the query is already switched, so leaving now
+            // would show the old list under it. A newer call discards this one.
+            val page = withContext(NonCancellable) { fetchPage(null, 0) }
             if (gen != generation) return // a newer refresh or search replaced it
             items = page
             endReached = page.size < pageSize
@@ -129,7 +133,9 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         val gen = generation
         replacing = true
         try {
-            val page = fetchPage(trimmed, 0)
+            // Not cancellable: the query is already switched, so leaving now
+            // would show the old list under it. A newer call discards this one.
+            val page = withContext(NonCancellable) { fetchPage(trimmed, 0) }
             if (gen != generation) return // a newer refresh or search replaced it
             items = page
             endReached = page.size < pageSize
