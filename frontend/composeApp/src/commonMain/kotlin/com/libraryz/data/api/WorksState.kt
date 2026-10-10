@@ -2,6 +2,7 @@ package com.libraryz.data.api
 
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.libraryz.data.Work
@@ -14,6 +15,8 @@ import com.libraryz.data.Work
  *
  * The cache is keyed by Work.id; [refreshOne] fetches the full Work
  * (editions preloaded by the backend) and merges it back into the list.
+ * It also keeps that Work for [find], so an open book survives a search
+ * whose results leave it out.
  *
  * Paged: [refresh] / [search] load the first [pageSize] works and [loadMore]
  * appends the next page (offset = items loaded so far) until a short page
@@ -46,8 +49,12 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         private set
 
     // Bumped whenever the list is replaced (refresh / new search) so a
-    // loadMore still in flight for the old list is discarded.
+    // response still in flight for the old list (a first page or a
+    // loadMore) is discarded instead of overwriting the newer one.
     private var generation = 0
+
+    // Works fetched one by one ([refreshOne]), whatever list is showing.
+    private val opened = mutableStateMapOf<String, Work>()
 
     val loading: Boolean get() = items == null && error == null
     val isSearching: Boolean get() = searchQuery != null
@@ -67,12 +74,14 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         error = null
         searchQuery = null
         resetPaging()
+        val gen = generation
         try {
             val page = fetchPage(null, 0)
+            if (gen != generation) return // a newer refresh or search replaced it
             items = page
             endReached = page.size < pageSize
         } catch (e: Throwable) {
-            error = e.message ?: "Failed to load works"
+            if (gen == generation) error = e.message ?: "Failed to load works"
         }
     }
 
@@ -109,18 +118,21 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         error = null
         searchQuery = trimmed
         resetPaging()
+        val gen = generation
         try {
             val page = fetchPage(trimmed, 0)
+            if (gen != generation) return // a newer refresh or search replaced it
             items = page
             endReached = page.size < pageSize
         } catch (e: Throwable) {
-            error = e.message ?: "Search failed"
+            if (gen == generation) error = e.message ?: "Search failed"
         }
     }
 
     suspend fun refreshOne(id: String): Work? {
         return try {
             val w = api.getWork(id)
+            opened[id] = w
             items = items?.map { if (it.id == id) w else it } ?: listOf(w)
             w
         } catch (e: Throwable) {
@@ -132,18 +144,19 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
     /** Moderator takedown; drops the work from the local list on success. Throws on failure. */
     suspend fun removeWork(id: String, reason: String) {
         api.deleteWork(id, reason)
+        opened.remove(id)
         items = items?.filterNot { it.id == id }
     }
 
     /** Moderator takedown of one edition; updates the cached work on success. Throws on failure. */
     suspend fun removeEdition(workId: String, editionId: String, reason: String) {
         api.deleteEdition(editionId, reason)
-        items = items?.map { w ->
-            if (w.id == workId) w.copy(editions = w.editions.filterNot { it.id == editionId }) else w
-        }
+        val drop = { w: Work -> w.copy(editions = w.editions.filterNot { it.id == editionId }) }
+        opened[workId]?.let { opened[workId] = drop(it) }
+        items = items?.map { w -> if (w.id == workId) drop(w) else w }
     }
 
-    fun find(id: String): Work? = items?.firstOrNull { it.id == id }
+    fun find(id: String): Work? = items?.firstOrNull { it.id == id } ?: opened[id]
 }
 
 const val DEFAULT_PAGE_SIZE = 50

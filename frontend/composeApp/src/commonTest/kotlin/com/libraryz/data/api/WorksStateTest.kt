@@ -337,6 +337,83 @@ class WorksStateTest {
     }
 
     @Test
+    fun slowerOlderSearchDoesNotOverwriteNewerResults() = runTest {
+        // An author link's search and a typed one, or a typed one and a
+        // refresh, can overlap; the last one started must win.
+        val slowRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val q = req.url.parameters["q"]
+            if (q == "ko") {
+                slowRequested.complete(Unit)
+                gate.await()
+            }
+            val payload = when (q) {
+                "ko" -> """[{"id":"old","title":"Stale","editions":[]}]"""
+                "kotlin" -> """[{"id":"new","title":"Kotlin In Action","editions":[]}]"""
+                else -> """[{"id":"all","title":"Everything","editions":[]}]"""
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+
+        val slow = async { state.search("ko") }
+        slowRequested.await()
+        state.search("kotlin")
+        gate.complete(Unit)
+        slow.await()
+
+        assertEquals("kotlin", state.searchQuery)
+        assertEquals(listOf("new"), state.items?.map { it.id })
+
+        // Same for a refresh that started before a search.
+        val gate2 = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val refreshRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine2 = MockEngine { req ->
+            if (req.url.encodedPath == "/works") {
+                refreshRequested.complete(Unit)
+                gate2.await()
+            }
+            val (s, body, h) = jsonRespond(
+                if (req.url.encodedPath == "/works") """[{"id":"all","title":"Everything","editions":[]}]"""
+                else """[{"id":"new","title":"Kotlin In Action","editions":[]}]""",
+            )
+            respond(body, s, h)
+        }
+        val state2 = WorksState(ApiClient("http://t", engine = engine2))
+        val refresh = async { state2.refresh() }
+        refreshRequested.await()
+        state2.search("kotlin")
+        gate2.complete(Unit)
+        refresh.await()
+
+        assertEquals("kotlin", state2.searchQuery)
+        assertEquals(listOf("new"), state2.items?.map { it.id })
+    }
+
+    @Test
+    fun findKeepsAnOpenedWorkThatASearchLeavesOut() = runTest {
+        val engine = MockEngine { req ->
+            val payload = when (req.url.encodedPath) {
+                "/works/a" -> """{"id":"a","title":"A","editions":[]}"""
+                "/works/search" -> """[{"id":"b","title":"B","editions":[]}]"""
+                else -> """[{"id":"a","title":"A","editions":[]},{"id":"b","title":"B","editions":[]}]"""
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+        state.refresh()
+        state.refreshOne("a") // the book page is open
+
+        state.search("b")
+
+        assertEquals(listOf("b"), state.items?.map { it.id })
+        assertEquals("A", state.find("a")?.title)
+    }
+
+    @Test
     fun loadMoreFailureKeepsItemsAndReportsError() = runTest {
         val engine = MockEngine { req ->
             if (req.url.parameters["offset"] == "0") {

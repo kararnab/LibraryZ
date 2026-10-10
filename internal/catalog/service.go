@@ -214,7 +214,8 @@ func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Ed
 //
 // Driver-aware: on Postgres it matches the weighted `search_vector` tsvector
 // (GIN-indexed; see internal/migrations) with websearch_to_tsquery — so
-// users can type `"exact phrase"`, `or`, and `-exclude` — and orders by
+// users can type `"exact phrase"`, `or`, and `-exclude` — with every word
+// matched as a prefix (search runs as the user types), and orders by
 // ts_rank, which prefers title hits over author hits over description hits.
 // On sqlite (the test DB) it falls back to `LOWER(col) LIKE` and
 // approximates the ranking: title matches, then subtitle/author matches,
@@ -238,9 +239,13 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 		isbnArgs = []any{isbn}
 	}
 	if s.db.Dialector.Name() == "postgres" {
-		const tsq = "websearch_to_tsquery('simple', ?)"
-		db = db.Where("search_vector @@ "+tsq+isbnOr, append([]any{q}, isbnArgs...)...).
-			Clauses(orderBy(isbnFirst+"ts_rank(search_vector, "+tsq+") DESC, created_at DESC", append(isbnArgs, q)...))
+		// websearch_to_tsquery parses the syntax; rewriting each of its
+		// quoted lexemes 'word' to 'word':* makes every word a prefix, so
+		// the box finds "Kotlin" while the user is still typing "Kot".
+		const tsq = "regexp_replace(websearch_to_tsquery('simple', ?)::text, ?, ?, 'g')::tsquery"
+		tsqArgs := []any{q, `'((?:[^']|'')+)'`, `'\1':*`}
+		db = db.Where("search_vector @@ "+tsq+isbnOr, append(tsqArgs, isbnArgs...)...).
+			Clauses(orderBy(isbnFirst+"ts_rank(search_vector, "+tsq+") DESC, created_at DESC", append(isbnArgs, tsqArgs...)...))
 	} else {
 		const like = `LIKE ? ESCAPE '\'`
 		pattern := "%" + escapeLike(strings.ToLower(q)) + "%"
