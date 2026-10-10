@@ -89,8 +89,6 @@ func grantModerator(t *testing.T, db *gorm.DB, email string) {
 	}
 }
 
-
-
 func TestSmokeHappyPath(t *testing.T) {
 	ts, _ := newTestServer(t)
 
