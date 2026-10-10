@@ -68,3 +68,39 @@ fun readActionLabel(entry: UserBook?): String =
     } else {
         "Start reading"
     }
+
+/**
+ * The pages a two-page spread shows for [page], laid out like a printed
+ * book: the cover (page 0) stands alone, then 1–2, 3–4, … (1-based, the
+ * cover is page 1 and spreads are 2–3, 4–5, …). The last spread may hold a
+ * single page.
+ */
+fun spreadPages(page: Int, pageCount: Int): List<Int> {
+    if (pageCount <= 0) return emptyList()
+    val p = page.coerceIn(0, pageCount - 1)
+    if (p == 0) return listOf(0)
+    val left = if (p % 2 == 1) p else p - 1
+    return listOfNotNull(left, (left + 1).takeIf { it < pageCount })
+}
+
+/**
+ * Where turning by [delta] (±1) leads in spread mode: the first page of the
+ * next or previous spread, or [pageCount] (the end card) past the last one.
+ */
+fun turnSpread(page: Int, delta: Int, pageCount: Int): Int {
+    if (pageCount <= 0) return 0
+    if (page >= pageCount) return if (delta < 0) spreadPages(pageCount - 1, pageCount).first() else pageCount
+    val shown = spreadPages(page, pageCount)
+    return when {
+        delta > 0 -> shown.last() + 1
+        shown.first() == 0 -> 0
+        else -> spreadPages(shown.first() - 1, pageCount).first()
+    }
+}
+
+/** "Page 7 of 248" or, for a spread, "Pages 12–13 of 248". */
+fun pagesLabel(pages: List<Int>, pageCount: Int): String = when (pages.size) {
+    0 -> ""
+    1 -> "Page ${pages[0] + 1} of $pageCount"
+    else -> "Pages ${pages.first() + 1}–${pages.last() + 1} of $pageCount"
+}
