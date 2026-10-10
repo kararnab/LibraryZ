@@ -1,5 +1,20 @@
 package com.libraryz
 
+import androidx.compose.material.icons.automirrored.outlined.FactCheck
+import androidx.compose.material.icons.automirrored.rounded.FactCheck
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.FileUpload
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.libraryz.theme.LibraryZ
+import com.libraryz.ui.screens.ReaderPrefs
+import com.libraryz.ui.screens.BrowseSkeleton
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.NavigationBar
@@ -10,7 +25,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.backhandler.BackHandler
 import com.libraryz.ui.components.ContinueReadingCard
-import com.libraryz.ui.screens.ReaderTextSizes
 import com.libraryz.ui.screens.SettingsScreen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -219,10 +233,20 @@ private fun Root(
         }
     }
 
-    // Plain-text reader size, shared by the reader and Settings so it
-    // sticks from one book to the next.
-    var readerTextSize by remember { mutableStateOf(18) }
-    val setReaderTextSize: (Int) -> Unit = { readerTextSize = it.coerceIn(ReaderTextSizes) }
+    // How flowing text is set, shared by the reader and Settings so it
+    // carries from one book to the next.
+    var readerPrefs by remember { mutableStateOf(ReaderPrefs()) }
+
+    val dismissRec: (String) -> Unit = { workId ->
+        scope.launch {
+            try {
+                recs.dismiss(workId)
+                snackbar.showSnackbar("Removed from For You")
+            } catch (e: Throwable) {
+                snackbar.showSnackbar("Couldn't dismiss: ${e.message ?: "unknown"}")
+            }
+        }
+    }
 
     // Load the library up front: it powers "Continue reading" on Browse.
     LaunchedEffect(auth.isAuthenticated) {
@@ -240,7 +264,7 @@ private fun Root(
     // right "Not yet" message otherwise.
     val readEdition: (Work, Edition) -> Unit = { work, ed ->
         if (canPreview(ed.format)) {
-            nav.push(Screen.Preview(ed.id, ed.format, work.id, work.title))
+            nav.push(Screen.Preview(ed.id, ed.format, work.id, work.title, work.authors))
         } else {
             scope.launch {
                 snackbar.showSnackbar("Reading ${ed.format.uppercase()} isn't supported on this platform yet.")
@@ -369,8 +393,9 @@ private fun Root(
                             works = works,
                             onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
                             onUploadClick = { nav.push(Screen.Upload()) },
-                            showRefresh = false,
+                            compact = true,
                             header = continueReadingHeader(library, readFromLibrary),
+                            libraryWorkIds = library.workIds,
                         )
                     }
                 }
@@ -507,7 +532,7 @@ private fun Root(
                         works = works,
                         onWorkClick = {},
                         onUploadClick = {},
-                        showRefresh = false,
+                        compact = true,
                     )
                 }
                 UploadSheet(
@@ -574,10 +599,13 @@ private fun Root(
                     editionId = s.editionId,
                     format = s.format,
                     title = s.title,
+                    authors = s.authors,
                     resumeFrom = entry,
-                    textSize = readerTextSize,
-                    onTextSizeChange = setReaderTextSize,
                     finished = entry?.status == LibraryStatus.Read,
+                    rating = entry?.rating,
+                    prefs = readerPrefs,
+                    onPrefsChange = { readerPrefs = it },
+                    onRate = { stars -> libraryUpsert(s.workId, UpsertLibraryRequest(rating = stars)) },
                     // Progress saves in the background; a failed save just
                     // means the next one carries it.
                     onProgress = { pos ->
@@ -632,6 +660,7 @@ private fun Root(
                                 nav.push(Screen.WorkDetail(workId))
                             },
                             onRead = readFromLibrary,
+                            onBrowse = { nav.replace(Screen.Browse) },
                         )
                     }
                 } else {
@@ -642,6 +671,7 @@ private fun Root(
                             onBack = null,
                             onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
                             onRead = readFromLibrary,
+                            onBrowse = { nav.replace(Screen.Browse) },
                         )
                     }
                 }
@@ -659,7 +689,10 @@ private fun Root(
                                 nav.replace(Screen.Browse)
                                 nav.push(Screen.WorkDetail(workId))
                             },
-                            onDismiss = { workId -> scope.launch { recs.dismiss(workId) } },
+                            onDismiss = dismissRec,
+                            onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
+                            isInLibrary = { workId -> library.entryFor(workId) != null },
+                            onOpenLibrary = { nav.replace(Screen.Library) },
                         )
                     }
                 } else {
@@ -669,7 +702,10 @@ private fun Root(
                             isWide = false,
                             onBack = null,
                             onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                            onDismiss = { workId -> scope.launch { recs.dismiss(workId) } },
+                            onDismiss = dismissRec,
+                            onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
+                            isInLibrary = { workId -> library.entryFor(workId) != null },
+                            onOpenLibrary = { nav.replace(Screen.Library) },
                         )
                     }
                 }
@@ -680,9 +716,8 @@ private fun Root(
                     SettingsScreen(
                         user = auth.user,
                         serverUrl = DefaultBaseUrl,
-                        textSize = readerTextSize,
-                        textSizeRange = ReaderTextSizes,
-                        onTextSizeChange = setReaderTextSize,
+                        prefs = readerPrefs,
+                        onPrefsChange = { readerPrefs = it },
                         onSignOut = logout,
                         onSignOutEverywhere = logoutEverywhere,
                         onBack = null,
@@ -703,21 +738,17 @@ private fun DataDrivenBrowse(
     works: WorksState,
     onWorkClick: (com.libraryz.data.Work) -> Unit,
     onUploadClick: () -> Unit,
-    showRefresh: Boolean,
+    compact: Boolean,
     header: (@Composable () -> Unit)? = null,
-    onReviewClick: (() -> Unit)? = null,
-    pendingReviewCount: Int = 0,
-    onLibraryClick: (() -> Unit)? = null,
-    onForYouClick: (() -> Unit)? = null,
+    libraryWorkIds: Set<String> = emptySet(),
+    selectedWorkId: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val list = works.items
     val err = works.error
 
     when {
-        works.loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
+        works.loading -> BrowseSkeleton(compact)
         err != null && list == null -> Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
@@ -736,11 +767,9 @@ private fun DataDrivenBrowse(
             onUploadClick = onUploadClick,
             header = header,
             onRefresh = { scope.launch { works.refresh() } },
-            showRefresh = showRefresh,
-            onReviewClick = onReviewClick,
-            pendingReviewCount = pendingReviewCount,
-            onLibraryClick = onLibraryClick,
-            onForYouClick = onForYouClick,
+            compact = compact,
+            libraryWorkIds = libraryWorkIds,
+            selectedWorkId = selectedWorkId,
             onSearch = { q -> works.search(q) },
             activeSearchQuery = works.searchQuery,
             onLoadMore = { scope.launch { works.loadMore() } },
@@ -769,7 +798,6 @@ private fun ExpandedFrame(
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
         NavRail(nav = nav, auth = auth, contributions = contributions)
-        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Box(modifier = Modifier.fillMaxSize()) { content() }
     }
 }
@@ -793,38 +821,39 @@ private fun NavRail(
         header = {
             Box(
                 modifier = Modifier
-                    .padding(top = 16.dp)
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .padding(top = 20.dp, bottom = 28.dp)
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Outlined.Book,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                Text(
+                    "Lz",
+                    fontFamily = LibraryZ.tokens.serif,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 22.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
         },
     ) {
-        Spacer(Modifier.size(12.dp))
         NavigationRailItem(
             selected = isLibrary,
             onClick = { nav.replace(Screen.Browse) },
-            icon = { Icon(Icons.Outlined.Book, contentDescription = null) },
+            icon = { NavIcon(isLibrary, Icons.Outlined.Explore, Icons.Rounded.Explore) },
             label = { Text("Browse") },
         )
         if (auth.isAuthenticated) {
             NavigationRailItem(
                 selected = isMyLibrary,
                 onClick = { nav.replace(Screen.Library) },
-                icon = { Icon(Icons.Outlined.Bookmarks, contentDescription = null) },
-                label = { Text("My Library") },
+                icon = { NavIcon(isMyLibrary, Icons.Outlined.AutoStories, Icons.Rounded.AutoStories) },
+                label = { Text("Library") },
             )
             NavigationRailItem(
                 selected = isForYou,
                 onClick = { nav.replace(Screen.ForYou) },
-                icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                icon = { NavIcon(isForYou, Icons.Outlined.AutoAwesome, Icons.Rounded.AutoAwesome) },
                 label = { Text("For You") },
             )
         }
@@ -844,7 +873,7 @@ private fun NavRail(
                             }
                         },
                     ) {
-                        Icon(Icons.Outlined.RateReview, contentDescription = null)
+                        NavIcon(current is Screen.ContributionQueue, Icons.AutoMirrored.Outlined.FactCheck, Icons.AutoMirrored.Rounded.FactCheck)
                     }
                 },
                 label = { Text("Review") },
@@ -853,14 +882,14 @@ private fun NavRail(
         NavigationRailItem(
             selected = isUpload,
             onClick = { nav.push(Screen.Upload()) },
-            icon = { Icon(Icons.Outlined.FileUpload, contentDescription = null) },
+            icon = { NavIcon(isUpload, Icons.Outlined.FileUpload, Icons.Rounded.FileUpload) },
             label = { Text("Upload") },
         )
         Spacer(Modifier.weight(1f))
         NavigationRailItem(
             selected = current is Screen.Settings,
             onClick = { nav.replace(Screen.Settings) },
-            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+            icon = { NavIcon(current is Screen.Settings, Icons.Outlined.Settings, Icons.Rounded.Settings) },
             label = { Text("Settings") },
             modifier = Modifier.padding(bottom = 16.dp),
         )
@@ -883,23 +912,23 @@ private fun CompactFrame(
     val current = nav.current
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) { content() }
-        NavigationBar {
+        NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
             NavigationBarItem(
                 selected = current is Screen.Browse,
                 onClick = { nav.replace(Screen.Browse) },
-                icon = { Icon(Icons.Outlined.Book, contentDescription = null) },
+                icon = { NavIcon(current is Screen.Browse, Icons.Outlined.Explore, Icons.Rounded.Explore) },
                 label = { Text("Browse") },
             )
             NavigationBarItem(
                 selected = current is Screen.Library,
                 onClick = { nav.replace(Screen.Library) },
-                icon = { Icon(Icons.Outlined.Bookmarks, contentDescription = null) },
+                icon = { NavIcon(current is Screen.Library, Icons.Outlined.AutoStories, Icons.Rounded.AutoStories) },
                 label = { Text("Library") },
             )
             NavigationBarItem(
                 selected = current is Screen.ForYou,
                 onClick = { nav.replace(Screen.ForYou) },
-                icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                icon = { NavIcon(current is Screen.ForYou, Icons.Outlined.AutoAwesome, Icons.Rounded.AutoAwesome) },
                 label = { Text("For You") },
             )
             if (auth.isModerator) {
@@ -918,7 +947,7 @@ private fun CompactFrame(
                                 }
                             },
                         ) {
-                            Icon(Icons.Outlined.RateReview, contentDescription = null)
+                            NavIcon(current is Screen.ContributionQueue, Icons.AutoMirrored.Outlined.FactCheck, Icons.AutoMirrored.Rounded.FactCheck)
                         }
                     },
                     label = { Text("Review") },
@@ -927,11 +956,17 @@ private fun CompactFrame(
             NavigationBarItem(
                 selected = current is Screen.Settings,
                 onClick = { nav.replace(Screen.Settings) },
-                icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                icon = { NavIcon(current is Screen.Settings, Icons.Outlined.Settings, Icons.Rounded.Settings) },
                 label = { Text("Settings") },
             )
         }
     }
+}
+
+/** Outlined at rest, filled when its destination is selected (per the design). */
+@Composable
+private fun NavIcon(selected: Boolean, outlined: ImageVector, filled: ImageVector) {
+    Icon(if (selected) filled else outlined, contentDescription = null)
 }
 
 /** The "Continue reading" banner atop Browse, or null when there's nothing to resume. */
@@ -969,24 +1004,29 @@ private fun ListDetailLayout(
 
     Row(modifier = Modifier.fillMaxSize()) {
         // List pane
-        Box(modifier = Modifier.width(420.dp).fillMaxHeight()) {
+        Box(modifier = Modifier.width(440.dp).fillMaxHeight()) {
             DataDrivenBrowse(
                 works = works,
                 onWorkClick = onSelect,
                 onUploadClick = { nav.push(Screen.Upload()) },
-                showRefresh = true,
+                compact = false,
                 header = continueReadingHeader(library, onReadFromLibrary),
+                libraryWorkIds = library.workIds,
+                selectedWorkId = selectedWorkId,
             )
         }
-        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        // Detail pane
-        Box(modifier = Modifier.fillMaxSize()) {
+        // Detail pane: a rounded card on the low surface.
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier.fillMaxSize().padding(top = 16.dp, end = 16.dp, bottom = 16.dp),
+        ) {
             val work = selectedWorkId?.let { works.find(it) }
             if (work == null) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     EmptyState(
-                        title = "Select a work",
-                        body = "Pick one from the list to see editions.",
+                        title = "Pick a book",
+                        body = "Choose one from the catalog to see its details and editions.",
                     )
                 }
             } else {
@@ -1003,6 +1043,7 @@ private fun ListDetailLayout(
                     onLibraryRemove = { onLibraryRemove(work.id) },
                     onRemoveWork = onRemoveWork?.let { rm -> { reason -> rm(work, reason) } },
                     onRemoveEdition = onRemoveEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 )
             }
         }

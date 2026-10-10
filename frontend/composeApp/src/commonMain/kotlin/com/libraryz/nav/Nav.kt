@@ -19,6 +19,7 @@ sealed interface Screen {
         val format: String,
         val workId: String,
         val title: String,
+        val authors: String? = null,
     ) : Screen
     data class EditWork(val workId: String) : Screen
     data object ContributionQueue : Screen

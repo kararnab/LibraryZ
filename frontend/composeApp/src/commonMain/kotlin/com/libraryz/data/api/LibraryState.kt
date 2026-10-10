@@ -66,6 +66,10 @@ class LibraryState(private val api: ApiClient) {
             .filter { it.status == LibraryStatus.Reading && it.progressPercent > 0 }
             .maxByOrNull { it.updatedAt.orEmpty() }
 
+    /** Works known to be in the library (bookmarks in the catalog list). */
+    val workIds: Set<String>
+        get() = cache.filterValues { it != null }.keys
+
     /** True once [loadEntry] has run for this work (regardless of result). */
     fun isLoaded(workId: String): Boolean = cache.containsKey(workId)
 

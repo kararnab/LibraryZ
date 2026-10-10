@@ -107,7 +107,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (101 each).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (105 each).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -209,7 +209,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 127 backend + 101 frontend
+  `FakeTokenStore`. **As of 2026-10-10: 127 backend + 105 frontend
   tests** (+1 with `-tags=eval`, +11 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -282,6 +282,16 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   refreshes for one session in parallel. `AuthState` is its `SessionHooks`
   and raises `sessionExpired` when renewal fails, which sends `App` to
   sign-in with a snackbar.
+- **Visual system (2026-10-10): "LibraryZ Visual Refresh" from Claude
+  Design** (https://claude.ai/artifact/SvHwbXULQMdr7fr2E8XiEZ). Tokens live in
+  `theme/Theme.kt`: M3 light/dark schemes (seed #2E5E4E), Literata (titles,
+  reading text) + Figtree (UI) bundled as variable TTFs in
+  `composeResources/font/` (OFL texts in `composeResources/files/licenses/`),
+  and `LibraryZ.tokens` for what M3 has no slot for (`bookTitle`, reader
+  backdrop, serif). Works have no cover images: `ui/components/Cover.kt`
+  generates them; `coverIndex` must stay identical to the design's JS hash
+  (tested). Reading themes (`ReadingTheme`) are independent of the app theme;
+  `ReaderPrefs` lives in `App` (session-only, not persisted yet).
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

@@ -6,30 +6,26 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.Logout
-import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material.icons.outlined.TextDecrease
-import androidx.compose.material.icons.outlined.TextIncrease
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.DevicesOther
+import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -44,12 +40,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.libraryz.data.User
+import com.libraryz.theme.LibraryZ
+import com.libraryz.ui.components.SectionLabel
 
 /**
  * Account + app settings: who you're signed in as, reader text size,
@@ -62,9 +60,8 @@ import com.libraryz.data.User
 fun SettingsScreen(
     user: User?,
     serverUrl: String,
-    textSize: Int,
-    textSizeRange: IntRange,
-    onTextSizeChange: (Int) -> Unit,
+    prefs: ReaderPrefs,
+    onPrefsChange: (ReaderPrefs) -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
     onBack: (() -> Unit)?,
@@ -75,11 +72,11 @@ fun SettingsScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text("Settings", style = MaterialTheme.typography.headlineSmall) },
                 navigationIcon = {
                     if (onBack != null) {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                         }
                     }
                 },
@@ -94,53 +91,41 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
             contentAlignment = Alignment.TopCenter,
         ) {
-            Column(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(16.dp)) {
-                AccountCard(user)
+            Column(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(top = 4.dp, bottom = 24.dp)) {
+                AccountCard(user, Modifier.padding(horizontal = 16.dp))
 
-                Section("Reading")
-                ListItem(
-                    headlineContent = { Text("Text size") },
-                    supportingContent = { Text("For plain-text books. PDFs keep their own layout.") },
-                    trailingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = { onTextSizeChange(textSize - 2) },
-                                enabled = textSize - 2 >= textSizeRange.first,
-                            ) { Icon(Icons.Outlined.TextDecrease, contentDescription = "Smaller text") }
-                            Text("$textSize", fontFamily = FontFamily.Serif, fontSize = textSize.sp)
-                            IconButton(
-                                onClick = { onTextSizeChange(textSize + 2) },
-                                enabled = textSize + 2 <= textSizeRange.last,
-                            ) { Icon(Icons.Outlined.TextIncrease, contentDescription = "Larger text") }
-                        }
-                    },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-                )
+                SectionLabel("Reading", Modifier.padding(top = 4.dp))
+                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextSizeControl(prefs.textSize, onChange = { onPrefsChange(prefs.copy(textSize = it)) })
+                    Text(
+                        "Miss Brooke had that kind of beauty which seems to be thrown into relief by poor dress.",
+                        fontFamily = LibraryZ.tokens.serif,
+                        fontSize = prefs.textSize.sp,
+                        lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                }
 
-                Section("Sessions")
-                ListItem(
-                    headlineContent = { Text("Sign out") },
-                    supportingContent = { Text("Sign out on this device.") },
-                    leadingContent = { Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null) },
-                    modifier = Modifier.clickableRow(onSignOut),
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                SectionLabel("Sessions")
+                SettingsRow(
+                    icon = Icons.AutoMirrored.Rounded.Logout,
+                    title = "Sign out",
+                    subtitle = "On this device",
+                    onClick = onSignOut,
                 )
-                ListItem(
-                    headlineContent = { Text("Sign out everywhere", color = MaterialTheme.colorScheme.error) },
-                    supportingContent = { Text("Ends your sessions on every device, including this one.") },
-                    leadingContent = {
-                        Icon(Icons.Outlined.Devices, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                    },
-                    modifier = Modifier.clickableRow { confirmEverywhere = true },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                SettingsRow(
+                    icon = Icons.Rounded.DevicesOther,
+                    title = "Sign out everywhere",
+                    subtitle = "Ends every session, on all devices",
+                    tint = MaterialTheme.colorScheme.error,
+                    onClick = { confirmEverywhere = true },
                 )
 
-                Section("About")
-                ListItem(
-                    headlineContent = { Text("Server") },
-                    supportingContent = { Text(serverUrl, fontFamily = FontFamily.Monospace) },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-                )
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                SectionLabel("About", Modifier.padding(top = 0.dp))
+                SettingsRow(icon = Icons.Rounded.Dns, title = "Server", subtitle = serverUrl, onClick = null)
             }
         }
     }
@@ -164,11 +149,38 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun AccountCard(user: User?) {
+private fun SettingsRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: (() -> Unit)?,
+    tint: Color = Color.Unspecified,
+) {
+    val content = if (tint == Color.Unspecified) MaterialTheme.colorScheme.onSurface else tint
+    val muted = if (tint == Color.Unspecified) MaterialTheme.colorScheme.onSurfaceVariant else tint.copy(alpha = 0.85f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = muted)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = content)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = muted)
+        }
+    }
+}
+
+@Composable
+private fun AccountCard(user: User?, modifier: Modifier = Modifier) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -177,22 +189,22 @@ private fun AccountCard(user: User?) {
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
+                    .size(56.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = user?.name?.trim()?.firstOrNull()?.uppercase() ?: "?",
-                    style = MaterialTheme.typography.titleLarge,
+                    fontFamily = LibraryZ.tokens.serif,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 22.sp,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = user?.name?.ifBlank { null } ?: "Signed in",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
                 )
                 if (user != null) {
                     Text(
@@ -201,36 +213,24 @@ private fun AccountCard(user: User?) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-            if (user?.isModerator == true) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(
-                        "Moderator",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
-                    )
+                if (user?.isModerator == true) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        shape = CircleShape,
+                        modifier = Modifier.padding(top = 6.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(start = 6.dp, end = 10.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(Icons.Rounded.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text("Moderator", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
             }
         }
     }
 }
-
-@Composable
-private fun Section(title: String) {
-    Spacer(Modifier.height(24.dp))
-    Text(
-        text = title.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.Medium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-    )
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-private fun Modifier.clickableRow(onClick: () -> Unit): Modifier =
-    this.then(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick))

@@ -1,9 +1,6 @@
 package com.libraryz.ui.components
 
-import androidx.compose.material.icons.automirrored.outlined.MenuBook
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.ui.text.style.TextOverflow
-import com.libraryz.data.UserBook
+import androidx.compose.material.icons.automirrored.outlined.LibraryBooks
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,23 +9,25 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Book
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,14 +38,44 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
+import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import com.libraryz.data.isPreviewable
 import com.libraryz.data.prettySize
+import com.libraryz.theme.LibraryZ
 
+/** Human name for an edition format. */
+fun formatName(format: String): String = when (format.uppercase()) {
+    "TXT" -> "Plain text"
+    else -> format.uppercase()
+}
+
+/** "PDF · Plain text" for a work's editions, in a stable order. */
+fun formatsLabel(editions: List<Edition>): String =
+    editions.map { it.format.uppercase() }.distinct().sorted().joinToString(" · ") { formatName(it) }
+
+/** "George Eliot · 1871", skipping whichever part is missing. */
+fun bylineOf(work: Work): String =
+    listOfNotNull(work.authors?.takeIf { it.isNotBlank() }, work.publicationYear?.toString()).joinToString(" · ")
+
+/**
+ * A catalog row: monogram cover, title, byline and formats, with a
+ * bookmark when the book is already in your library. [selected] marks the
+ * open row in the desktop list/detail layout.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkCard(
@@ -54,56 +83,54 @@ fun WorkCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     highlight: String? = null,
+    inLibrary: Boolean = false,
+    selected: Boolean = false,
 ) {
     Surface(
         onClick = onClick,
-        color = MaterialTheme.colorScheme.surface,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+        shape = MaterialTheme.shapes.large,
         modifier = modifier.fillMaxWidth(),
     ) {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 40.dp, height = 56.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Book,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 80.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BookCover(work.title, work.authors, CoverSize.S)
+            val muted = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = highlightMatches(work.title, highlight, MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
+                    style = LibraryZ.tokens.bookTitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val byline = bylineOf(work)
+                if (byline.isNotEmpty()) {
+                    Text(
+                        text = highlightMatches(byline, highlight, MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    val highlightTint = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
-                    Text(
-                        text = highlightMatches(work.title, highlight, highlightTint),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    if (!work.authors.isNullOrBlank()) {
-                        Text(
-                            text = work.authors,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    val count = work.editions.size
-                    EditionCountChip(count)
+                if (work.editions.isNotEmpty()) {
+                    Text(formatsLabel(work.editions), style = MaterialTheme.typography.labelSmall, color = muted)
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            if (inLibrary) {
+                Icon(
+                    Icons.Rounded.Bookmark,
+                    contentDescription = "In your library",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
     }
 }
@@ -113,7 +140,7 @@ fun WorkCard(
  * of [query] inside [text] with [tint] as a background. Returns [text]
  * unchanged when [query] is null/blank — typical no-search-active state.
  */
-private fun highlightMatches(text: String, query: String?, tint: androidx.compose.ui.graphics.Color): AnnotatedString {
+private fun highlightMatches(text: String, query: String?, tint: Color): AnnotatedString {
     if (query.isNullOrBlank()) return AnnotatedString(text)
     val q = query.trim()
     return buildAnnotatedString {
@@ -135,24 +162,15 @@ private fun highlightMatches(text: String, query: String?, tint: androidx.compos
     }
 }
 
+/** Section heading inside a list ("Catalog", "Reading", …). */
 @Composable
-fun EditionCountChip(count: Int) {
-    val label = if (count == 1) "1 EDITION" else "$count EDITIONS"
-    Box(
-        modifier = Modifier
-            .height(24.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.primaryContainer)
-            .padding(horizontal = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
-    }
+fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+    )
 }
 
 @Composable
@@ -168,21 +186,30 @@ fun EditionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp),
+                .heightIn(min = 64.dp)
+                .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             FormatBadge(edition.format)
-            Text(
-                text = edition.prettySize,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(formatName(edition.format), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = edition.prettySize,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (edition.isPreviewable) {
                 TextButton(onClick = onRead) { Text("Read") }
             }
-            TextButton(onClick = onDownload) { Text("Download") }
+            IconButton(onClick = onDownload) {
+                Icon(
+                    Icons.Rounded.Download,
+                    contentDescription = "Download ${edition.format.uppercase()} edition",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (onRemove != null) {
                 TextButton(onClick = onRemove) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)
@@ -193,24 +220,59 @@ fun EditionRow(
     }
 }
 
+/** PDF in slate blue, text in brass, anything else neutral. */
 @Composable
-private fun FormatBadge(format: String) {
+fun FormatBadge(format: String) {
+    val (bg, fg) = when (format.uppercase()) {
+        "PDF" -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+        "TXT" -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh to MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Box(
         modifier = Modifier
-            .height(28.dp)
-            .widthIn(min = 44.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .height(22.dp)
+            .widthIn(min = 40.dp)
+            .clip(MaterialTheme.shapes.extraSmall)
+            .background(bg)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = format.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = fg,
         )
     }
+}
+
+/** Filled brass stars up to [rating]; tappable when [onRate] is set. */
+@Composable
+fun StarRating(
+    rating: Int?,
+    onRate: ((Int) -> Unit)?,
+    modifier: Modifier = Modifier,
+    starSize: Dp = 24.dp,
+) {
+    Row(modifier) {
+        for (star in 1..5) {
+            val filled = (rating ?: 0) >= star
+            val icon = if (filled) Icons.Rounded.Star else Icons.Rounded.StarOutline
+            val tint = if (filled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline
+            if (onRate != null) {
+                IconButton(onClick = { onRate(star) }, modifier = Modifier.size(starSize + 16.dp)) {
+                    Icon(icon, contentDescription = "$star star${if (star == 1) "" else "s"}", tint = tint, modifier = Modifier.size(starSize))
+                }
+            } else {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(starSize))
+            }
+        }
+    }
+}
+
+/** A placeholder block for loading states. */
+@Composable
+fun Skeleton(modifier: Modifier = Modifier, shape: RoundedCornerShape = RoundedCornerShape(4.dp)) {
+    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest))
 }
 
 @Composable
@@ -218,39 +280,40 @@ fun EmptyState(
     title: String,
     body: String,
     action: (@Composable () -> Unit)? = null,
-    icon: ImageVector = Icons.Outlined.Book,
+    icon: ImageVector = Icons.AutoMirrored.Outlined.LibraryBooks,
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.padding(24.dp),
+        modifier = modifier.padding(horizontal = 40.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(64.dp)
-                .clip(RoundedCornerShape(32.dp))
+                .padding(bottom = 8.dp)
+                .size(112.dp)
+                .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(48.dp),
             )
         }
-        Spacer(Modifier.height(8.dp))
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Medium,
+            style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
         )
         Text(
             text = body,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
         )
         if (action != null) {
             Spacer(Modifier.height(8.dp))
@@ -258,7 +321,6 @@ fun EmptyState(
         }
     }
 }
-
 
 /**
  * Confirmation for a moderator takedown. A reason is required — it's stored
@@ -298,40 +360,53 @@ fun RemoveDialog(
 }
 
 /**
- * One-tap resume for the book you're in the middle of. Sits atop Browse so
- * the most common reason to open the app is the first thing on screen.
+ * One-tap resume for the book you're in the middle of: cover, title,
+ * author and progress on the primary container. Sits atop Browse so the
+ * most common reason to open the app is the first thing on screen.
  */
 @Composable
 fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val title = entry.work?.title ?: "Your book"
+    val authors = entry.work?.authors
     Surface(
         onClick = onClick,
         color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        shape = RoundedCornerShape(12.dp),
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
-            Column(Modifier.weight(1f)) {
-                Text("Continue reading", style = MaterialTheme.typography.labelMedium)
+            BookCover(title, authors, CoverSize.M)
+            Column(Modifier.weight(1f).height(CoverSize.M.height)) {
                 Text(
-                    text = entry.work?.title ?: "Your book",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    "CONTINUE READING",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.alpha(0.8f),
                 )
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { entry.progressPercent / 100f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (!authors.isNullOrBlank()) {
+                    Text(
+                        authors,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.alpha(0.8f),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LinearProgressIndicator(
+                        progress = { entry.progressPercent / 100f },
+                        trackColor = MaterialTheme.colorScheme.surface,
+                        drawStopIndicator = {},
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text("${entry.progressPercent}%", style = MaterialTheme.typography.labelLarge)
+                }
             }
-            Text("${entry.progressPercent}%", style = MaterialTheme.typography.labelLarge)
         }
     }
 }
