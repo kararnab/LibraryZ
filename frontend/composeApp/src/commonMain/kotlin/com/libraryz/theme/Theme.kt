@@ -11,6 +11,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -191,9 +192,16 @@ enum class ReadingTheme(
     Dark("Dark", Color(0xFF121110), Color(0xFFCFC8BB), Color(0xFF8E887C), Color(0xFF2A2824)),
 }
 
+/**
+ * The OS light/dark preference, for platforms where Compose's
+ * [isSystemInDarkTheme] can't see it (Linux desktop always reports light).
+ * Null means "ask Compose".
+ */
+val LocalSystemDarkTheme = compositionLocalOf<Boolean?> { null }
+
 @Composable
 fun LibraryZTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = LocalSystemDarkTheme.current ?: isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
     val serif = serifFamily()

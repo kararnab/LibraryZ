@@ -12,6 +12,7 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.libraryz.theme.LocalSystemDarkTheme
 import com.libraryz.ui.Fullscreen
 import com.libraryz.ui.LocalFullscreen
 import java.awt.Toolkit
@@ -20,6 +21,7 @@ fun main(args: Array<String>) {
     // Another copy is running and took the link (or the launch): done.
     if (!DesktopLinks.start(args)) return
     setLinuxWindowClass("LibraryZ")
+    LinuxColorScheme.start()
     application {
         val state = rememberWindowState(size = DpSize(1280.dp, 800.dp))
         Window(
@@ -36,7 +38,11 @@ fun main(args: Array<String>) {
                 window.requestFocus()
             }
             val fullscreen = remember(state) { WindowFullscreen(state) }
-            CompositionLocalProvider(LocalFullscreen provides fullscreen) { App() }
+            val systemDark by LinuxColorScheme.dark.collectAsState()
+            CompositionLocalProvider(
+                LocalFullscreen provides fullscreen,
+                LocalSystemDarkTheme provides systemDark,
+            ) { App() }
         }
     }
 }
