@@ -17,7 +17,7 @@ import (
 // liveModels are the structs the application actually reads and writes.
 var liveModels = []any{
 	&auth.User{}, &auth.UserRole{}, &auth.Identity{}, &auth.PasswordCredential{},
-	&auth.Session{}, &auth.SessionRotation{},
+	&auth.Session{}, &auth.SessionRotation{}, &auth.OneTimeToken{}, &auth.AccountEmail{},
 	&catalog.Work{}, &catalog.Edition{}, &catalog.Tag{},
 	&contribution.Contribution{},
 	&library.UserBook{},

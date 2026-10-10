@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.MarkEmailUnread
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -145,7 +146,18 @@ fun ForgotPasswordScreen(
     api: ApiClient,
     initialEmail: String,
     onBack: () -> Unit,
+    // The code from the email, typed or pasted: how the native apps finish
+    // a reset when the emailed link opens the web instead.
+    onHaveCode: (String) -> Unit,
 ) {
+    var enteringCode by remember { mutableStateOf(false) }
+    if (enteringCode) {
+        CodeDialog(
+            title = "Enter your reset code",
+            onDismiss = { enteringCode = false },
+            onSubmit = { enteringCode = false; onHaveCode(it) },
+        )
+    }
     val scope = rememberCoroutineScope()
     var email by remember { mutableStateOf(initialEmail) }
     var sending by remember { mutableStateOf(false) }
@@ -205,6 +217,7 @@ fun ForgotPasswordScreen(
                 Button(onClick = onBack, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                     Text("Back to log in", style = MaterialTheme.typography.titleMedium)
                 }
+                TextButton(onClick = { enteringCode = true }) { Text("Have a code? Enter it") }
                 TextButton(onClick = ::send, enabled = !sending) { Text(if (sending) "Sending…" else "Didn’t get it? Send again") }
             }
         }
@@ -376,7 +389,20 @@ fun VerifyEmailScreen(
  * link; [onResend] reports how that went.
  */
 @Composable
-fun VerifyEmailBanner(email: String, onResend: () -> Unit, modifier: Modifier = Modifier) {
+fun VerifyEmailBanner(
+    email: String,
+    onResend: () -> Unit,
+    onHaveCode: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var enteringCode by remember { mutableStateOf(false) }
+    if (enteringCode) {
+        CodeDialog(
+            title = "Enter your verification code",
+            onDismiss = { enteringCode = false },
+            onSubmit = { enteringCode = false; onHaveCode(it) },
+        )
+    }
     Column(modifier) {
         Banner(
             BannerTone.Info,
@@ -385,7 +411,53 @@ fun VerifyEmailBanner(email: String, onResend: () -> Unit, modifier: Modifier = 
             body = "We sent a link to $email. Confirm it so you can always get back into your account.",
         )
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { enteringCode = true }) { Text("Have a code?") }
             TextButton(onClick = onResend) { Text("Send again") }
         }
+    }
+}
+
+/**
+ * The code from a recovery email: the token the link carries, printed in
+ * the email for apps the link can't open. Pasting a whole link works too.
+ */
+@Composable
+private fun CodeDialog(title: String, onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
+    var code by remember { mutableStateOf("") }
+    val token = codeFromInput(code)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "It’s in the email, under the link. You can also paste the whole link.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it },
+                    label = { Text("Code") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSubmit(token) }, enabled = token.isNotEmpty()) { Text("Continue") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** A pasted code, or the token inside a pasted link; trimmed of spaces. */
+internal fun codeFromInput(input: String): String {
+    val trimmed = input.trim()
+    return when (val link = com.libraryz.data.parseDeepLink(trimmed)) {
+        is com.libraryz.data.DeepLink.ResetPassword -> link.token
+        is com.libraryz.data.DeepLink.VerifyEmail -> link.token
+        null -> trimmed.filterNot { it.isWhitespace() }
     }
 }

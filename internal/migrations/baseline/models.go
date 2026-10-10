@@ -24,6 +24,9 @@ type User struct {
 	Name      string
 	Disabled  bool `gorm:"not null;default:false"`
 	CreatedAt time.Time
+	// EmailVerifiedAt is set when the user follows an email-verification
+	// link for their current address; nil means unverified.
+	EmailVerifiedAt *time.Time
 }
 
 type UserRole struct {
@@ -172,10 +175,37 @@ func (Dismissal) TableName() string { return "rec_dismissals" }
 // All lists every model, in dependency order, for AutoMigrate.
 func All() []any {
 	return []any{
-		&User{}, &UserRole{}, &Identity{}, &PasswordCredential{}, &Session{}, &SessionRotation{},
+		&User{}, &UserRole{}, &Identity{}, &PasswordCredential{}, &Session{}, &SessionRotation{}, &OneTimeToken{}, &AccountEmail{},
 		&Work{}, &Edition{}, &Tag{},
 		&Contribution{},
 		&UserBook{},
 		&WorkFactors{}, &UserFactors{}, &WorkNeighbor{}, &Dismissal{},
 	}
+}
+
+// OneTimeToken backs iam's onetime.Store: single-use, expiring password
+// reset and email verification tokens. Only the SHA-256 of the secret is
+// stored. A new request deletes the subject's earlier tokens of the same
+// purpose, so the table stays small; expired rows are purged on a ticker.
+type OneTimeToken struct {
+	ID        string    `gorm:"primaryKey;size:64"`
+	TokenHash []byte    `gorm:"not null;uniqueIndex"`
+	Purpose   string    `gorm:"not null;size:32;index:idx_one_time_tokens_subject_purpose,priority:2"`
+	SubjectID string    `gorm:"not null;size:32;index:idx_one_time_tokens_subject_purpose,priority:1"`
+	Login     string    `gorm:"size:320"` // password reset: the login
+	Email     string    `gorm:"size:320"` // email verification: the address
+	CreatedAt time.Time `gorm:"not null"`
+	ExpiresAt time.Time `gorm:"not null;index"`
+	UsedAt    *time.Time
+}
+
+// AccountEmail records each reset or verification email sent to an
+// account, to cap them per account (a cooldown and a daily limit) so no one
+// can flood a person's inbox by rotating IPs. Rows older than a day are
+// purged on a ticker.
+type AccountEmail struct {
+	ID     uint      `gorm:"primaryKey"`
+	UserID uint      `gorm:"not null;index:idx_account_emails_user_kind_sent,priority:1"`
+	Kind   string    `gorm:"not null;size:32;index:idx_account_emails_user_kind_sent,priority:2"`
+	SentAt time.Time `gorm:"not null;index:idx_account_emails_user_kind_sent,priority:3"`
 }

@@ -49,3 +49,13 @@ class RecoveryTest {
         assertFalse(unverified.emailVerified)
     }
 }
+
+class CodeInputTest {
+    @Test
+    fun acceptsACodeOrAWholeLink() {
+        assertEquals("abc_DEF-123", com.libraryz.ui.screens.codeFromInput("  abc_DEF-123 \n"))
+        assertEquals("tok123", com.libraryz.ui.screens.codeFromInput("http://localhost:8081/reset-password?token=tok123"))
+        assertEquals("v-9", com.libraryz.ui.screens.codeFromInput("https://library.example.org/verify-email?token=v-9"))
+        assertEquals("", com.libraryz.ui.screens.codeFromInput("   "))
+    }
+}

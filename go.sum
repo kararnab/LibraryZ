@@ -50,6 +50,8 @@ github.com/kararnab/iam/redisstore/v2 v2.3.0 h1:BPXbhpaFMFV4jPf3SfYn0BrVAsp2L9Mo
 github.com/kararnab/iam/redisstore/v2 v2.3.0/go.mod h1:5BgfcO3JoS1Et81AGy1mgpsl4opoC0VGjxamoKnvNwE=
 github.com/kararnab/iam/v2 v2.3.0 h1:cFiud2CIVi59j510WNJs+igb6yFACvT1HzVgOFgZEeo=
 github.com/kararnab/iam/v2 v2.3.0/go.mod h1:dNQlCFdHFJCEGJeBSZ6olr19/yKJHpIg4OJ55kmS348=
+github.com/kararnab/onemailer v0.1.0 h1:huLdyhmwRnVfIFoiOt47iT7zIWToXrlE9cZ7O9aq834=
+github.com/kararnab/onemailer v0.1.0/go.mod h1:BBnRzUnyQR0iIet7TOqlffx68S/F8hR3fd7+X8DPEro=
 github.com/klauspost/compress v1.20.1 h1:T7kKElXUMXrUJ2E9QhQhxFtcK5rPyLdsGZvdbLMPdiQ=
 github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/cpuid/v2 v2.0.1/go.mod h1:FInQzS24/EEf25PyTYn52gqo7WaD8xa0213Md/qVLRg=

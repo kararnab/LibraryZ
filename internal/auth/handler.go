@@ -26,10 +26,13 @@ type HealthResponse struct {
 
 type Handler struct {
 	auth *Auth
+	mail Mail
 }
 
-func NewHandler(a *Auth) *Handler {
-	return &Handler{auth: a}
+// NewHandler serves the auth endpoints. m configures the recovery emails;
+// the zero Mail means mail is off.
+func NewHandler(a *Auth, m Mail) *Handler {
+	return &Handler{auth: a, mail: m}
 }
 
 // Error messages for 4xx responses. They're shown to users verbatim by the
@@ -89,6 +92,17 @@ func (h *Handler) SignUp(w http.ResponseWriter, r *http.Request) {
 		log.Printf("auth: signup failed: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	// Ask the new account to confirm its address. Best effort: sign-up
+	// succeeded either way, and the app offers "Send again".
+	if uid, ok := middleware.ParseSubjectID(res.Subject.ID); ok {
+		var u User
+		if err := h.auth.db.WithContext(r.Context()).Take(&u, uid).Error; err == nil {
+			if _, err := h.sendVerification(r, &u); err != nil {
+				log.Printf("auth: verification email after signup for user %d: %v", uid, err)
+			}
+		}
 	}
 
 	h.writeTokens(w, http.StatusCreated, res.AccessToken, res.RefreshToken)
@@ -285,6 +299,9 @@ type MeResponse struct {
 	Email string   `json:"email"`
 	Name  string   `json:"name"`
 	Roles []string `json:"roles"`
+	// EmailVerified is true once the user followed a verification link for
+	// their current address.
+	EmailVerified bool `json:"email_verified"`
 	// IsModerator is read from the database, so it reflects a promotion
 	// immediately — though moderator-only routes check the roles in the
 	// access token, which catch up at the next refresh.
@@ -313,7 +330,8 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := MeResponse{
 		ID: u.ID, Email: u.Email, Name: u.Name, Roles: roles,
-		IsModerator: slices.Contains(roles, RoleModerator),
+		IsModerator:   slices.Contains(roles, RoleModerator),
+		EmailVerified: u.EmailVerifiedAt != nil,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

@@ -23,6 +23,7 @@ import (
 	"github.com/kararnab/libraryZ/internal/storage"
 	"github.com/kararnab/libraryZ/pkg/config"
 	"github.com/kararnab/libraryZ/pkg/db"
+	"github.com/kararnab/onemailer"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -37,6 +38,12 @@ func main() {
 	// `libraryz migrate` applies pending schema migrations and exits — for
 	// running them as a one-shot deploy step (with LIBRARYZ_AUTO_MIGRATE=false
 	// on the servers) instead of on every instance's startup.
+	// `libraryz mail send-test -to ADDRESS` checks the mail settings by
+	// sending one message synchronously (the go-live check). No database.
+	if len(os.Args) > 1 && os.Args[1] == "mail" {
+		os.Exit(mailCommand(os.Args[2:]))
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		if err := migrate(cfg); err != nil {
 			log.Fatalf("migrate: %v", err)
@@ -48,6 +55,13 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// Mail settings are checked at startup: a bad one stops the server and
+	// names the variable (never the password).
+	mailCfg, err := onemailer.LoadConfig(os.Getenv, mailEnvPrefix)
+	if err != nil {
+		log.Fatalf("mail: %v", err)
+	}
+	log.Printf("mail: %s", mailCfg)
 
 	if cfg.AutoMigrate {
 		if err := migrate(cfg); err != nil {
@@ -83,6 +97,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("login limiter: %v", err)
 	}
+	mailSettings, mailQueue, err := newMail(mailCfg)
+	if err != nil {
+		log.Fatalf("mail: %v", err)
+	}
 	h, err := server.New(server.Deps{
 		DB:                     dbConn,
 		Storage:                store,
@@ -99,6 +117,7 @@ func main() {
 		LoginLimiterPerAccount: perAccount,
 		LoginLimiterPerIP:      perIP,
 		TrustedProxies:         cfg.TrustedProxies,
+		Mail:                   mailSettings,
 	})
 	if err != nil {
 		log.Fatalf("server: %v", err)
@@ -106,7 +125,7 @@ func main() {
 
 	startRecommendationTraining(dbConn, cfg)
 	startBlobGC(catalog.NewService(dbConn, store), cfg)
-	startSessionPurge(auth.NewSessions(dbConn), cfg)
+	startSessionPurge(dbConn, cfg)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -139,6 +158,11 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(shutCtx); err != nil {
 			log.Fatalf("graceful shutdown failed: %v", err)
+		}
+		// Give queued emails the rest of the drain window, then log and
+		// drop what's left (the user can ask again).
+		if mailQueue != nil {
+			mailQueue.Close(shutCtx)
 		}
 		log.Printf("shutdown complete")
 	}
@@ -267,19 +291,28 @@ func loginLimiters(cfg *config.Config) (perAccount, perIP ratelimit.Limiter, err
 	return perAccount, perIP, nil
 }
 
-// startSessionPurge deletes expired sessions on a ticker. Idempotent, so
-// every replica can run it without coordination.
-func startSessionPurge(sessions *auth.Sessions, cfg *config.Config) {
+// startSessionPurge deletes expired sessions, expired recovery tokens and
+// day-old email-cap records on a ticker. Idempotent, so every replica can
+// run it without coordination.
+func startSessionPurge(dbConn *gorm.DB, cfg *config.Config) {
+	sessions, tokens := auth.NewSessions(dbConn), auth.NewTokens(dbConn)
+	purge := func(what string, f func(context.Context, time.Time) (int, error)) {
+		n, err := f(context.Background(), time.Now())
+		if err != nil {
+			log.Printf("auth: %s purge failed: %v", what, err)
+		} else if n > 0 {
+			log.Printf("auth: purged %d %s", n, what)
+		}
+	}
 	go func() {
 		ticker := time.NewTicker(cfg.SessionPurgeInterval)
 		defer ticker.Stop()
 		for range ticker.C {
-			n, err := sessions.PurgeExpired(context.Background(), time.Now())
-			if err != nil {
-				log.Printf("auth: session purge failed: %v", err)
-			} else if n > 0 {
-				log.Printf("auth: purged %d expired sessions", n)
-			}
+			purge("expired sessions", sessions.PurgeExpired)
+			purge("expired recovery tokens", tokens.PurgeExpired)
+			purge("old email records", func(ctx context.Context, now time.Time) (int, error) {
+				return auth.PurgeAccountEmails(ctx, dbConn, now)
+			})
 		}
 	}()
 }

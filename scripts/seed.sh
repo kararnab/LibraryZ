@@ -374,10 +374,14 @@ submit_contrib() {
   '{"description":"A catalog of safe, behavior-preserving transformations for improving the design of existing code. Second edition uses JavaScript examples."}' \
   "tweak description on Refactoring"
 
-# ── Moderator promotion ───────────────────────────────────────────────────
+# ── Moderator promotion + verified demo emails ─────────────────────────────
+# The demo addresses can't receive mail, so mark them verified (otherwise
+# every demo session shows the "Verify your email" banner). The real flow
+# is: sign up, open the link Mailpit caught at http://localhost:8025.
 if [ "$DO_MOD" = "1" ]; then
-  say "Promoting $MOD_EMAIL to moderator"
-  SQL="INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '$MOD_EMAIL' ON CONFLICT DO NOTHING;"
+  say "Promoting $MOD_EMAIL to moderator; marking demo emails verified"
+  SQL="INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '$MOD_EMAIL' ON CONFLICT DO NOTHING;
+UPDATE users SET email_verified_at = now() WHERE email IN ('$MOD_EMAIL', '$USER_EMAIL') AND email_verified_at IS NULL;"
   if docker compose ps postgres 2>/dev/null | grep -qE 'Up|running'; then
     docker compose exec -T postgres psql -U user -d libraryz -c "$SQL" >/dev/null
     ok "promoted via docker compose"

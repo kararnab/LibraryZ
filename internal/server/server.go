@@ -50,6 +50,9 @@ type Deps struct {
 	LoginLimiterPerIP      ratelimit.Limiter
 	// TrustedProxies whose X-Forwarded-For names the client IP (Kong).
 	TrustedProxies []netip.Prefix
+	// Mail sends password-reset and verification emails; the zero value
+	// means mail is off (requests are still answered as usual).
+	Mail auth.Mail
 }
 
 // New builds the HTTP handler with all routes wired. Used by cmd/libraryz and
@@ -71,7 +74,7 @@ func New(d Deps) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	authH := auth.NewHandler(a)
+	authH := auth.NewHandler(a, d.Mail)
 	requireMod := func(action policy.Action, resource string, h http.HandlerFunc) http.Handler {
 		return a.HTTP.RequirePermission(action, resource, nil)(h)
 	}
@@ -95,6 +98,9 @@ func New(d Deps) (http.Handler, error) {
 	r.HandleFunc("/auth/login", authH.Login).Methods(http.MethodPost)
 	r.HandleFunc("/auth/refresh", authH.Refresh).Methods(http.MethodPost)
 	r.HandleFunc("/auth/logout", authH.Logout).Methods(http.MethodPost)
+	r.HandleFunc("/auth/password-reset", authH.RequestPasswordReset).Methods(http.MethodPost)
+	r.HandleFunc("/auth/password-reset/complete", authH.CompletePasswordReset).Methods(http.MethodPost)
+	r.HandleFunc("/auth/email-verification/complete", authH.CompleteEmailVerification).Methods(http.MethodPost)
 
 	r.HandleFunc("/works", catH.ListWorks).Methods(http.MethodGet)
 	// /works/search before /works/{id} so mux matches "search" as a
@@ -112,6 +118,7 @@ func New(d Deps) (http.Handler, error) {
 	authed.Use(a.HTTP.RequireAuth)
 	authed.HandleFunc("/auth/me", authH.Me).Methods(http.MethodGet)
 	authed.HandleFunc("/auth/logout-all", authH.LogoutAll).Methods(http.MethodPost)
+	authed.HandleFunc("/me/email-verification", authH.RequestEmailVerification).Methods(http.MethodPost)
 	authed.HandleFunc("/me/sessions", authH.ListSessions).Methods(http.MethodGet)
 	authed.HandleFunc("/me/sessions/{id}", authH.RevokeSession).Methods(http.MethodDelete)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)

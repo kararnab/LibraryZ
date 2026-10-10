@@ -251,7 +251,13 @@ internal fun Root(
         }
     }
     val verifyBanner: (@Composable () -> Unit)? = auth.user?.takeIf { !it.emailVerified }?.let { u ->
-        { VerifyEmailBanner(u.email, onResend = resendVerification) }
+        {
+            VerifyEmailBanner(
+                u.email,
+                onResend = resendVerification,
+                onHaveCode = { code -> nav.push(Screen.VerifyEmail(code)) },
+            )
+        }
     }
     // An expired session lands on sign-in with a banner explaining why.
     var expiredNotice by remember { mutableStateOf(false) }
@@ -785,6 +791,7 @@ internal fun Root(
                 api = api,
                 initialEmail = s.email,
                 onBack = { if (!nav.pop()) nav.replace(Screen.Auth) },
+                onHaveCode = { code -> nav.push(Screen.ResetPassword(code)) },
             )
 
             is Screen.ResetPassword -> ResetPasswordScreen(

@@ -50,6 +50,12 @@ const (
 	DefaultSessionMaxAge   = 365 * 24 * time.Hour
 )
 
+// Lifetimes of the emailed recovery tokens (the emails quote them).
+const (
+	ResetTokenTTL        = time.Hour
+	VerificationTokenTTL = 48 * time.Hour
+)
+
 // PasswordPolicy keeps LibraryZ's 8-character minimum (iam's DefaultPolicy
 // asks for 12). The maximum bounds hashing cost.
 var PasswordPolicy = password.Policy{MinLength: 8, MaxLength: 1024}
@@ -107,7 +113,16 @@ type Auth struct {
 	HTTP     *httpauth.Middleware
 	Users    *Users
 	Sessions *Sessions
+	Tokens   *Tokens
+	// Recovery is password reset and email verification (iam.Recovery).
+	Recovery iam.Recovery
 	db       *gorm.DB
+
+	// The login limiters iam throttles with. Kept so a reset request that
+	// the per-account email cap suppresses still counts on iam's reset keys
+	// (see countResetAttempt), answering exactly like any other request.
+	perLogin, perIP ratelimit.Limiter
+	now             func() time.Time
 
 	accessTTL time.Duration
 }
@@ -168,7 +183,18 @@ func New(cfg Config) (*Auth, error) {
 		return nil, err
 	}
 
+	// iam's own defaults, created here so they can be kept (see Auth).
+	if cfg.PerLogin == nil && cfg.PerIP == nil {
+		if cfg.PerLogin, err = ratelimit.NewMemory(ratelimit.Config{Threshold: 5}); err != nil {
+			return nil, err
+		}
+		if cfg.PerIP, err = ratelimit.NewMemory(ratelimit.Config{Threshold: 100}); err != nil {
+			return nil, err
+		}
+	}
+
 	sessions := NewSessions(cfg.DB)
+	tokens := NewTokens(cfg.DB)
 	svc, err := iam.New(iam.Config{
 		Providers: []provider.AuthProvider{passwords},
 		Users:     users,
@@ -185,7 +211,14 @@ func New(cfg Config) (*Auth, error) {
 		Policy:                rbac,
 		Signup:                iam.SignupConfig{Policy: invite.Open},
 		RateLimit:             iam.RateLimitConfig{PerLogin: cfg.PerLogin, PerIP: cfg.PerIP},
-		Now:                   cfg.Now,
+		// Reset requests share the login limiters (under different keys,
+		// so they never lock anyone out of signing in).
+		Recovery: iam.RecoveryConfig{
+			Tokens:          tokens,
+			ResetTTL:        ResetTokenTTL,
+			VerificationTTL: VerificationTokenTTL,
+		},
+		Now: cfg.Now,
 	})
 	if err != nil {
 		return nil, err
@@ -204,8 +237,14 @@ func New(cfg Config) (*Auth, error) {
 		return nil, err
 	}
 
+	recovery, ok := svc.(iam.Recovery)
+	if !ok {
+		return nil, errors.New("auth: iam service does not implement Recovery")
+	}
+
 	return &Auth{
-		Service: svc, HTTP: mw, Users: users, Sessions: sessions, db: cfg.DB,
+		Service: svc, HTTP: mw, Users: users, Sessions: sessions, Tokens: tokens, Recovery: recovery, db: cfg.DB,
+		perLogin: cfg.PerLogin, perIP: cfg.PerIP, now: cfg.Now,
 		accessTTL: cfg.AccessTokenTTL,
 	}, nil
 }
