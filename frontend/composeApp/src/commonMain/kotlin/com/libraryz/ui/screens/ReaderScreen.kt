@@ -1271,6 +1271,7 @@ private fun TextSpreadView(
         val density = LocalDensity.current
         val column = textColumnWidth(maxWidth)
         // Running head (16 + 20) and foot (14 + 16) around the body; page padding 28 / 20.
+        val pageHeight = maxHeight
         val bodyHeight = maxHeight - 28.dp - 20.dp - 36.dp - 30.dp
         val style = TextStyle(
             fontFamily = LibraryZ.tokens.serif,
@@ -1371,7 +1372,7 @@ private fun TextSpreadView(
                     if (p == pageCount) {
                         // The end card in the empty right-hand page.
                         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                            Box(Modifier.fillMaxWidth().heightIn(min = maxHeight - 48.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.fillMaxWidth().heightIn(min = pageHeight - 48.dp), contentAlignment = Alignment.Center) {
                                 Box(Modifier.widthIn(max = 440.dp)) { end() }
                             }
                         }
