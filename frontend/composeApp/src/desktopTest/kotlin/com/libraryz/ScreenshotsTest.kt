@@ -91,6 +91,9 @@ class ScreenshotsTest {
         File(dir, "$name.png").writeBytes(Image.makeFromBitmap(Bitmap.makeFromImage(img)).encodeToData()!!.bytes)
         scene.close()
         println("wrote $name.png")
+        // Kong allows 60 requests a minute per IP and every shot loads a few
+        // screens' worth; spacing them out keeps the run under it.
+        Thread.sleep(5_000)
     }
 
     private fun Session.work(title: String): Work =
@@ -124,7 +127,13 @@ class ScreenshotsTest {
             Screen.Preview(refactoring.edition("TXT").id, "TXT", refactoring.id, refactoring.title, refactoring.authors),
         )
         shot("upload_screen", reader, Screen.Upload())
-        shot("browse_dark", reader, Screen.WorkDetail(ddia.id), dark = true)
+        val compilers = reader.work("Compilers")
+        shot("browse_dark", reader, Screen.WorkDetail(compilers.id), dark = true)
+
+        // Last for the reader: the search stays in their WorksState.
+        val sicp = reader.work("Structure and Interpretation")
+        runBlocking { reader.works.search("comp") }
+        shot("search", reader, Screen.WorkDetail(sicp.id))
 
         val mod = session("mod@libraryz.local")
         shot("review", mod, Screen.ContributionQueue)

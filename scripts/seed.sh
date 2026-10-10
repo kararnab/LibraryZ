@@ -8,9 +8,11 @@
 #
 #   POST /auth/login              5/min, 30/hour
 #   POST /auth/signup             3/min, 10/hour
-#   POST /works/{id}/editions    10/hour
+#   POST /works/{id}/editions    30/hour (flood guard; the real cap is the
+#                                per-account upload quota, 5/day for new accounts)
 #
-# The seed creates 10 works (= 10 edition uploads), exactly the hour budget.
+# The seed creates 10 works (= 10 edition uploads, by the moderator, who
+# has no upload quota).
 # So this script is structured to be **idempotent** — re-running it skips
 # anything that already exists, and it caches JWTs to /tmp so re-runs don't
 # burn the login bucket either.
@@ -83,7 +85,7 @@ api() {
   if [ "$code" = "429" ]; then
     warn "$method $path → 429 (rate-limited by Kong). Body: $body"
     if [ "$behind_kong" = "1" ]; then
-      warn "  Kong limits: login 5/min · signup 3/min · edition upload 10/hour"
+      warn "  Kong limits: login 5/min · signup 3/min · edition upload 30/hour"
       warn "  Wait for the bucket to refill, then re-run with --reset to retry."
     fi
   else
@@ -174,6 +176,29 @@ if [ -z "$MOD_TOKEN" ] || [ -z "$USER_TOKEN" ]; then
   ok "tokens cached at $CACHE_FILE"
 fi
 
+# ── Moderator promotion + verified demo emails ─────────────────────────────
+# The demo addresses can't receive mail, so mark them verified (otherwise
+# every demo session shows the "Verify your email" banner). The real flow
+# is: sign up, open the link Mailpit caught at http://localhost:8025.
+# Runs before the uploads: moderators have no upload quota, so the
+# moderator can upload all ten editions (roles apply on the next request).
+PROMOTED=0
+if [ "$DO_MOD" = "1" ]; then
+  say "Promoting $MOD_EMAIL to moderator; marking demo emails verified"
+  SQL="INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '$MOD_EMAIL' ON CONFLICT DO NOTHING;
+UPDATE users SET email_verified_at = now() WHERE email IN ('$MOD_EMAIL', '$USER_EMAIL') AND email_verified_at IS NULL;"
+  if docker compose ps postgres 2>/dev/null | grep -qE 'Up|running'; then
+    docker compose exec -T postgres psql -U user -d libraryz -c "$SQL" >/dev/null
+    ok "promoted via docker compose"; PROMOTED=1
+  elif command -v psql >/dev/null && [ -n "${DATABASE_URL:-}" ]; then
+    psql "$DATABASE_URL" -c "$SQL" >/dev/null
+    ok "promoted via \$DATABASE_URL"; PROMOTED=1
+  else
+    warn "couldn't auto-promote — run this yourself:"
+    warn "  docker compose exec postgres psql -U user -d libraryz -c \"$SQL\""
+  fi
+fi
+
 # ── Works (titles match the design bundle's sample data) ───────────────────
 say "Creating works (skipping any that already exist)"
 
@@ -187,8 +212,11 @@ id_for_title() {
 
 # title|authors|year|language|isbn|description|format
 # Format mix is 5 PDF + 5 TXT so the new TextReader has things to render
-# and the PdfBackend path still has coverage. Total uploads = 10, right at
-# Kong's per-IP /works/{id}/editions bucket of 10/hour.
+# and the PdfBackend path still has coverage. Total uploads = 10. A new
+# account's upload quota is 5 files a day (catalog.UploadQuota) and
+# moderators have none, so the promoted moderator uploads them; without
+# promotion the two demo accounts split them. Kong's per-IP flood guard is
+# 30/hour.
 WORKS=(
 "The Mythical Man-Month|Frederick P. Brooks Jr.|1975|en|9780201835953|Essays on software engineering, including Brooks's law — adding people to a late software project makes it later.|PDF"
 "Structure and Interpretation of Computer Programs|Harold Abelson; Gerald Jay Sussman|1985|en|9780262510875|The classic MIT introduction to computer science, using Scheme. Often called the wizard book.|PDF"
@@ -239,23 +267,33 @@ $title
 
 $authors ($year)
 
-═══════════════════════════════════════════════════════════════════════
-
-About this edition
-
-This is a demo text edition created by the LibraryZ seed script. It exists so the TextReader has something to render in screenshots and demos. Replace it with the real text when you wire in a content pipeline — Project Gutenberg dumps, scanned-OCR output, your own uploads.
+* * *
 
 About the book
 
 $desc
 
-═══════════════════════════════════════════════════════════════════════
+About this edition
 
-This edition is served as plain UTF-8 text. LibraryZ's TextReader decodes it once with bytes.decodeToString() and renders it with Compose Text — no rasterization, reflows for free at any window width, and remains selectable and accessible. Compare with the PDF editions on other works (e.g. The Mythical Man-Month, SICP), which go through the PagedReader path: PDFBox on Desktop, PdfRenderer on Android, pdf.js on Web, PDFKit on iOS.
+This is a demo text edition created by the LibraryZ seed script. It exists so the TextReader has something to render in screenshots and demos. Replace it with the real text when you wire in a content pipeline — Project Gutenberg dumps, scanned-OCR output, your own uploads.
 
-The pagination model is also different: PDFs have prev/next chevrons in the top bar driven by the document's fixed page count; text scrolls naturally because there's no inherent "page" in a flowing text stream until a viewport is involved.
+How it is read
 
-[End of demo content. ~1.6 KB.]
+This edition is served as plain UTF-8 text. LibraryZ's TextReader decodes it once and renders it with Compose Text in the reading theme you pick — light, sepia or dark — so it reflows at any window width and stays selectable and accessible. Compare with the PDF editions on other works (e.g. The Mythical Man-Month, SICP), which go through the PagedReader path: PDFBox on Desktop, PdfRenderer on Android, pdf.js on Web, PDFKit on iOS.
+
+On a wide window the text is set in two pages side by side, like an open book, and the arrow keys turn them. Narrow windows and phones scroll a single column instead. The type size, line spacing and theme live under the type button in the top bar.
+
+Reading position
+
+Your place is saved to your library as you read, so Continue reading on the Browse screen and on the book's page takes you back where you left off, on any device signed in to the same account.
+
+Contributing
+
+Anyone signed in can suggest a fix to a book's details — a title, a subtitle, the authors, the year or the description. Moderators see each suggestion as a word-level diff and approve or reject it, so the catalog improves over time without anyone editing it directly.
+
+* * *
+
+[End of demo content.]
 EOF
 }
 
@@ -297,7 +335,7 @@ for row in "${WORKS[@]}"; do
     PDF)
       stub="$stub.pdf"
       if [ "$HAVE_PYTHON" = "1" ]; then
-        python3 "$PDF_BUILDER" "$title" "$authors" "$stub"
+        python3 "$PDF_BUILDER" "$title" "$authors" "$stub" "$desc"
       else
         printf 'LibraryZ demo placeholder #%d - %s\n' "$i" "$title" > "$stub"
         warn "  $title: python3 unavailable — wrote text bytes with .pdf extension; preview won't render"
@@ -310,12 +348,16 @@ for row in "${WORKS[@]}"; do
       continue ;;
   esac
 
+  # The moderator has no quota; otherwise alternate so neither new account
+  # exceeds its 5 a day.
+  uploader="$MOD_TOKEN"
+  [ "$PROMOTED" = "0" ] && [ $((i % 2)) -eq 1 ] && uploader="$USER_TOKEN"
   uploads_attempted=$((uploads_attempted+1))
   if ! api POST "/works/$wid/editions" \
-        -H "Authorization: Bearer $USER_TOKEN" \
+        -H "Authorization: Bearer $uploader" \
         -F format="$format" -F language="$lang" -F file="@$stub" >/dev/null; then
-    warn "  edition upload failed for $title (Kong upload bucket may be exhausted — 10/hour)"
-    warn "  the work was created without an edition; rerun the script in an hour to attach one"
+    warn "  edition upload failed for $title (the account's upload quota may be used up)"
+    warn "  the work was created without an edition; rerun the script tomorrow, or wipe and reseed"
     continue
   fi
   ok "[$i/${#WORKS[@]}] $title ($format edition uploaded)"
@@ -373,26 +415,6 @@ submit_contrib() {
 [ -n "${WORK_IDS[6]:-}" ] && submit_contrib "${WORK_IDS[6]}" \
   '{"description":"A catalog of safe, behavior-preserving transformations for improving the design of existing code. Second edition uses JavaScript examples."}' \
   "tweak description on Refactoring"
-
-# ── Moderator promotion + verified demo emails ─────────────────────────────
-# The demo addresses can't receive mail, so mark them verified (otherwise
-# every demo session shows the "Verify your email" banner). The real flow
-# is: sign up, open the link Mailpit caught at http://localhost:8025.
-if [ "$DO_MOD" = "1" ]; then
-  say "Promoting $MOD_EMAIL to moderator; marking demo emails verified"
-  SQL="INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '$MOD_EMAIL' ON CONFLICT DO NOTHING;
-UPDATE users SET email_verified_at = now() WHERE email IN ('$MOD_EMAIL', '$USER_EMAIL') AND email_verified_at IS NULL;"
-  if docker compose ps postgres 2>/dev/null | grep -qE 'Up|running'; then
-    docker compose exec -T postgres psql -U user -d libraryz -c "$SQL" >/dev/null
-    ok "promoted via docker compose"
-  elif command -v psql >/dev/null && [ -n "${DATABASE_URL:-}" ]; then
-    psql "$DATABASE_URL" -c "$SQL" >/dev/null
-    ok "promoted via \$DATABASE_URL"
-  else
-    warn "couldn't auto-promote — run this yourself:"
-    warn "  docker compose exec postgres psql -U user -d libraryz -c \"$SQL\""
-  fi
-fi
 
 # ── Summary ────────────────────────────────────────────────────────────────
 cat <<EOF

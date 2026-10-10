@@ -1,16 +1,8 @@
 <h1 align="center">LibraryZ</h1>
 
 <p align="center">
-  <strong>A self-hosted, crowdsourced book catalog — with a real native client for every platform.</strong>
-</p>
-
-<p align="center">
-  Run it on a Raspberry Pi or a beefy server. Catalog books, upload PDF,
-  EPUB and plain-text editions (every file is safety-checked), read PDFs and
-  plain text in-app with your place saved across devices, let your community
-  fix metadata Wikipedia-style, track personal reading shelves, and get
-  matrix-factorization recommendations. One Go binary on the server, one
-  Compose Multiplatform app on Android / Desktop / Web / iOS.
+  <strong>A book library your community builds together.</strong><br>
+  Self-hosted. Native apps on Android, desktop and the web. No cloud account required.
 </p>
 
 <p align="center">
@@ -22,98 +14,163 @@
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
 </p>
 
----
+<p align="center">
+  <img src="docs/screenshots/browse.png" alt="LibraryZ on the desktop: the catalog, a Continue reading card, and a book's page" width="860">
+</p>
 
-## Why LibraryZ?
+Picture a shared bookshelf for your book club, your lab, your school or your
+family. Anyone can add a book and upload the file. Everyone reads it in
+the app, with their place saved across devices. When a title is misspelled
+or an author is missing, readers suggest a fix and a moderator approves it,
+like a small Wikipedia for your books. And the more people read, the
+better the **For You** picks get, from a model trained on your server and
+nowhere else.
 
-Self-hosted book apps are great, but each one picks a lane. LibraryZ aims at
-the intersection:
+That's LibraryZ: one Go binary on the server and one Compose Multiplatform
+app for every screen.
 
-- **Crowdsourced catalog, not single-user shelves.** Anyone can submit edits
-  to a `Work`'s title, authors, description, or tags. A moderator queue
-  approves or rejects them — Wikipedia for your books, scoped to your
-  instance.
-- **One UI, four platforms, all native.** The same Compose Multiplatform
-  codebase ships an Android APK, a Desktop JVM app, a Wasm web build, and an
-  iOS app. Not a webview wrapper.
+> **Status: pre-alpha.** It works end to end and runs a few hundred
+> backend and frontend tests in CI, but there's no tagged release yet and
+> the database schema can still change without migrations.
 
-Compared to other self-hosted options:
+## A quick tour
 
-| Project          | Multi-user catalog | Crowdsourced edits | Native mobile         | Web UI | Recommendations |
-|------------------|:------------------:|:------------------:|:---------------------:|:------:|:---------------:|
-| Calibre-Web      |          ✓         |          —         | browser only          |    ✓   |        —        |
-| Kavita           |          ✓         |          —         | community apps        |    ✓   |        —        |
-| Audiobookshelf   |    ✓ (audio-first) |          —         | ✓                     |    ✓   |        —        |
-| **LibraryZ**     |          ✓         |       **✓**        | ✓ (Compose MP)        |    ✓   |   ✓ (ALS MF)    |
+### Find anything
 
-## Screenshots
+Search by title, author or ISBN. Results come in as you type, and the
+matching part of each title is highlighted. Books don't need cover art: the
+app gives each one a cloth-bound cover generated from its title, and
+books by several authors show them the way a library card would ("Aho et
+al." in lists; every name on the book's page, each one a search).
 
-The Desktop client (Compose Multiplatform JVM target) on a freshly seeded
-instance; the same UI runs unchanged on Android, Web (Wasm) and iOS, with a
-bottom navigation bar instead of the rail on phones. Books have no cover
-images, so the app generates a cloth-bound cover from each title.
+| Search | Dark theme |
+|:---:|:---:|
+| ![Searching for "comp"](docs/screenshots/search.png) | ![A book with four authors, in the dark theme](docs/screenshots/browse_dark.png) |
 
-| Browse + book detail | My Library | For You |
+### Read in the app
+
+PDFs and plain text open right in the app; there's nothing to download
+first. On a wide window pages sit side by side like an open book, and
+phones show one page at a time. Text editions have light, sepia and dark
+reading themes and adjustable type. Your place syncs, so **Continue
+reading** picks up where you stopped on any device.
+
+| PDF, as a two-page spread | Plain text, as a two-page spread |
+|:---:|:---:|
+| ![The PDF reader](docs/screenshots/pdf_preview.png) | ![The text reader](docs/screenshots/text_preview.png) |
+
+### Keep your own shelves
+
+Mark books *Want to read*, *Reading* or *Read*, rate them, add notes and
+put them on your own shelves. Progress bars fill in as you read.
+
+![My Library](docs/screenshots/my_library.png)
+
+### Fix the catalog together
+
+Anyone signed in can suggest a better title, subtitle, author list, year,
+ISBN or description. Moderators get a review queue that shows each
+suggestion as a word-by-word diff, so a one-word fix is obvious at a
+glance, and approve or reject it in one click.
+
+![The moderator review queue](docs/screenshots/review.png)
+
+### Get recommendations that learn
+
+**For You** looks at what everyone on your instance shelves, finishes and
+rates, and suggests books that readers with similar taste enjoyed.
+This is [collaborative filtering](https://en.wikipedia.org/wiki/Collaborative_filtering),
+the same idea behind "people who read this also read". The model trains
+inside the server, so no reading history ever leaves your box. New readers
+with no history yet get popular and similar books instead. Not interested?
+Dismiss a pick (and undo it if that was a slip).
+
+![For You](docs/screenshots/for_you.png)
+
+### Add books safely
+
+Upload PDF, EPUB or plain text up to 500 MB. Every file is checked before
+it's stored: PDFs are cleaned in a separate, memory-capped process, so a
+booby-trapped file can't take the server down. Each account has a daily
+upload allowance (smaller for brand-new accounts), so one person can't
+flood the library.
+
+| Add a book | Sign in | Settings |
 |:---:|:---:|:---:|
-| ![](docs/screenshots/browse.png) | ![](docs/screenshots/my_library.png) | ![](docs/screenshots/for_you.png) |
+| ![The upload sheet](docs/screenshots/upload_screen.png) | ![Sign in](docs/screenshots/login.png) | ![Settings](docs/screenshots/settings.png) |
 
-| PDF reader (`PagedReader`) | Text reader (`TextReader`) | Moderator review (word-level diff) |
-|:---:|:---:|:---:|
-| ![](docs/screenshots/pdf_preview.png) | ![](docs/screenshots/text_preview.png) | ![](docs/screenshots/review.png) |
+Accounts come with the things you'd expect: password reset and email
+verification by email, and signing out on this device or everywhere.
 
-| Sign in | Add a book | Settings | Dark theme |
-|:---:|:---:|:---:|:---:|
-| ![](docs/screenshots/login.png) | ![](docs/screenshots/upload_screen.png) | ![](docs/screenshots/settings.png) | ![](docs/screenshots/browse_dark.png) |
+All screenshots are rendered from the real app against the demo data, not
+mocked up ([how to regenerate them](docs/screenshots/README.md)).
 
-The shots are rendered from the real UI against a seeded backend; see
-[docs/screenshots/README.md](docs/screenshots/README.md) to regenerate them.
+## How it compares
 
-## Quick start (60 seconds)
+Each self-hosted book app picks a lane. LibraryZ aims at the place where
+these lanes meet:
+
+| Project          | Multi-user | Readers suggest edits, moderators review | Mobile apps | Web | Recommendations |
+|------------------|:----------:|:------------------------:|:-----------:|:---:|:---------------:|
+| Calibre-Web      | ✓          | —                        | browser only | ✓  | —               |
+| Kavita           | ✓          | —                        | community apps | ✓ | via paid Kavita+ |
+| Audiobookshelf   | ✓ (audio-first) | —                   | ✓           | ✓   | —               |
+| **LibraryZ**     | ✓          | **✓**                    | Android ✓ · iOS in progress | ✓ | **✓ trained on your instance** |
+
+The others are more mature and each does things LibraryZ doesn't (comics
+and manga, audiobooks, OPDS, Calibre libraries). Pick LibraryZ if a shared,
+community-maintained catalog is the point.
+
+## Try it in a minute
+
+You need Docker. Then:
 
 ```bash
 git clone https://github.com/kararnab/libraryZ
 cd libraryZ
-docker compose up --build
+docker compose up -d --build   # the whole backend: API, Postgres, storage, mail
+./scripts/seed.sh              # optional: 10 books, two demo users, a review queue
 ```
 
-That's it. The stack comes up with:
+Sign in with **`reader@libraryz.local`** or **`mod@libraryz.local`**
+(password `libraryz-demo` for both); the moderator sees the review queue.
+The seed leaves the instance exactly as the screenshots show it.
 
-- **API** on <http://localhost:8080> (Go backend)
-- **Postgres** on `:5432` (metadata)
-- **RustFS** on `:9100` / console `:9101` (S3-compatible blob store;
-  MinIO no longer publishes images — any S3-compatible store works)
-- **Mailpit** on <http://localhost:8025> — catches every email the stack
-  sends (sign-up verification, password resets); nothing leaves the machine
+What's running:
 
-Smoke-test it:
+| Where | What |
+|---|---|
+| <http://localhost:8080> | The API, behind [Kong](deploy/kong/kong.yml) (rate limits) |
+| <http://localhost:8025> | **Mailpit**: every email the stack sends lands here; nothing leaves the machine |
+| `:5432` | Postgres (book and user data) |
+| `:9100` (console `:9101`) | RustFS, an S3-compatible file store. Any S3 service works in production |
+
+Then open the app (needs JDK 21, see [Running the client](#running-the-client)):
 
 ```bash
-curl -s localhost:8080/health   # liveness: process is up
-# {"status":"Healthy","time":"..."}
-curl -s localhost:8080/ready    # readiness: Postgres + blob storage reachable (503 if not)
+cd frontend
+./gradlew :composeApp:run                           # desktop window
+./gradlew :composeApp:wasmJsBrowserDevelopmentRun   # or the web app, on :8081
+```
+
+Or poke the API directly:
+
+```bash
+curl -s localhost:8080/ready
 # {"status":"ready","checks":{"database":"ok","storage":"ok"}}
-
-curl -s -X POST localhost:8080/auth/signup \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"correct horse battery","name":"You"}'
-# {"access_token":"...","refresh_token":"...","token_type":"Bearer","expires_in":900}
 ```
 
-Then point the frontend at it — jump to [Running the client](#running-the-client) below.
+### Will it run on a Raspberry Pi?
 
-Want a populated instance to play with? Run the seed script:
+It should: the server builds as a single static Go binary, and every
+image in `docker-compose.yml` is published for 64-bit ARM. We haven't
+tested it on one yet, so please
+[tell us](https://github.com/kararnab/libraryZ/issues) how it goes. On a
+small board you probably want 4 GB of RAM or more, and to lower
+`LIBRARYZ_PDF_SANITIZE_CONCURRENCY` and `LIBRARYZ_PDF_SANITIZE_MEMORY_MB`:
+each PDF safety check may use up to 1 GB, and two can run at once.
 
-```bash
-./scripts/seed.sh
-# Reader login:    reader@libraryz.local  /  libraryz-demo
-# Moderator login: mod@libraryz.local     /  libraryz-demo
-```
-
-It creates 10 real titles, a reader with a mixed-shelf personal library,
-and a few pending contributions in the moderator queue — exactly the
-state the screenshot grid above expects.
-
-## Architecture
+## How it works
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -127,7 +184,7 @@ state the screenshot grid above expects.
 │             LibraryZ backend — single Go binary              │
 │   auth · catalog · contribution · library · recommendation   │
 │       gorilla/mux  +  GORM  +  modular monolith              │
-│   in-process implicit-ALS trainer (goroutine + ticker)       │
+│   in-process recommender training (goroutine + ticker)       │
 └──────────────────────────────────────────────────────────────┘
          │                       │                       │
          ▼                       ▼                       ▼
@@ -136,51 +193,57 @@ state the screenshot grid above expects.
     rec_* tables)     content-deduped, streamed)        ML svc)
 ```
 
-Design notes worth knowing before you contribute:
+Worth knowing before you contribute:
 
-- **Modular monolith.** One Go binary, domain packages under `internal/`.
-  Add new functionality as a package there, not a new `cmd/`.
-- **Two storage backends, one interface.** `internal/storage.Storage` is
-  implemented by `Local` (filesystem) and `S3` (any S3-compatible store
-  via minio-go — RustFS in compose, AWS S3, R2, B2, …). Selected implicitly:
-  `S3` when `LIBRARYZ_S3_ENDPOINT` is set, else `Local`.
-- **Downloads stream through the backend** (`GET /editions/{id}/download`
-  → `store.Get` → `io.Copy`). No presigned URLs.
-- **Recommendations are a trained model.** Implicit ALS trains in-process
-  on a ticker and writes to `rec_*` tables; `Recommend` reads from those.
-  A content+popularity scorer handles cold-start users.
-- **Full-text search is dialect-gated.** Postgres tsvector + GIN index +
-  trigger in production; `LOWER(LIKE)` fallback for SQLite (what the
-  unit tests run against). Postgres-only assertions are behind
-  `//go:build postgres`.
-- **Reader is sealed, not format-locked.** Client-side `Reader` (commonMain)
-  splits into `PagedReader` (PDF) and `TextReader` (TXT). New formats are
-  a `when` branch in `openReader`, not a new per-platform actual.
-- **Kong is the edge in `docker compose up`.** Per-IP rate limits on
-  `/auth/login` (5/min), `/auth/signup` (3/min), `/auth/refresh` (20/min),
-  `/auth/password-reset` (5/min, 20/hour), the two `…/complete` routes
-  (10/min, 60/hour), `/me/email-verification` (3/min, 10/hour),
-  edition uploads (10/hour), service-wide fallback (60/min). The app adds
-  per-account login throttling on top (iam, Redis-backed). The `libraryz` container is intentionally
-  not published to the host. See [deploy/kong/kong.yml](deploy/kong/kong.yml).
+- **One binary, not microservices.** Domain packages live under
+  `internal/`; add features as a package there, not a new `cmd/`.
+- **One UI codebase, real native apps.** The same Compose code ships an
+  Android APK, a desktop app, a WebAssembly web app and an iOS app. It's not
+  a webview wrapper. The iOS build compiles in CI but hasn't been run on a
+  device yet.
+- **Files are content-addressed.** Blobs are stored by SHA-256 (so
+  duplicates are free) in a local folder or any S3-compatible store, chosen
+  by whether `LIBRARYZ_S3_ENDPOINT` is set. Downloads stream through the
+  server; there are no presigned URLs.
+- **Recommendations are a trained model.** It's collaborative filtering by
+  [*matrix factorization*](https://en.wikipedia.org/wiki/Matrix_factorization_(recommender_systems)):
+  every reader and every book gets a short list of numbers ("taste
+  factors"), fitted so that a reader's factors line up with the books
+  they've engaged with; the best-aligned unread books become their
+  suggestions. The fitting algorithm is [*implicit ALS*](https://yifanhu.net/PUB/cf.pdf)
+  (Hu, Koren & Volinsky, 2008): alternating least squares for implicit
+  feedback, meaning shelving, progress and ratings rather than explicit
+  "I like this" votes, using gonum. It retrains in-process on a timer and
+  writes `rec_*` tables that requests read from. Readers the model hasn't
+  seen yet (the "cold start") get a simpler content + popularity scorer.
+  `go test -tags=eval` checks that the model actually beats "most popular".
+  More in [ARCHITECTURE.md](ARCHITECTURE.md#recommendations).
+- **Search is full-text on Postgres** (tsvector + GIN index), with a plain
+  `LIKE` fallback on SQLite, which is what the unit tests run against.
+  Postgres-only assertions live behind `//go:build postgres`.
+- **Kong is the front door** in `docker compose up`: per-IP rate limits on
+  sign-in, sign-up, password reset and uploads (see
+  [deploy/kong/kong.yml](deploy/kong/kong.yml)). The app adds per-account
+  login throttling and upload quotas on top. The API container itself
+  isn't published to the host.
 
-Deeper walkthrough — component layout, data model, storage interface,
-recommender pipeline, per-platform frontend shims — in
-[ARCHITECTURE.md](ARCHITECTURE.md).
+The deeper walkthrough (data model, storage interface, recommender
+pipeline, per-platform code) is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Tech stack
+### Tech stack
 
-**Backend** — Go 1.26+ · gorilla/mux · GORM · Postgres 16 (SQLite for tests
+**Backend**: Go 1.26+ · gorilla/mux · GORM · Postgres 16 (SQLite for tests
 via `glebarez/sqlite`) · [kararnab/iam](https://github.com/kararnab/iam)
-(auth: argon2id, JWT access + rotating refresh tokens, RBAC, login
-throttling) · go-redis · minio-go · gonum (for ALS).
+(argon2id passwords, JWT access + rotating refresh tokens, roles, login
+throttling) · [onemailer](https://github.com/kararnab/onemailer) · go-redis ·
+minio-go · pdfcpu · gonum.
 
-**Frontend** — Kotlin 2.4.21 · Compose Multiplatform 1.12.1 · Ktor client ·
-kotlinx.serialization · AGP 9.4.1 · PDFBox (Desktop) / `PdfRenderer`
-(Android) / pdf.js (Wasm) / PDFKit (iOS).
+**Frontend**: Kotlin 2.4.21 · Compose Multiplatform 1.12.1 · Ktor ·
+kotlinx.serialization · PDFBox (desktop) / `PdfRenderer` (Android) /
+pdf.js (web) / PDFKit (iOS).
 
-**Ops** — Docker / docker-compose · RustFS (S3) · Kong · OpenAPI 3.1 spec at
-[openapi/libraryz.yaml](openapi/libraryz.yaml).
+**Ops**: Docker Compose · Kong · RustFS (S3) · Mailpit · OpenAPI 3.1 spec
+at [openapi/libraryz.yaml](openapi/libraryz.yaml).
 
 ## Configuration
 
@@ -264,7 +327,8 @@ cd frontend
 ./gradlew :composeApp:wasmJsBrowserDistribution        # Static web bundle
 ```
 
-iOS builds only link on macOS — they're auto-disabled on Linux/Windows.
+The iOS targets compile on any host but only link on macOS, and the iOS
+app hasn't been run on a device yet.
 
 The default base URL is wired to `localhost:8080` (Desktop / Web), `10.0.2.2`
 (Android emulator), and a dev LAN IP (real Android device — edit
@@ -389,58 +453,51 @@ curl -X POST localhost:8080/works/<work-id>/editions \
   -F format=epub -F language=en -F file=@/path/to/moby-dick.epub
 ```
 
+
 ## Testing
 
 ```bash
-# Backend — in-memory SQLite, no Docker required
+# Backend: in-memory SQLite, no Docker required
 go test ./...
 
 # Postgres-only paths (FTS ranking, concurrent approve, advisory locks,
-# migrations). DROPS AND RECREATES the public schema — never point at
+# migrations). DROPS AND RECREATES the public schema; never point it at
 # production.
 DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' \
   go test -tags=postgres -p 1 ./...
 
-# Recommendation offline eval (MF vs popularity baseline)
+# Recommendation offline eval (trained model vs a "most popular" baseline)
 go test -tags=eval ./internal/recommendation/...
 
-# Frontend
-cd frontend && ./gradlew :composeApp:allTests
+# Frontend (from frontend/)
+./gradlew :composeApp:allTests
 
-# Regenerate the README screenshots (needs `docker compose up` + scripts/seed.sh)
-cd frontend && LIBRARYZ_SCREENSHOTS_DIR=$PWD/../docs/screenshots \
+# Regenerate the README screenshots (from frontend/; needs
+# `docker compose up` + scripts/seed.sh)
+LIBRARYZ_SCREENSHOTS_DIR=$PWD/../docs/screenshots \
   ./gradlew :composeApp:desktopTest --tests '*ScreenshotsTest*' --rerun
 ```
 
 ## Roadmap
 
-- [ ] Password reset + email verification endpoints (the client screens are
-      built; iam v2.3.0 already provides the token flows)
 - [ ] Notifications (edit approved, upload passed the safety check)
-- [ ] EPUB reader (HTML + CSS bundle, per-platform renderer)
+- [ ] EPUB reader (EPUBs upload and download today, but don't open in-app yet)
+- [ ] iOS: run and verify on a device, then a macOS CI runner
 - [ ] OAuth / OIDC login
-- [ ] OPDS feed
-- [ ] iOS verification on a real macOS CI runner
+- [ ] OPDS feed, so other reading apps can browse the library
 - [ ] Bulk import from Calibre / Goodreads CSV
 - [ ] Admin endpoint for moderator promotion
 
 ## Contributing
 
-PRs and issues are very welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for
-dev setup, testing expectations, and the small handful of project
-conventions worth knowing. Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+PRs and issues are very welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+dev setup, testing expectations and the handful of project conventions
+worth knowing, and please be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Good first issues are labelled
+[`good first issue`](https://github.com/kararnab/libraryZ/labels/good%20first%20issue).
 
-Good first issues are labelled [`good first issue`](https://github.com/kararnab/libraryZ/labels/good%20first%20issue).
-
-## Security
-
-For vulnerability disclosure, see [SECURITY.md](SECURITY.md). Please don't
-open a public issue for security problems.
-
-## Changelog
-
-Tagged-release notes live in [CHANGELOG.md](CHANGELOG.md). The current
-in-flight work sits under `[Unreleased]` there.
+For security problems, see [SECURITY.md](SECURITY.md) rather than opening a
+public issue. Release notes live in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
