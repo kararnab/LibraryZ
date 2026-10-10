@@ -5,9 +5,10 @@
 </p>
 
 <p align="center">
-  Run it on a Raspberry Pi or a beefy server. Catalog books, upload files in
-  any format, preview PDFs and plain text in-app, let your community fix
-  metadata Wikipedia-style, track personal reading shelves, and get
+  Run it on a Raspberry Pi or a beefy server. Catalog books, upload PDF,
+  EPUB and plain-text editions (every file is safety-checked), read PDFs and
+  plain text in-app with your place saved across devices, let your community
+  fix metadata Wikipedia-style, track personal reading shelves, and get
   matrix-factorization recommendations. One Go binary on the server, one
   Compose Multiplatform app on Android / Desktop / Web / iOS.
 </p>
@@ -47,23 +48,25 @@ Compared to other self-hosted options:
 
 ## Screenshots
 
-All shots are from the Desktop client (Compose Multiplatform JVM target).
-The same UI runs unchanged on Android, Web (Wasm), and iOS.
+The Desktop client (Compose Multiplatform JVM target) on a freshly seeded
+instance; the same UI runs unchanged on Android, Web (Wasm) and iOS, with a
+bottom navigation bar instead of the rail on phones. Books have no cover
+images, so the app generates a cloth-bound cover from each title.
 
-| Browse + Work Detail (adaptive list-detail) | My Library | Moderator review queue |
+| Browse + book detail | My Library | For You |
 |:---:|:---:|:---:|
-| ![](docs/screenshots/browse.png) | ![](docs/screenshots/my_library.png) | ![](docs/screenshots/review.png) |
+| ![](docs/screenshots/browse.png) | ![](docs/screenshots/my_library.png) | ![](docs/screenshots/for_you.png) |
 
-| PDF preview (`PagedReader`) | Text preview (`TextReader`) |
-|:---:|:---:|
-| ![](docs/screenshots/pdf_preview.png) | ![](docs/screenshots/text_preview.png) |
+| PDF reader (`PagedReader`) | Text reader (`TextReader`) | Moderator review (word-level diff) |
+|:---:|:---:|:---:|
+| ![](docs/screenshots/pdf_preview.png) | ![](docs/screenshots/text_preview.png) | ![](docs/screenshots/review.png) |
 
-| Log in | Upload edition |
-|:---:|:---:|
-| ![](docs/screenshots/login.png) | ![](docs/screenshots/upload_screen.png) |
+| Sign in | Add a book | Settings | Dark theme |
+|:---:|:---:|:---:|:---:|
+| ![](docs/screenshots/login.png) | ![](docs/screenshots/upload_screen.png) | ![](docs/screenshots/settings.png) | ![](docs/screenshots/browse_dark.png) |
 
-> More screenshots welcome — see [docs/screenshots/README.md](docs/screenshots/README.md)
-> for the capture guide and naming conventions.
+The shots are rendered from the real UI against a seeded backend; see
+[docs/screenshots/README.md](docs/screenshots/README.md) to regenerate them.
 
 ## Quick start (60 seconds)
 
@@ -323,10 +326,17 @@ go test -tags=eval ./internal/recommendation/...
 
 # Frontend
 cd frontend && ./gradlew :composeApp:allTests
+
+# Regenerate the README screenshots (needs `docker compose up` + scripts/seed.sh)
+cd frontend && LIBRARYZ_SCREENSHOTS_DIR=$PWD/../docs/screenshots \
+  ./gradlew :composeApp:desktopTest --tests '*ScreenshotsTest*' --rerun
 ```
 
 ## Roadmap
 
+- [ ] Password reset + email verification endpoints (the client screens are
+      built; iam v2.3.0 already provides the token flows)
+- [ ] Notifications (edit approved, upload passed the safety check)
 - [ ] EPUB reader (HTML + CSS bundle, per-platform renderer)
 - [ ] OAuth / OIDC login
 - [ ] OPDS feed

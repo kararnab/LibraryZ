@@ -148,4 +148,30 @@ class LibraryStateTest {
         assertTrue(state.isLoaded("w1"))
         assertNull(state.entryFor("w1"))
     }
+
+    @Test
+    fun continueReadingIsTheLatestInProgressBook() = runTest {
+        fun e(workId: String, status: String, percent: Int, updated: String) =
+            """{"id":"ub-$workId","user_id":1,"work_id":"$workId","status":"$status",
+                "progress_percent":$percent,"work":{"id":"$workId","title":"T","editions":[]},
+                "created_at":"2026-05-27T00:00:00Z","updated_at":"$updated"}"""
+        val engine = MockEngine {
+            val (s, body, h) = jsonBody(
+                "[" + listOf(
+                    e("old", "reading", 30, "2026-05-01T00:00:00Z"),
+                    e("new", "reading", 10, "2026-05-20T00:00:00Z"),
+                    e("unstarted", "reading", 0, "2026-05-25T00:00:00Z"),
+                    e("done", "read", 100, "2026-05-26T00:00:00Z"),
+                ).joinToString(",") + "]",
+            )
+            respond(body, s, h)
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine))
+        assertNull(state.continueReading)
+
+        state.refresh()
+
+        // Unstarted and finished books aren't "continue" candidates.
+        assertEquals("new", state.continueReading?.workId)
+    }
 }

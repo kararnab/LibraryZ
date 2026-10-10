@@ -47,6 +47,9 @@ data class User(
     val email: String,
     val name: String,
     val isModerator: Boolean,
+    // From `/auth/me` once the backend records verification. Defaults to
+    // true so the "verify your email" banner stays hidden until it does.
+    val emailVerified: Boolean = true,
 )
 
 // Contribution mirrors the backend `internal/contribution.Contribution`.

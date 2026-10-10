@@ -51,6 +51,7 @@ kotlin {
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
+            implementation(libs.compose.ui.backhandler)
             implementation(libs.compose.components.resources)
             implementation(libs.compose.material.icons.extended)
             implementation(libs.kotlinx.serialization.json)
@@ -89,6 +90,26 @@ kotlin {
         }
     }
 }
+
+// BuildInfo.AppVersion for common code (Settings › About), generated from
+// libraryz.version in gradle.properties so it can't drift from the
+// Android versionName.
+val generateBuildInfo by tasks.registering {
+    val version = providers.gradleProperty("libraryz.version")
+    val outDir = layout.buildDirectory.dir("generated/buildinfo/commonMain/kotlin")
+    inputs.property("version", version)
+    outputs.dir(outDir)
+    doLast {
+        val file = outDir.get().file("com/libraryz/BuildInfo.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            "package com.libraryz\n\n" +
+                "/** Generated from libraryz.version in gradle.properties. */\n" +
+                "const val AppVersion = \"${version.get()}\"\n",
+        )
+    }
+}
+kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generateBuildInfo)
 
 compose.desktop {
     application {
