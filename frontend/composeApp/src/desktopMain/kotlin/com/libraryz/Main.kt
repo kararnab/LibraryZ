@@ -14,10 +14,12 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.libraryz.ui.Fullscreen
 import com.libraryz.ui.LocalFullscreen
+import java.awt.Toolkit
 
 fun main(args: Array<String>) {
     // Another copy is running and took the link (or the launch): done.
     if (!DesktopLinks.start(args)) return
+    setLinuxWindowClass("LibraryZ")
     application {
         val state = rememberWindowState(size = DpSize(1280.dp, 800.dp))
         Window(
@@ -35,6 +37,24 @@ fun main(args: Array<String>) {
             }
             val fullscreen = remember(state) { WindowFullscreen(state) }
             CompositionLocalProvider(LocalFullscreen provides fullscreen) { App() }
+        }
+    }
+}
+
+/**
+ * GNOME names a window (dock, Alt-Tab, top bar) after its X11 WM_CLASS, which
+ * Java derives from the main class: "com-libraryz-MainKt". AWT has no API for
+ * it, so set XToolkit's field before the first window opens. Reflection needs
+ * --add-opens java.desktop/sun.awt.X11 (build.gradle.kts). Elsewhere, or on a
+ * toolkit without the field (Wayland), it's a no-op.
+ */
+private fun setLinuxWindowClass(name: String) {
+    if (!System.getProperty("os.name").startsWith("Linux")) return
+    runCatching {
+        val toolkit = Toolkit.getDefaultToolkit()
+        toolkit.javaClass.getDeclaredField("awtAppClassName").apply {
+            isAccessible = true
+            set(toolkit, name)
         }
     }
 }
