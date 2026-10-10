@@ -8,10 +8,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.libraryz.data.DeepLinkInbox
 import com.libraryz.data.api.AndroidContextHolder
 import com.libraryz.data.api.DefaultBaseUrl
 import com.libraryz.data.api.isLocalNetworkUrl
+import com.libraryz.ui.Fullscreen
+import com.libraryz.ui.LocalFullscreen
 
 class MainActivity : ComponentActivity() {
     // The UI starts once the answer is in, either way: denied, requests
@@ -53,7 +62,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showApp() {
-        setContent { App() }
+        val fullscreen = SystemBarsFullscreen()
+        setContent {
+            CompositionLocalProvider(LocalFullscreen provides fullscreen) { App() }
+        }
+    }
+
+    /** Immersive mode: system bars hidden, a swipe from the edge shows them for a moment. */
+    private inner class SystemBarsFullscreen : Fullscreen {
+        private var on by mutableStateOf(false)
+        override val isSupported = true
+        override val isOn get() = on
+        override fun set(on: Boolean) {
+            val bars = WindowCompat.getInsetsController(window, window.decorView)
+            bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (on) bars.hide(WindowInsetsCompat.Type.systemBars()) else bars.show(WindowInsetsCompat.Type.systemBars())
+            this.on = on
+        }
     }
 
     /**

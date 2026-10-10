@@ -36,6 +36,8 @@ import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -98,6 +100,7 @@ import com.libraryz.data.spreadPages
 import com.libraryz.data.turnSpread
 import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.ReadingTheme
+import com.libraryz.ui.LocalFullscreen
 import com.libraryz.ui.components.StarRating
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -211,6 +214,11 @@ fun ReaderScreen(
     var settingsOpen by remember { mutableStateOf(false) }
     // Null follows the window (see autoSpread); the toggle overrides it for this session.
     var spreadChoice by remember { mutableStateOf<Boolean?>(null) }
+    val fullscreen = LocalFullscreen.current
+    // Full screen is for reading: leaving the book leaves it.
+    DisposableEffect(fullscreen) {
+        onDispose { if (fullscreen.isOn) fullscreen.set(false) }
+    }
 
     val end = @Composable {
         EndCard(
@@ -256,8 +264,16 @@ fun ReaderScreen(
                 .onPreviewKeyEvent { e ->
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (e.key) {
-                        Key.Escape -> { onClose(); return@onPreviewKeyEvent true }
+                        // Esc steps out of full screen before it closes the book.
+                        Key.Escape -> {
+                            if (fullscreen.isOn) fullscreen.set(false) else onClose()
+                            return@onPreviewKeyEvent true
+                        }
                         Key.F -> { chrome = !chrome; return@onPreviewKeyEvent true }
+                        Key.F11 -> {
+                            if (fullscreen.isSupported) fullscreen.set(!fullscreen.isOn)
+                            return@onPreviewKeyEvent true
+                        }
                     }
                     when (reader) {
                         is PagedReader -> when (e.key) {
@@ -423,6 +439,7 @@ private fun PagedReaderLayout(
                             }
                         }
                     }
+                    FullscreenButton(MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -585,6 +602,20 @@ private fun PageView(reader: PagedReader, pages: List<Int>, wide: Boolean, onTur
     }
 }
 
+/** Enters and leaves full screen; absent where the platform has none. */
+@Composable
+private fun FullscreenButton(tint: Color) {
+    val fullscreen = LocalFullscreen.current
+    if (!fullscreen.isSupported) return
+    IconButton(onClick = { fullscreen.set(!fullscreen.isOn) }) {
+        Icon(
+            if (fullscreen.isOn) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+            contentDescription = if (fullscreen.isOn) "Exit full screen" else "Full screen",
+            tint = tint,
+        )
+    }
+}
+
 /* ---------------- Flowing text ---------------- */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -635,6 +666,7 @@ private fun TextReaderLayout(
                         Icon(Icons.Rounded.TextFields, contentDescription = "Reading settings", tint = theme.muted)
                     }
                 }
+                FullscreenButton(theme.muted)
             }
             // Thin full-width progress line.
             Box(Modifier.fillMaxWidth().height(2.dp).background(theme.rule)) {
