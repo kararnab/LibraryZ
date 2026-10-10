@@ -1,5 +1,9 @@
 package com.libraryz.ui.components
 
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.text.style.TextOverflow
+import com.libraryz.data.UserBook
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -155,7 +159,7 @@ fun EditionCountChip(count: Int) {
 fun EditionRow(
     edition: Edition,
     onDownload: () -> Unit,
-    onPreview: () -> Unit,
+    onRead: () -> Unit,
     modifier: Modifier = Modifier,
     // Moderator-only takedown; hidden when null.
     onRemove: (() -> Unit)? = null,
@@ -176,7 +180,7 @@ fun EditionRow(
                 modifier = Modifier.weight(1f),
             )
             if (edition.isPreviewable) {
-                TextButton(onClick = onPreview) { Text("Preview") }
+                TextButton(onClick = onRead) { Text("Read") }
             }
             TextButton(onClick = onDownload) { Text("Download") }
             if (onRemove != null) {
@@ -291,4 +295,43 @@ fun RemoveDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * One-tap resume for the book you're in the middle of. Sits atop Browse so
+ * the most common reason to open the app is the first thing on screen.
+ */
+@Composable
+fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
+            Column(Modifier.weight(1f)) {
+                Text("Continue reading", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = entry.work?.title ?: "Your book",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { entry.progressPercent / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text("${entry.progressPercent}%", style = MaterialTheme.typography.labelLarge)
+        }
+    }
 }

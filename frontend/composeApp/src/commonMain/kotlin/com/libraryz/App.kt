@@ -1,5 +1,17 @@
 package com.libraryz
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.backhandler.BackHandler
+import com.libraryz.ui.components.ContinueReadingCard
+import com.libraryz.ui.screens.ReaderTextSizes
+import com.libraryz.ui.screens.SettingsScreen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -43,6 +55,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
+import com.libraryz.data.LibraryStatus
+import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.api.ApiException
@@ -57,6 +71,8 @@ import com.libraryz.data.api.WorksState
 import com.libraryz.data.api.createTokenStore
 import com.libraryz.data.canPreview
 import com.libraryz.data.isDownloadSupported
+import com.libraryz.data.pickReadableEdition
+import com.libraryz.data.progressUpdate
 import com.libraryz.data.safeDownloadName
 import com.libraryz.data.sanitizeFilename
 import com.libraryz.data.saveDownload
@@ -153,6 +169,7 @@ private fun Splash() {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun Root(
     api: ApiClient,
@@ -191,16 +208,54 @@ private fun Root(
         }
     }
 
+    val logoutEverywhere: () -> Unit = {
+        scope.launch {
+            try {
+                api.logoutAll()
+                auth.clear()
+            } catch (e: Throwable) {
+                snackbar.showSnackbar("Couldn't sign out everywhere: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+            }
+        }
+    }
+
+    // Plain-text reader size, shared by the reader and Settings so it
+    // sticks from one book to the next.
+    var readerTextSize by remember { mutableStateOf(18) }
+    val setReaderTextSize: (Int) -> Unit = { readerTextSize = it.coerceIn(ReaderTextSizes) }
+
+    // Load the library up front: it powers "Continue reading" on Browse.
+    LaunchedEffect(auth.isAuthenticated) {
+        if (auth.isAuthenticated) library.refresh()
+    }
+
+    // System back (Android, predictive back): pop the stack; from another
+    // top-level tab, go home to Browse first; only then leave the app.
+    BackHandler(enabled = nav.canGoBack || (nav.current != Screen.Browse && nav.current != Screen.Auth)) {
+        if (!nav.pop()) nav.replace(Screen.Browse)
+    }
+
     // Hoisted edition-action handlers so compact + expanded layouts share
     // them. They consult the platform support flags first and snackbar the
     // right "Not yet" message otherwise.
-    val previewEdition: (Edition) -> Unit = { ed ->
+    val readEdition: (Work, Edition) -> Unit = { work, ed ->
         if (canPreview(ed.format)) {
-            nav.push(Screen.Preview(ed.id, ed.format))
+            nav.push(Screen.Preview(ed.id, ed.format, work.id, work.title))
         } else {
             scope.launch {
-                snackbar.showSnackbar("Preview not available for ${ed.format.uppercase()} on this platform.")
+                snackbar.showSnackbar("Reading ${ed.format.uppercase()} isn't supported on this platform yet.")
             }
+        }
+    }
+    // One-tap resume from Browse / My Library: the entry embeds its work
+    // with editions, so no extra round-trip.
+    val readFromLibrary: (UserBook) -> Unit = { ub ->
+        val work = ub.work
+        val ed = work?.let { pickReadableEdition(it.editions) }
+        if (work != null && ed != null) {
+            readEdition(work, ed)
+        } else {
+            nav.push(Screen.WorkDetail(ub.workId))
         }
     }
     val downloadEdition: (Work, Edition) -> Unit = { work, ed ->
@@ -299,33 +354,25 @@ private fun Root(
                             library = library,
                             selectedWorkId = null,
                             onSelect = { w -> nav.push(Screen.WorkDetail(w.id)) },
-                            onPreview = previewEdition,
+                            onRead = readEdition,
+                            onReadFromLibrary = readFromLibrary,
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
-                            onLogout = logout,
                             onRemoveWork = removeWork,
                             onRemoveEdition = removeEdition,
                         )
                     }
                 } else {
-                    DataDrivenBrowse(
-                        works = works,
-                        onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
-                        onUploadClick = { nav.push(Screen.Upload()) },
-                        onLogout = logout,
-                        showRefresh = false,
-                        onReviewClick = if (auth.isModerator) {
-                            { nav.push(Screen.ContributionQueue) }
-                        } else null,
-                        pendingReviewCount = if (auth.isModerator) contributions.pendingCount else 0,
-                        onLibraryClick = if (auth.isAuthenticated) {
-                            { nav.push(Screen.Library) }
-                        } else null,
-                        onForYouClick = if (auth.isAuthenticated) {
-                            { nav.push(Screen.ForYou) }
-                        } else null,
-                    )
+                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
+                        DataDrivenBrowse(
+                            works = works,
+                            onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
+                            onUploadClick = { nav.push(Screen.Upload()) },
+                            showRefresh = false,
+                            header = continueReadingHeader(library, readFromLibrary),
+                        )
+                    }
                 }
             }
 
@@ -351,11 +398,11 @@ private fun Root(
                                 nav.replace(Screen.Browse)
                                 nav.push(Screen.WorkDetail(w.id))
                             },
-                            onPreview = previewEdition,
+                            onRead = readEdition,
+                            onReadFromLibrary = readFromLibrary,
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
-                            onLogout = logout,
                             onRemoveWork = removeWork,
                             onRemoveEdition = removeEdition,
                         )
@@ -365,7 +412,7 @@ private fun Root(
                         work = work,
                         onBack = { nav.pop() },
                         onAddEdition = { nav.push(Screen.Upload(workId = s.workId)) },
-                        onPreview = previewEdition,
+                        onRead = { ed -> readEdition(work, ed) },
                         onDownload = { ed -> downloadEdition(work, ed) },
                         onSuggestEdit = { nav.push(Screen.EditWork(s.workId)) },
                         libraryEnabled = auth.isAuthenticated,
@@ -400,11 +447,11 @@ private fun Root(
                                     nav.replace(Screen.Browse)
                                     nav.push(Screen.WorkDetail(w.id))
                                 },
-                                onPreview = previewEdition,
+                                onRead = readEdition,
+                            onReadFromLibrary = readFromLibrary,
                                 onDownload = downloadEdition,
                                 onLibraryUpsert = libraryUpsert,
                                 onLibraryRemove = libraryRemove,
-                                onLogout = logout,
                                 onRemoveWork = removeWork,
                                 onRemoveEdition = removeEdition,
                             )
@@ -414,7 +461,7 @@ private fun Root(
                             work = work,
                             onBack = { nav.pop() },
                             onAddEdition = { nav.push(Screen.Upload(workId = s.workId)) },
-                            onPreview = previewEdition,
+                            onRead = { ed -> readEdition(work, ed) },
                             onDownload = { ed -> downloadEdition(work, ed) },
                             onSuggestEdit = null, // already in the edit flow
                         )
@@ -446,11 +493,11 @@ private fun Root(
                                 nav.replace(Screen.Browse)
                                 nav.push(Screen.WorkDetail(w.id))
                             },
-                            onPreview = previewEdition,
+                            onRead = readEdition,
+                            onReadFromLibrary = readFromLibrary,
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
-                            onLogout = logout,
                             onRemoveWork = removeWork,
                             onRemoveEdition = removeEdition,
                         )
@@ -460,7 +507,6 @@ private fun Root(
                         works = works,
                         onWorkClick = {},
                         onUploadClick = {},
-                        onLogout = {},
                         showRefresh = false,
                     )
                 }
@@ -521,12 +567,31 @@ private fun Root(
                 )
             }
 
-            is Screen.Preview -> ReaderScreen(
-                api = api,
-                editionId = s.editionId,
-                format = s.format,
-                onClose = { nav.pop() },
-            )
+            is Screen.Preview -> {
+                val entry = library.entryFor(s.workId)
+                ReaderScreen(
+                    api = api,
+                    editionId = s.editionId,
+                    format = s.format,
+                    title = s.title,
+                    resumeFrom = entry,
+                    textSize = readerTextSize,
+                    onTextSizeChange = setReaderTextSize,
+                    finished = entry?.status == LibraryStatus.Read,
+                    // Progress saves in the background; a failed save just
+                    // means the next one carries it.
+                    onProgress = { pos ->
+                        scope.launch {
+                            runCatching { library.upsert(s.workId, progressUpdate(library.entryFor(s.workId), pos)) }
+                        }
+                    },
+                    onMarkRead = {
+                        libraryUpsert(s.workId, UpsertLibraryRequest(status = LibraryStatus.Read))
+                        scope.launch { snackbar.showSnackbar("Marked “${s.title}” as read.") }
+                    },
+                    onClose = { nav.pop() },
+                )
+            }
 
             Screen.ContributionQueue -> {
                 LaunchedEffect(Unit) { contributions.refresh() }
@@ -543,12 +608,14 @@ private fun Root(
                         )
                     }
                 } else {
-                    ContributionQueueScreen(
-                        state = contributions,
-                        isWide = false,
-                        onBack = { nav.pop() },
-                        onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                    )
+                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
+                        ContributionQueueScreen(
+                            state = contributions,
+                            isWide = false,
+                            onBack = null,
+                            onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
+                        )
+                    }
                 }
             }
 
@@ -564,15 +631,19 @@ private fun Root(
                                 nav.replace(Screen.Browse)
                                 nav.push(Screen.WorkDetail(workId))
                             },
+                            onRead = readFromLibrary,
                         )
                     }
                 } else {
-                    LibraryScreen(
-                        state = library,
-                        isWide = false,
-                        onBack = { nav.pop() },
-                        onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                    )
+                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
+                        LibraryScreen(
+                            state = library,
+                            isWide = false,
+                            onBack = null,
+                            onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
+                            onRead = readFromLibrary,
+                        )
+                    }
                 }
             }
 
@@ -592,13 +663,35 @@ private fun Root(
                         )
                     }
                 } else {
-                    ForYouScreen(
-                        state = recs,
-                        isWide = false,
-                        onBack = { nav.pop() },
-                        onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                        onDismiss = { workId -> scope.launch { recs.dismiss(workId) } },
+                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
+                        ForYouScreen(
+                            state = recs,
+                            isWide = false,
+                            onBack = null,
+                            onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
+                            onDismiss = { workId -> scope.launch { recs.dismiss(workId) } },
+                        )
+                    }
+                }
+            }
+
+            Screen.Settings -> {
+                val settings = @Composable {
+                    SettingsScreen(
+                        user = auth.user,
+                        serverUrl = DefaultBaseUrl,
+                        textSize = readerTextSize,
+                        textSizeRange = ReaderTextSizes,
+                        onTextSizeChange = setReaderTextSize,
+                        onSignOut = logout,
+                        onSignOutEverywhere = logoutEverywhere,
+                        onBack = null,
                     )
+                }
+                if (expanded) {
+                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) { settings() }
+                } else {
+                    CompactFrame(nav = nav, auth = auth, contributions = contributions) { settings() }
                 }
             }
         }
@@ -610,8 +703,8 @@ private fun DataDrivenBrowse(
     works: WorksState,
     onWorkClick: (com.libraryz.data.Work) -> Unit,
     onUploadClick: () -> Unit,
-    onLogout: () -> Unit,
     showRefresh: Boolean,
+    header: (@Composable () -> Unit)? = null,
     onReviewClick: (() -> Unit)? = null,
     pendingReviewCount: Int = 0,
     onLibraryClick: (() -> Unit)? = null,
@@ -641,7 +734,7 @@ private fun DataDrivenBrowse(
             works = list ?: emptyList(),
             onWorkClick = onWorkClick,
             onUploadClick = onUploadClick,
-            onLogout = onLogout,
+            header = header,
             onRefresh = { scope.launch { works.refresh() } },
             showRefresh = showRefresh,
             onReviewClick = onReviewClick,
@@ -724,13 +817,13 @@ private fun NavRail(
         if (auth.isAuthenticated) {
             NavigationRailItem(
                 selected = isMyLibrary,
-                onClick = { nav.push(Screen.Library) },
+                onClick = { nav.replace(Screen.Library) },
                 icon = { Icon(Icons.Outlined.Bookmarks, contentDescription = null) },
                 label = { Text("My Library") },
             )
             NavigationRailItem(
                 selected = isForYou,
-                onClick = { nav.push(Screen.ForYou) },
+                onClick = { nav.replace(Screen.ForYou) },
                 icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
                 label = { Text("For You") },
             )
@@ -738,7 +831,7 @@ private fun NavRail(
         if (auth.isModerator) {
             NavigationRailItem(
                 selected = isQueue,
-                onClick = { nav.push(Screen.ContributionQueue) },
+                onClick = { nav.replace(Screen.ContributionQueue) },
                 icon = {
                     BadgedBox(
                         badge = {
@@ -763,7 +856,91 @@ private fun NavRail(
             icon = { Icon(Icons.Outlined.FileUpload, contentDescription = null) },
             label = { Text("Upload") },
         )
+        Spacer(Modifier.weight(1f))
+        NavigationRailItem(
+            selected = current is Screen.Settings,
+            onClick = { nav.replace(Screen.Settings) },
+            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+            label = { Text("Settings") },
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
     }
+}
+
+/**
+ * Phone-width chrome for the top-level destinations: a bottom navigation
+ * bar, so My Library, For You, Review and Settings are one tap away rather
+ * than hidden in an overflow menu. Tabs replace the stack (they're peers);
+ * system back from a non-home tab returns to Browse.
+ */
+@Composable
+private fun CompactFrame(
+    nav: Navigator,
+    auth: AuthState,
+    contributions: ContributionsState,
+    content: @Composable () -> Unit,
+) {
+    val current = nav.current
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f)) { content() }
+        NavigationBar {
+            NavigationBarItem(
+                selected = current is Screen.Browse,
+                onClick = { nav.replace(Screen.Browse) },
+                icon = { Icon(Icons.Outlined.Book, contentDescription = null) },
+                label = { Text("Browse") },
+            )
+            NavigationBarItem(
+                selected = current is Screen.Library,
+                onClick = { nav.replace(Screen.Library) },
+                icon = { Icon(Icons.Outlined.Bookmarks, contentDescription = null) },
+                label = { Text("Library") },
+            )
+            NavigationBarItem(
+                selected = current is Screen.ForYou,
+                onClick = { nav.replace(Screen.ForYou) },
+                icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                label = { Text("For You") },
+            )
+            if (auth.isModerator) {
+                NavigationBarItem(
+                    selected = current is Screen.ContributionQueue,
+                    onClick = { nav.replace(Screen.ContributionQueue) },
+                    icon = {
+                        BadgedBox(
+                            badge = {
+                                val n = contributions.pendingCount
+                                if (n > 0) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError,
+                                    ) { Text(if (n > 99) "99+" else n.toString()) }
+                                }
+                            },
+                        ) {
+                            Icon(Icons.Outlined.RateReview, contentDescription = null)
+                        }
+                    },
+                    label = { Text("Review") },
+                )
+            }
+            NavigationBarItem(
+                selected = current is Screen.Settings,
+                onClick = { nav.replace(Screen.Settings) },
+                icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                label = { Text("Settings") },
+            )
+        }
+    }
+}
+
+/** The "Continue reading" banner atop Browse, or null when there's nothing to resume. */
+private fun continueReadingHeader(
+    library: LibraryState,
+    onRead: (UserBook) -> Unit,
+): (@Composable () -> Unit)? {
+    val entry = library.continueReading ?: return null
+    return { ContinueReadingCard(entry = entry, onClick = { onRead(entry) }) }
 }
 
 @Composable
@@ -774,11 +951,11 @@ private fun ListDetailLayout(
     library: LibraryState,
     selectedWorkId: String?,
     onSelect: (Work) -> Unit,
-    onPreview: (Edition) -> Unit,
+    onRead: (Work, Edition) -> Unit,
+    onReadFromLibrary: (UserBook) -> Unit,
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
-    onLogout: () -> Unit,
     onRemoveWork: ((Work, String) -> Unit)? = null,
     onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
 ) {
@@ -797,8 +974,8 @@ private fun ListDetailLayout(
                 works = works,
                 onWorkClick = onSelect,
                 onUploadClick = { nav.push(Screen.Upload()) },
-                onLogout = onLogout,
                 showRefresh = true,
+                header = continueReadingHeader(library, onReadFromLibrary),
             )
         }
         VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -817,7 +994,7 @@ private fun ListDetailLayout(
                     work = work,
                     onBack = null,
                     onAddEdition = { nav.push(Screen.Upload(workId = work.id)) },
-                    onPreview = onPreview,
+                    onRead = { ed -> onRead(work, ed) },
                     onDownload = { ed -> onDownload(work, ed) },
                     onSuggestEdit = { nav.push(Screen.EditWork(work.id)) },
                     libraryEnabled = auth.isAuthenticated,

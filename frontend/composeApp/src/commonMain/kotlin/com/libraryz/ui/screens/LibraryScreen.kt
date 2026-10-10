@@ -1,5 +1,11 @@
 package com.libraryz.ui.screens
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material3.FilledTonalButton
+import com.libraryz.data.pickReadableEdition
+import com.libraryz.data.readActionLabel
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,6 +72,7 @@ fun LibraryScreen(
     isWide: Boolean,
     onBack: (() -> Unit)?,
     onOpenWork: (String) -> Unit,
+    onRead: (UserBook) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -138,7 +145,7 @@ fun LibraryScreen(
                             icon = Icons.Outlined.Bookmarks,
                         )
                     }
-                    else -> CardList(items, isWide, onOpenWork)
+                    else -> CardList(items, isWide, onOpenWork, onRead)
                 }
             }
         }
@@ -146,7 +153,12 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun CardList(items: List<UserBook>, isWide: Boolean, onOpenWork: (String) -> Unit) {
+private fun CardList(
+    items: List<UserBook>,
+    isWide: Boolean,
+    onOpenWork: (String) -> Unit,
+    onRead: (UserBook) -> Unit,
+) {
     if (isWide) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
@@ -155,7 +167,7 @@ private fun CardList(items: List<UserBook>, isWide: Boolean, onOpenWork: (String
             verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(items, key = { it.id }) { ub -> LibraryCard(ub, onOpenWork) }
+            items(items, key = { it.id }) { ub -> LibraryCard(ub, onOpenWork, onRead) }
         }
     } else {
         LazyColumn(
@@ -163,13 +175,13 @@ private fun CardList(items: List<UserBook>, isWide: Boolean, onOpenWork: (String
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(items, key = { it.id }) { ub -> LibraryCard(ub, onOpenWork) }
+            items(items, key = { it.id }) { ub -> LibraryCard(ub, onOpenWork, onRead) }
         }
     }
 }
 
 @Composable
-private fun LibraryCard(ub: UserBook, onOpenWork: (String) -> Unit) {
+private fun LibraryCard(ub: UserBook, onOpenWork: (String) -> Unit, onRead: (UserBook) -> Unit) {
     Surface(
         onClick = { onOpenWork(ub.workId) },
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -233,6 +245,15 @@ private fun LibraryCard(ub: UserBook, onOpenWork: (String) -> Unit) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            // Straight into the book; tapping the card still opens details.
+            if (ub.status != LibraryStatus.Read && ub.work?.let { pickReadableEdition(it.editions) } != null) {
+                FilledTonalButton(onClick = { onRead(ub) }) {
+                    Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(readActionLabel(ub))
+                }
             }
         }
     }

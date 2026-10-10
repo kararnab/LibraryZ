@@ -2,6 +2,7 @@ package com.libraryz.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,17 +14,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +52,8 @@ import com.libraryz.data.Edition
 import com.libraryz.data.LibraryStatus
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
+import com.libraryz.data.pickReadableEdition
+import com.libraryz.data.readActionLabel
 import com.libraryz.data.api.UpsertLibraryRequest
 import com.libraryz.data.prettySize
 import com.libraryz.ui.components.EditionRow
@@ -62,7 +66,7 @@ fun WorkDetailScreen(
     work: Work,
     onBack: (() -> Unit)?,
     onAddEdition: () -> Unit,
-    onPreview: (Edition) -> Unit,
+    onRead: (Edition) -> Unit,
     onDownload: (Edition) -> Unit,
     onSuggestEdit: (() -> Unit)? = null,
     // Personal-library controls. Shown only when [libraryEnabled] (signed in).
@@ -92,47 +96,44 @@ fun WorkDetailScreen(
                     }
                 },
                 actions = {
-                    if (onSuggestEdit != null || onRemoveWork != null) {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Outlined.MoreVert, contentDescription = "More")
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "More")
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Add edition") },
+                            leadingIcon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onAddEdition()
+                            },
+                        )
+                        if (onSuggestEdit != null) {
+                            DropdownMenuItem(
+                                text = { Text("Suggest edit") },
+                                onClick = {
+                                    menuOpen = false
+                                    onSuggestEdit()
+                                },
+                            )
                         }
-                        DropdownMenu(
-                            expanded = menuOpen,
-                            onDismissRequest = { menuOpen = false },
-                        ) {
-                            if (onSuggestEdit != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Suggest edit") },
-                                    onClick = {
-                                        menuOpen = false
-                                        onSuggestEdit()
-                                    },
-                                )
-                            }
-                            if (onRemoveWork != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Remove work", color = MaterialTheme.colorScheme.error) },
-                                    onClick = {
-                                        menuOpen = false
-                                        confirmRemoveWork = true
-                                    },
-                                )
-                            }
+                        if (onRemoveWork != null) {
+                            DropdownMenuItem(
+                                text = { Text("Remove work", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    menuOpen = false
+                                    confirmRemoveWork = true
+                                },
+                            )
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onAddEdition,
-                text = { Text("Add edition") },
-                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             )
         },
         containerColor = MaterialTheme.colorScheme.surface,
@@ -158,7 +159,27 @@ fun WorkDetailScreen(
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
+            // The one thing most visitors came for, so it leads.
+            val readable = pickReadableEdition(work.editions)
+            Spacer(Modifier.height(20.dp))
+            if (readable != null) {
+                Button(
+                    onClick = { onRead(readable) },
+                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp),
+                ) {
+                    Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null)
+                    Spacer(Modifier.width(10.dp))
+                    Text(readActionLabel(libraryEntry), style = MaterialTheme.typography.titleSmall)
+                }
+            } else if (work.editions.isNotEmpty()) {
+                Text(
+                    text = "No edition here can be read in the app yet — download one below.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
             MetaRow("Year", work.publicationYear?.toString())
             MetaRow("ISBN", work.isbn, monospace = true)
             MetaRow("Language", work.language)
@@ -185,12 +206,12 @@ fun WorkDetailScreen(
                 EditionRow(
                     edition = ed,
                     onDownload = { onDownload(ed) },
-                    onPreview = { onPreview(ed) },
+                    onRead = { onRead(ed) },
                     onRemove = onRemoveEdition?.let { { editionToRemove = ed } },
                 )
             }
 
-            Spacer(Modifier.height(96.dp))
+            Spacer(Modifier.height(32.dp))
         }
     }
 

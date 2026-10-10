@@ -12,11 +12,19 @@ sealed interface Screen {
     data object Browse : Screen
     data class WorkDetail(val workId: String) : Screen
     data class Upload(val workId: String? = null) : Screen
-    data class Preview(val editionId: String, val format: String) : Screen
+    // [workId] ties reading progress to the user's library entry; [title]
+    // heads the reader so you can see which book you're in.
+    data class Preview(
+        val editionId: String,
+        val format: String,
+        val workId: String,
+        val title: String,
+    ) : Screen
     data class EditWork(val workId: String) : Screen
     data object ContributionQueue : Screen
     data object Library : Screen
     data object ForYou : Screen
+    data object Settings : Screen
 }
 
 @Stable

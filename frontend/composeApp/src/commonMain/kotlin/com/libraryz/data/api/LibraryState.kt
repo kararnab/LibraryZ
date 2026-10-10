@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.libraryz.data.LibraryStatus
 import com.libraryz.data.UserBook
 
 /**
@@ -51,6 +52,19 @@ class LibraryState(private val api: ApiClient) {
 
     /** Cached entry for a work, or null if absent / not-in-library. */
     fun entryFor(workId: String): UserBook? = cache[workId]
+
+    /**
+     * The book to offer a one-tap resume for: the most recently touched
+     * "Reading" entry with some progress. Read from the cache, so it holds
+     * regardless of which status filter the My Library list is showing.
+     * `updated_at` is RFC 3339 in one server-wide offset, so string order
+     * is time order (to the second, which is plenty here).
+     */
+    val continueReading: UserBook?
+        get() = cache.values
+            .filterNotNull()
+            .filter { it.status == LibraryStatus.Reading && it.progressPercent > 0 }
+            .maxByOrNull { it.updatedAt.orEmpty() }
 
     /** True once [loadEntry] has run for this work (regardless of result). */
     fun isLoaded(workId: String): Boolean = cache.containsKey(workId)

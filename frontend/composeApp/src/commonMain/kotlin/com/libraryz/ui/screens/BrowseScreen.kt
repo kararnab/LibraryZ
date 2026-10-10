@@ -68,7 +68,6 @@ fun BrowseScreen(
     works: List<Work>,
     onWorkClick: (Work) -> Unit,
     onUploadClick: () -> Unit,
-    onLogout: () -> Unit,
     onRefresh: () -> Unit,
     showRefresh: Boolean,
     onReviewClick: (() -> Unit)? = null,
@@ -83,6 +82,8 @@ fun BrowseScreen(
     loadingMore: Boolean = false,
     endReached: Boolean = true,
     loadMoreError: String? = null,
+    // Shown above the list when not searching (e.g. "Continue reading").
+    header: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -149,7 +150,8 @@ fun BrowseScreen(
                         IconButton(onClick = onUploadClick) {
                             Icon(Icons.Outlined.FileUpload, contentDescription = "Upload")
                         }
-                        IconButton(onClick = { menuOpen = true }) {
+                        val hasMenu = onReviewClick != null || onLibraryClick != null || onForYouClick != null
+                        if (hasMenu) IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Outlined.MoreVert, contentDescription = "More")
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -190,10 +192,6 @@ fun BrowseScreen(
                                     onClick = { menuOpen = false; onForYouClick() },
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text("Log out") },
-                                onClick = { menuOpen = false; onLogout() },
-                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -249,6 +247,9 @@ fun BrowseScreen(
                     bottom = padding.calculateBottomPadding() + 88.dp,
                 ),
             ) {
+                if (!searching && header != null) {
+                    item(key = "header") { header() }
+                }
                 if (searching) {
                     item(key = "result-count") {
                         Text(
