@@ -356,7 +356,7 @@ private fun FieldEditor(
             keyboardOptions = if (field.numeric) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default,
             supportingText = when {
                 invalid -> ({ Text("Use a whole number, like 1871") })
-                field.key == "authors" -> ({ Text("Separate several authors with commas") })
+                field.key == "authors" -> ({ Text("Separate several authors with semicolons (;)") })
                 field.key == "openlibrary_id" && !changed -> ({ Text("Looks like OL12345W") })
                 else -> null
             },

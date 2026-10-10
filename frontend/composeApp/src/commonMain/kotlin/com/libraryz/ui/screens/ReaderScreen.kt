@@ -30,11 +30,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +45,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SegmentedButton
@@ -90,9 +94,13 @@ import com.libraryz.data.TextReader
 import com.libraryz.data.UserBook
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.openReader
+import com.libraryz.data.pagesLabel
 import com.libraryz.data.resumePage
+import com.libraryz.data.spreadPages
+import com.libraryz.data.turnSpread
 import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.ReadingTheme
+import com.libraryz.ui.LocalFullscreen
 import com.libraryz.ui.components.StarRating
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -198,25 +206,28 @@ fun ReaderScreen(
     val startPage = remember(reader) { resumePage(resumeEntry, pageCount) }
     // Paged: 0..pageCount, where pageCount is the end card after the last page.
     var page by remember(reader) { mutableStateOf(startPage) }
-    val position = if (pageCount > 0) ReadingPosition(page.coerceAtMost(pageCount - 1), pageCount) else null
-
-    ProgressReporter(
-        key = reader,
-        position = position,
-        opened = if (pageCount > 0) ReadingPosition(startPage, pageCount) else null,
-        onProgress = onProgress,
-    )
-
     val textScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
-    LaunchedEffect(reader) { runCatching { focus.requestFocus() } }
     var chrome by remember { mutableStateOf(true) }
     var settingsOpen by remember { mutableStateOf(false) }
-
-    fun turn(delta: Int) {
-        if (reader is PagedReader) page = (page + delta).coerceIn(0, pageCount)
+    // Keys go to the reader. Hiding the bars or closing the settings panel
+    // can remove the control that had focus (e.g. the fullscreen button just
+    // clicked), which would leave the arrows with nowhere to go; take focus
+    // back each time. Not while settings are open: they may be a sheet.
+    LaunchedEffect(reader, chrome, settingsOpen) {
+        if (!settingsOpen) runCatching { focus.requestFocus() }
     }
+    // Null follows the window (see autoSpread); the toggle overrides it for this session.
+    var spreadChoice by remember { mutableStateOf<Boolean?>(null) }
+    val fullscreen = LocalFullscreen.current
+    // Full screen is for reading: leaving the book leaves it.
+    DisposableEffect(fullscreen) {
+        onDispose { if (fullscreen.isOn) fullscreen.set(false) }
+    }
+    // Immersive: full screen hides the reader's bars (tap or F brings them
+    // back), and leaving it shows them again.
+    LaunchedEffect(fullscreen.isOn) { chrome = !fullscreen.isOn }
 
     val end = @Composable {
         EndCard(
@@ -230,75 +241,118 @@ fun ReaderScreen(
         )
     }
 
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxSize()
-            .focusRequester(focus)
-            .focusable()
-            .onPreviewKeyEvent { e ->
-                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (e.key) {
-                    Key.Escape -> { onClose(); return@onPreviewKeyEvent true }
-                    Key.F -> { chrome = !chrome; return@onPreviewKeyEvent true }
-                }
-                when (reader) {
-                    is PagedReader -> when (e.key) {
-                        Key.DirectionRight, Key.DirectionDown, Key.PageDown, Key.Spacebar -> { turn(1); true }
-                        Key.DirectionLeft, Key.DirectionUp, Key.PageUp -> { turn(-1); true }
-                        Key.MoveHome -> { page = 0; true }
-                        Key.MoveEnd -> { page = pageCount - 1; true }
-                        else -> false
-                    }
-                    is TextReader -> {
-                        val screen = textScroll.viewportSize * 0.9f
-                        when (e.key) {
-                            Key.PageDown, Key.Spacebar, Key.DirectionRight -> { scope.launch { textScroll.animateScrollBy(screen) }; true }
-                            Key.PageUp, Key.DirectionLeft -> { scope.launch { textScroll.animateScrollBy(-screen) }; true }
-                            Key.MoveHome -> { scope.launch { textScroll.animateScrollTo(0) }; true }
-                            Key.MoveEnd -> { scope.launch { textScroll.animateScrollTo(textScroll.maxValue) }; true }
-                            else -> false
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val wide = maxWidth.value >= WIDE_DP
+        val spread = reader is PagedReader && wide &&
+            (spreadChoice ?: autoSpread(maxWidth, maxHeight))
+        // In a spread, the furthest visible page is where the reader is.
+        val shownPage = page.coerceAtMost(pageCount - 1)
+        val position = when {
+            pageCount <= 0 -> null
+            spread -> ReadingPosition(spreadPages(page, pageCount).last(), pageCount)
+            else -> ReadingPosition(shownPage, pageCount)
+        }
+
+        ProgressReporter(
+            key = reader,
+            position = position,
+            opened = if (pageCount > 0) ReadingPosition(startPage, pageCount) else null,
+            onProgress = onProgress,
+        )
+
+        fun turn(delta: Int) {
+            if (reader !is PagedReader) return
+            page = if (spread) turnSpread(page, delta, pageCount) else (page + delta).coerceIn(0, pageCount)
+        }
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .focusRequester(focus)
+                .focusable()
+                .onPreviewKeyEvent { e ->
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.key) {
+                        // Esc steps out of full screen before it closes the book.
+                        Key.Escape -> {
+                            if (fullscreen.isOn) fullscreen.set(false) else onClose()
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.F -> { chrome = !chrome; return@onPreviewKeyEvent true }
+                        Key.F11 -> {
+                            if (fullscreen.isSupported) fullscreen.set(!fullscreen.isOn)
+                            return@onPreviewKeyEvent true
                         }
                     }
-                    null -> false
-                }
-            },
-    ) {
-        val wide = maxWidth.value >= WIDE_DP
-        when (val r = reader) {
-            is TextReader -> TextReaderLayout(
-                reader = r,
-                title = title,
-                authors = authors,
-                wide = wide,
-                prefs = prefs,
-                onPrefsChange = onPrefsChange,
-                settingsOpen = settingsOpen,
-                onSettingsOpen = { settingsOpen = it },
-                scroll = textScroll,
-                startPosition = startPage,
-                percent = position?.percent ?: 0,
-                onPosition = { page = it },
-                onClose = onClose,
-                end = end,
-            )
-            else -> PagedReaderLayout(
-                reader = r as PagedReader?,
-                loadError = loadError,
-                title = title,
-                authors = authors,
-                wide = wide,
-                page = page,
-                pageCount = pageCount,
-                chrome = chrome,
-                onToggleChrome = { chrome = !chrome },
-                onSeek = { page = it },
-                onTurn = ::turn,
-                onClose = onClose,
-                end = end,
-            )
+                    when (reader) {
+                        is PagedReader -> when (e.key) {
+                            Key.DirectionRight, Key.DirectionDown, Key.PageDown, Key.Spacebar -> { turn(1); true }
+                            Key.DirectionLeft, Key.DirectionUp, Key.PageUp -> { turn(-1); true }
+                            Key.MoveHome -> { page = 0; true }
+                            Key.MoveEnd -> { page = pageCount - 1; true }
+                            else -> false
+                        }
+                        is TextReader -> {
+                            val screen = textScroll.viewportSize * 0.9f
+                            when (e.key) {
+                                Key.PageDown, Key.Spacebar, Key.DirectionRight -> { scope.launch { textScroll.animateScrollBy(screen) }; true }
+                                Key.PageUp, Key.DirectionLeft -> { scope.launch { textScroll.animateScrollBy(-screen) }; true }
+                                Key.MoveHome -> { scope.launch { textScroll.animateScrollTo(0) }; true }
+                                Key.MoveEnd -> { scope.launch { textScroll.animateScrollTo(textScroll.maxValue) }; true }
+                                else -> false
+                            }
+                        }
+                        null -> false
+                    }
+                },
+        ) {
+            when (val r = reader) {
+                is TextReader -> TextReaderLayout(
+                    reader = r,
+                    title = title,
+                    authors = authors,
+                    wide = wide,
+                    prefs = prefs,
+                    onPrefsChange = onPrefsChange,
+                    settingsOpen = settingsOpen,
+                    onSettingsOpen = { settingsOpen = it },
+                    scroll = textScroll,
+                    startPosition = startPage,
+                    percent = position?.percent ?: 0,
+                    onPosition = { page = it },
+                    chrome = chrome,
+                    onToggleChrome = { chrome = !chrome },
+                    onClose = onClose,
+                    end = end,
+                )
+                else -> PagedReaderLayout(
+                    reader = r as PagedReader?,
+                    loadError = loadError,
+                    title = title,
+                    authors = authors,
+                    wide = wide,
+                    page = page,
+                    pageCount = pageCount,
+                    spread = spread,
+                    onSpreadChange = { spreadChoice = it },
+                    chrome = chrome,
+                    onToggleChrome = { chrome = !chrome },
+                    onSeek = { page = it },
+                    onTurn = ::turn,
+                    onClose = onClose,
+                    end = end,
+                )
+            }
         }
     }
 }
+
+/**
+ * Whether a PDF opens as a two-page spread before the reader picks: on an
+ * expanded (≥ 840dp), landscape window, where two pages side by side are
+ * still readable.
+ */
+private fun autoSpread(width: Dp, height: Dp): Boolean = width >= 840.dp && width > height
 
 /**
  * Reports [position] to [onProgress] a second after it settles, and once
@@ -344,6 +398,8 @@ private fun PagedReaderLayout(
     wide: Boolean,
     page: Int,
     pageCount: Int,
+    spread: Boolean,
+    onSpreadChange: (Boolean) -> Unit,
     chrome: Boolean,
     onToggleChrome: () -> Unit,
     onSeek: (Int) -> Unit,
@@ -353,6 +409,7 @@ private fun PagedReaderLayout(
 ) {
     val atEndCard = reader != null && page >= pageCount
     val shownPage = page.coerceAtMost((pageCount - 1).coerceAtLeast(0))
+    val shownPages = if (spread) spreadPages(page, pageCount) else listOf(shownPage).filter { pageCount > 0 }
     Column(Modifier.fillMaxSize().background(LibraryZ.tokens.readerBackdrop)) {
         if (chrome) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -363,7 +420,7 @@ private fun PagedReaderLayout(
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close reader")
                     }
-                    val pageText = if (pageCount > 0) "Page ${shownPage + 1} of $pageCount" else ""
+                    val pageText = pagesLabel(shownPages, pageCount)
                     if (wide) {
                         Row(
                             modifier = Modifier.weight(1f).padding(start = 4.dp),
@@ -376,6 +433,15 @@ private fun PagedReaderLayout(
                             }
                         }
                         Text(pageText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (reader != null) {
+                            IconToggleButton(checked = spread, onCheckedChange = onSpreadChange, modifier = Modifier.padding(start = 8.dp)) {
+                                Icon(
+                                    Icons.Rounded.AutoStories,
+                                    contentDescription = if (spread) "Show one page" else "Show two-page spread",
+                                    tint = if (spread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     } else {
                         Column(Modifier.weight(1f)) {
                             Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -384,6 +450,7 @@ private fun PagedReaderLayout(
                             }
                         }
                     }
+                    FullscreenButton(MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -400,7 +467,7 @@ private fun PagedReaderLayout(
                 )
                 reader == null -> CircularProgressIndicator()
                 atEndCard -> Box(Modifier.padding(16.dp).widthIn(max = 440.dp)) { end() }
-                else -> PageView(reader = reader, pageIndex = shownPage, wide = wide, onTurn = onTurn, onToggleChrome = onToggleChrome)
+                else -> PageView(reader = reader, pages = shownPages, wide = wide, onTurn = onTurn, onToggleChrome = onToggleChrome)
             }
             if (!chrome && reader != null && !atEndCard) {
                 Surface(
@@ -410,7 +477,7 @@ private fun PagedReaderLayout(
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 20.dp),
                 ) {
                     Text(
-                        "${shownPage + 1} / $pageCount",
+                        "${shownPages.joinToString("–") { "${it + 1}" }} / $pageCount",
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
@@ -464,8 +531,11 @@ private fun PagedReaderLayout(
     }
 }
 
+/** A rendered page, or null [image] when the renderer failed on it. */
+private class RenderedPage(val index: Int, val image: ImageBitmap?)
+
 @Composable
-private fun PageView(reader: PagedReader, pageIndex: Int, wide: Boolean, onTurn: (Int) -> Unit, onToggleChrome: () -> Unit) {
+private fun PageView(reader: PagedReader, pages: List<Int>, wide: Boolean, onTurn: (Int) -> Unit, onToggleChrome: () -> Unit) {
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -492,46 +562,68 @@ private fun PageView(reader: PagedReader, pageIndex: Int, wide: Boolean, onTurn:
             .padding(if (wide) 28.dp else 16.dp),
         contentAlignment = Alignment.Center,
     ) {
-        val widthPx = with(LocalDensity.current) {
-            maxWidth.roundToPx().coerceAtMost(1600)
-        }
-        // Keep showing the previous page until the next one is rasterized,
+        // A spread's pages share the width.
+        val slot = maxWidth / pages.size.coerceAtLeast(1)
+        val widthPx = with(LocalDensity.current) { slot.roundToPx().coerceAtMost(1600) }
+        // Keep showing the previous pages until the next ones are rasterized,
         // so turning pages doesn't flash a spinner.
-        var image by remember(reader, widthPx) {
-            mutableStateOf<ImageBitmap?>(null)
-        }
-        // A page the renderer chokes on (e.g. a broken font) shows a message
-        // instead of escaping to the UI thread and taking the app down.
-        var renderFailed by remember(reader, widthPx) { mutableStateOf(false) }
-        LaunchedEffect(reader, pageIndex, widthPx) {
-            try {
-                image = reader.renderPage(pageIndex, widthPx)
-                renderFailed = false
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                renderFailed = true
+        var shown by remember(reader, widthPx) { mutableStateOf<List<RenderedPage>>(emptyList()) }
+        LaunchedEffect(reader, pages, widthPx) {
+            // One at a time: PagedReader isn't thread-safe. A page the
+            // renderer chokes on (e.g. a broken font) shows a message instead
+            // of escaping to the UI thread and taking the app down.
+            shown = pages.map { i ->
+                val image = try {
+                    reader.renderPage(i, widthPx)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    null
+                }
+                RenderedPage(i, image)
             }
         }
-        val current = image
-        if (renderFailed) {
-            Text(
-                "Couldn't render page ${pageIndex + 1}",
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-            )
-        } else if (current == null) {
+        if (shown.isEmpty()) {
             CircularProgressIndicator()
         } else {
-            Image(
-                bitmap = current,
-                contentDescription = "Page ${pageIndex + 1}",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .shadow(8.dp, RoundedCornerShape(2.dp))
-                    .background(Color(0xFFFFFEFA)),
-            )
+            Row(
+                modifier = Modifier.shadow(8.dp, RoundedCornerShape(2.dp)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                shown.forEach { p ->
+                    val image = p.image
+                    if (image == null) {
+                        Text(
+                            "Couldn't render page ${p.index + 1}",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.widthIn(max = slot).padding(24.dp),
+                        )
+                    } else {
+                        Image(
+                            bitmap = image,
+                            contentDescription = "Page ${p.index + 1}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.weight(1f, fill = false).background(Color(0xFFFFFEFA)),
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+/** Enters and leaves full screen; absent where the platform has none. */
+@Composable
+private fun FullscreenButton(tint: Color) {
+    val fullscreen = LocalFullscreen.current
+    if (!fullscreen.isSupported) return
+    IconButton(onClick = { fullscreen.set(!fullscreen.isOn) }) {
+        Icon(
+            if (fullscreen.isOn) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+            contentDescription = if (fullscreen.isOn) "Exit full screen" else "Full screen",
+            tint = tint,
+        )
     }
 }
 
@@ -552,13 +644,15 @@ private fun TextReaderLayout(
     startPosition: Int,
     percent: Int,
     onPosition: (Int) -> Unit,
+    chrome: Boolean,
+    onToggleChrome: () -> Unit,
     onClose: () -> Unit,
     end: @Composable () -> Unit,
 ) {
     val theme = prefs.theme
     Row(Modifier.fillMaxSize().background(theme.background)) {
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Row(
+            if (chrome) Row(
                 modifier = Modifier.fillMaxWidth().statusBarsPadding().height(if (wide) 64.dp else 56.dp)
                     .padding(horizontal = if (wide) 12.dp else 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -585,12 +679,15 @@ private fun TextReaderLayout(
                         Icon(Icons.Rounded.TextFields, contentDescription = "Reading settings", tint = theme.muted)
                     }
                 }
+                FullscreenButton(theme.muted)
             }
             // Thin full-width progress line.
             Box(Modifier.fillMaxWidth().height(2.dp).background(theme.rule)) {
                 Box(Modifier.fillMaxWidth(percent / 100f).fillMaxHeight().background(theme.muted))
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            // A tap on the text shows or hides the bars (buttons in it, like
+            // the end card's, take their own taps first).
+            Box(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) { detectTapGestures { onToggleChrome() } }) {
                 TextView(
                     reader = reader,
                     scroll = scroll,
@@ -601,7 +698,7 @@ private fun TextReaderLayout(
                     end = end,
                 )
             }
-            Row(
+            if (chrome) Row(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().height(if (wide) 48.dp else 44.dp)
                     .padding(horizontal = if (wide) 32.dp else 28.dp),
                 verticalAlignment = Alignment.CenterVertically,
