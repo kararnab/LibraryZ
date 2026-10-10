@@ -219,6 +219,9 @@ fun ReaderScreen(
     DisposableEffect(fullscreen) {
         onDispose { if (fullscreen.isOn) fullscreen.set(false) }
     }
+    // Immersive: full screen hides the reader's bars (tap or F brings them
+    // back), and leaving it shows them again.
+    LaunchedEffect(fullscreen.isOn) { chrome = !fullscreen.isOn }
 
     val end = @Composable {
         EndCard(
@@ -311,6 +314,8 @@ fun ReaderScreen(
                     startPosition = startPage,
                     percent = position?.percent ?: 0,
                     onPosition = { page = it },
+                    chrome = chrome,
+                    onToggleChrome = { chrome = !chrome },
                     onClose = onClose,
                     end = end,
                 )
@@ -633,13 +638,15 @@ private fun TextReaderLayout(
     startPosition: Int,
     percent: Int,
     onPosition: (Int) -> Unit,
+    chrome: Boolean,
+    onToggleChrome: () -> Unit,
     onClose: () -> Unit,
     end: @Composable () -> Unit,
 ) {
     val theme = prefs.theme
     Row(Modifier.fillMaxSize().background(theme.background)) {
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Row(
+            if (chrome) Row(
                 modifier = Modifier.fillMaxWidth().statusBarsPadding().height(if (wide) 64.dp else 56.dp)
                     .padding(horizontal = if (wide) 12.dp else 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -672,7 +679,9 @@ private fun TextReaderLayout(
             Box(Modifier.fillMaxWidth().height(2.dp).background(theme.rule)) {
                 Box(Modifier.fillMaxWidth(percent / 100f).fillMaxHeight().background(theme.muted))
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            // A tap on the text shows or hides the bars (buttons in it, like
+            // the end card's, take their own taps first).
+            Box(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) { detectTapGestures { onToggleChrome() } }) {
                 TextView(
                     reader = reader,
                     scroll = scroll,
@@ -683,7 +692,7 @@ private fun TextReaderLayout(
                     end = end,
                 )
             }
-            Row(
+            if (chrome) Row(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding().height(if (wide) 48.dp else 44.dp)
                     .padding(horizontal = if (wide) 32.dp else 28.dp),
                 verticalAlignment = Alignment.CenterVertically,

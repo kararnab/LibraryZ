@@ -1,6 +1,9 @@
 package com.libraryz
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.input.key.Key
@@ -37,9 +40,10 @@ class ReaderKeyboardTest {
     @OptIn(InternalComposeUiApi::class)
     private fun keyDown(key: Key) = KeyEvent(key = key, type = KeyEventType.KeyDown)
 
+    /** Snapshot state, like the real ones, so the reader reacts to changes. */
     private class FakeFullscreen : Fullscreen {
         override val isSupported = true
-        override var isOn = false
+        override var isOn by mutableStateOf(false)
         override fun set(on: Boolean) { isOn = on }
     }
 
