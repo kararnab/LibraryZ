@@ -472,8 +472,7 @@ fun UploadSheet(
                     if (phase == Phase.Form) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                if (mode == UploadMode.NewWork) "Creates the book and its first edition · about 10 uploads an hour"
-                                else "About 10 uploads an hour",
+                                if (mode == UploadMode.NewWork) "Creates the book and its first edition" else "",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f),
