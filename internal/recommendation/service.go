@@ -344,6 +344,14 @@ func (s *Service) Dismiss(ctx context.Context, userID uint, workID uuid.UUID) er
 		Create(&d).Error
 }
 
+// Undismiss reverses Dismiss so the work can be recommended again.
+// Idempotent: undismissing a work that isn't dismissed is a no-op.
+func (s *Service) Undismiss(ctx context.Context, userID uint, workID uuid.UUID) error {
+	return s.db.WithContext(ctx).
+		Where("user_id = ? AND work_id = ?", userID, workID).
+		Delete(&Dismissal{}).Error
+}
+
 // dismissedSet returns the work ids the user has hidden.
 func (s *Service) dismissedSet(ctx context.Context, userID uint) (map[uuid.UUID]struct{}, error) {
 	var ids []uuid.UUID

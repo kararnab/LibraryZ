@@ -1123,6 +1123,27 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+    delete:
+      operationId: undismissRecommendation
+      tags: [recommendations]
+      summary: Undo a dismissal so the work can be recommended again
+      description: "`{id}` is the work id. Idempotent: undismissing a work that isn't dismissed succeeds."
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPathId"
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X DELETE "$BASE/me/recommendations/$WORK_ID/dismiss" -H "Authorization: Bearer $TOKEN"
+      responses:
+        "204":
+          description: Undismissed (or wasn't dismissed)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /editions/{id}/download:
     get:

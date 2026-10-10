@@ -109,7 +109,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (121 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (123 each;
 # desktop also has DesktopLinksTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -210,9 +210,9 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `internal/recommendation` — **matrix-factorization** model (implicit ALS,
   gonum), trained in-process and served from precomputed tables, with the
   Phase 4 content+popularity logic retained as the cold-start fallback;
-  `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
+  `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 135 backend + 121 frontend
+  `FakeTokenStore`. **As of 2026-10-10: 135 backend + 123 frontend
   tests** (+1 with `-tags=eval`, +13 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.

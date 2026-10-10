@@ -615,6 +615,9 @@ moved 1.23 → 1.24, gonum's minimum).
     Frontend: `ApiClient.dismissRecommendation`, `RecommendationsState.dismiss`
     (removes locally), a "Not interested" button per For You card. Smoke test +
     +1 ApiClientTest + +1 RecommendationsStateTest. ✓
+    Undo (2026-10-10): `DELETE /me/recommendations/{id}/dismiss` (idempotent)
+    + `RecommendationsState.undismiss` (restores the card at its position),
+    wired to an "Undo" action on the "Removed from For You" snackbar. ✓
 
 **Slice 5.4 — offline eval harness.**
 88. `eval.go` (`Evaluate`: leave-N-out holdout → precision/recall/hit-rate@K, MF

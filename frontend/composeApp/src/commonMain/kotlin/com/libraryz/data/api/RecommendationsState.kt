@@ -32,9 +32,29 @@ class RecommendationsState(private val api: ApiClient) {
         }
     }
 
-    /** Hides a recommendation: removes it locally and persists the dismissal. */
-    suspend fun dismiss(workId: String) {
+    /**
+     * Hides a recommendation: removes it locally and persists the dismissal.
+     * Returns what [undismiss] needs to put it back, or null if it wasn't listed.
+     */
+    suspend fun dismiss(workId: String): Dismissed? {
         api.dismissRecommendation(workId)
-        items = items?.filterNot { it.work.id == workId }
+        val current = items ?: return null
+        val index = current.indexOfFirst { it.work.id == workId }
+        if (index < 0) return null
+        items = current.filterIndexed { i, _ -> i != index }
+        return Dismissed(current[index], index)
     }
+
+    /** Undoes [dismiss]: clears the dismissal and restores the card where it was. */
+    suspend fun undismiss(dismissed: Dismissed) {
+        api.undismissRecommendation(dismissed.rec.work.id)
+        val current = items ?: return
+        if (current.any { it.work.id == dismissed.rec.work.id }) return
+        items = current.toMutableList().apply {
+            add(dismissed.index.coerceAtMost(size), dismissed.rec)
+        }
+    }
+
+    /** A dismissed recommendation and the position it held. */
+    class Dismissed(val rec: Recommendation, val index: Int)
 }

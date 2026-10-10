@@ -75,4 +75,36 @@ class RecommendationsStateTest {
         assertEquals(1, state.items!!.size)
         assertEquals("w2", state.items!![0].work.id)
     }
+
+    @Test
+    fun undismissRestoresItemAtItsPosition() = runTest {
+        val calls = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            if (req.url.encodedPath.endsWith("/dismiss")) {
+                calls += "${req.method.value} ${req.url.encodedPath}"
+                respond("", HttpStatusCode.NoContent)
+            } else {
+                respond(
+                    """[{"work":{"id":"w1","title":"One","editions":[]},"reason":"x"},
+                        {"work":{"id":"w2","title":"Two","editions":[]},"reason":"y"},
+                        {"work":{"id":"w3","title":"Three","editions":[]},"reason":"z"}]""",
+                    HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
+            }
+        }
+        val state = RecommendationsState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine))
+        state.refresh()
+
+        val dismissed = assertNotNull(state.dismiss("w2"))
+        assertEquals(listOf("w1", "w3"), state.items!!.map { it.work.id })
+
+        state.undismiss(dismissed)
+
+        assertEquals(listOf("w1", "w2", "w3"), state.items!!.map { it.work.id })
+        assertEquals(
+            listOf("POST /me/recommendations/w2/dismiss", "DELETE /me/recommendations/w2/dismiss"),
+            calls,
+        )
+    }
 }

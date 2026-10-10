@@ -587,4 +587,19 @@ class ApiClientTest {
         assertEquals("/me/recommendations/w1/dismiss", path)
         assertEquals("Bearer tok.d", receivedAuth)
     }
+
+    @Test
+    fun undismissRecommendationDeletesDismissPath() = runTest {
+        var method: HttpMethod? = null
+        var path: String? = null
+        val engine = MockEngine { req ->
+            method = req.method
+            path = req.url.encodedPath
+            respond("", HttpStatusCode.NoContent)
+        }
+        val api = ApiClient(BASE, tokenProvider = { "tok.d" }, engine = engine)
+        api.undismissRecommendation("w1")
+        assertEquals(HttpMethod.Delete, method)
+        assertEquals("/me/recommendations/w1/dismiss", path)
+    }
 }
