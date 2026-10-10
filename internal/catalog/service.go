@@ -208,11 +208,14 @@ func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Ed
 }
 
 // SearchWorks finds works whose title/subtitle/authors/description match q,
-// most relevant first.
+// most relevant first. A query shaped like an ISBN also matches the isbn
+// column exactly, ignoring hyphens, spaces and case, and those hits rank
+// first.
 //
 // Driver-aware: on Postgres it matches the weighted `search_vector` tsvector
 // (GIN-indexed; see internal/migrations) with websearch_to_tsquery — so
-// users can type `"exact phrase"`, `or`, and `-exclude` — and orders by
+// users can type `"exact phrase"`, `or`, and `-exclude` — with every word
+// matched as a prefix (search runs as the user types), and orders by
 // ts_rank, which prefers title hits over author hits over description hits.
 // On sqlite (the test DB) it falls back to `LOWER(col) LIKE` and
 // approximates the ranking: title matches, then subtitle/author matches,
@@ -227,19 +230,31 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 	}
 	var works []Work
 	db := s.db.WithContext(ctx).Preload("Editions")
+	// ISBN-shaped queries also match the isbn column; isbnFirst then
+	// leads the ORDER BY. Both are empty for every other query.
+	isbnOr, isbnFirst, isbnArgs := "", "", []any{}
+	if isbn, ok := normalizeISBN(q); ok {
+		isbnOr = " OR " + isbnColumn + " = ?"
+		isbnFirst = "CASE WHEN " + isbnColumn + " = ? THEN 0 ELSE 1 END, "
+		isbnArgs = []any{isbn}
+	}
 	if s.db.Dialector.Name() == "postgres" {
-		const tsq = "websearch_to_tsquery('simple', ?)"
-		db = db.Where("search_vector @@ "+tsq, q).
-			Clauses(orderBy("ts_rank(search_vector, "+tsq+") DESC, created_at DESC", q))
+		// websearch_to_tsquery parses the syntax; rewriting each of its
+		// quoted lexemes 'word' to 'word':* makes every word a prefix, so
+		// the box finds "Kotlin" while the user is still typing "Kot".
+		const tsq = "regexp_replace(websearch_to_tsquery('simple', ?)::text, ?, ?, 'g')::tsquery"
+		tsqArgs := []any{q, `'((?:[^']|'')+)'`, `'\1':*`}
+		db = db.Where("search_vector @@ "+tsq+isbnOr, append(tsqArgs, isbnArgs...)...).
+			Clauses(orderBy(isbnFirst+"ts_rank(search_vector, "+tsq+") DESC, created_at DESC", append(isbnArgs, tsqArgs...)...))
 	} else {
 		const like = `LIKE ? ESCAPE '\'`
 		pattern := "%" + escapeLike(strings.ToLower(q)) + "%"
 		db = db.Where(
-			"LOWER(title) "+like+" OR LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" OR LOWER(description) "+like,
-			pattern, pattern, pattern, pattern,
+			"LOWER(title) "+like+" OR LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" OR LOWER(description) "+like+isbnOr,
+			append([]any{pattern, pattern, pattern, pattern}, isbnArgs...)...,
 		).Clauses(orderBy(
-			"CASE WHEN LOWER(title) "+like+" THEN 0 WHEN LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" THEN 1 ELSE 2 END, created_at DESC",
-			pattern, pattern, pattern,
+			isbnFirst+"CASE WHEN LOWER(title) "+like+" THEN 0 WHEN LOWER(subtitle) "+like+" OR LOWER(authors) "+like+" THEN 1 ELSE 2 END, created_at DESC",
+			append(isbnArgs, pattern, pattern, pattern)...,
 		))
 	}
 	if limit > 0 {
@@ -249,6 +264,30 @@ func (s *Service) SearchWorks(ctx context.Context, q string, limit, offset int) 
 		db = db.Offset(offset)
 	}
 	return works, db.Find(&works).Error
+}
+
+// isbnColumn is works.isbn as stored (typed by the uploader, so possibly
+// hyphenated), normalized the same way as normalizeISBN.
+const isbnColumn = "REPLACE(REPLACE(UPPER(isbn), '-', ''), ' ', '')"
+
+// normalizeISBN reports whether q looks like an ISBN-10 or ISBN-13 once
+// hyphens and spaces are dropped, and returns it in that form (upper-case
+// X check digit). The check digit itself isn't validated: a typo'd ISBN
+// just finds nothing.
+func normalizeISBN(q string) (string, bool) {
+	n := strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(q))
+	switch len(n) {
+	case 10, 13:
+	default:
+		return "", false
+	}
+	for i, c := range n {
+		if c >= '0' && c <= '9' || c == 'X' && len(n) == 10 && i == 9 {
+			continue
+		}
+		return "", false
+	}
+	return n, true
 }
 
 // orderBy builds a parameterized ORDER BY. db.Order only accepts plain

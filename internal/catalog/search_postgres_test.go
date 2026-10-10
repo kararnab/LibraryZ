@@ -13,6 +13,8 @@ package catalog_test
 import (
 	"context"
 	"os"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -183,5 +185,73 @@ func TestPostgresSearchWebsearchSyntax(t *testing.T) {
 	}
 	if len(excl) != 2 {
 		t.Fatalf("exclusion search: want 2, got %+v", excl)
+	}
+}
+
+func TestPostgresSearchMatchesISBN(t *testing.T) {
+	db := openPostgres(t)
+	svc := catalog.NewService(db, nil)
+	ctx := context.Background()
+
+	for _, w := range []catalog.Work{
+		{ID: uuid.New(), Title: "Refactoring", Authors: "Martin Fowler", ISBN: "978-0-201-48567-7"},
+		{ID: uuid.New(), Title: "Catalog notes", Description: "Not to be confused with 9780201485677."},
+	} {
+		if err := svc.CreateWork(ctx, &w); err != nil {
+			t.Fatalf("create %q: %v", w.Title, err)
+		}
+	}
+
+	for _, q := range []string{"9780201485677", "978-0-201-48567-7"} {
+		got, err := svc.SearchWorks(ctx, q, 50, 0)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		if len(got) == 0 || got[0].Title != "Refactoring" {
+			t.Fatalf("isbn %q: want Refactoring first, got %+v", q, got)
+		}
+	}
+}
+
+// Search runs as the user types, so every word matches as a prefix — without
+// breaking phrases, exclusions or punctuation inside words.
+func TestPostgresSearchMatchesWordPrefixes(t *testing.T) {
+	db := openPostgres(t)
+	svc := catalog.NewService(db, nil)
+	ctx := context.Background()
+
+	for _, w := range []catalog.Work{
+		{ID: uuid.New(), Title: "Kotlin In Action", Authors: "Sebastian Aigner; Roman Elizarov"},
+		{ID: uuid.New(), Title: "Kotlin Coroutines", Authors: "Marcin Moskała"},
+		{ID: uuid.New(), Title: "Head First", Authors: "Kathy O'Reilly"},
+	} {
+		ww := w
+		if err := svc.CreateWork(ctx, &ww); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for q, want := range map[string][]string{
+		"Kot":          {"Kotlin Coroutines", "Kotlin In Action"},
+		"Sebastian Ai": {"Kotlin In Action"},
+		"kot -corout":  {"Kotlin In Action"},
+		`"kotlin in"`:  {"Kotlin In Action"},
+		"O'Rei":        {"Head First"},
+		"Moskał":       {"Kotlin Coroutines"},
+		"zzz":          nil,
+		"%":            nil,
+	} {
+		got, err := svc.SearchWorks(ctx, q, 50, 0)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		titles := make([]string, len(got))
+		for i, w := range got {
+			titles[i] = w.Title
+		}
+		sort.Strings(titles)
+		if strings.Join(titles, "|") != strings.Join(want, "|") {
+			t.Fatalf("search %q: want %v, got %v", q, want, titles)
+		}
 	}
 }

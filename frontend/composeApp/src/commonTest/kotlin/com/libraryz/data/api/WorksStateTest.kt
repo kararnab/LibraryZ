@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -334,6 +335,150 @@ class WorksStateTest {
         assertEquals(listOf("w100"), state.items?.map { it.id })
         assertTrue(state.endReached)
         assertTrue(!state.loadingMore)
+    }
+
+    @Test
+    fun slowerOlderSearchDoesNotOverwriteNewerResults() = runTest {
+        // An author link's search and a typed one, or a typed one and a
+        // refresh, can overlap; the last one started must win.
+        val slowRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val q = req.url.parameters["q"]
+            if (q == "ko") {
+                slowRequested.complete(Unit)
+                gate.await()
+            }
+            val payload = when (q) {
+                "ko" -> """[{"id":"old","title":"Stale","editions":[]}]"""
+                "kotlin" -> """[{"id":"new","title":"Kotlin In Action","editions":[]}]"""
+                else -> """[{"id":"all","title":"Everything","editions":[]}]"""
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+
+        val slow = async { state.search("ko") }
+        slowRequested.await()
+        state.search("kotlin")
+        gate.complete(Unit)
+        slow.await()
+
+        assertEquals("kotlin", state.searchQuery)
+        assertEquals(listOf("new"), state.items?.map { it.id })
+
+        // Same for a refresh that started before a search.
+        val gate2 = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val refreshRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine2 = MockEngine { req ->
+            if (req.url.encodedPath == "/works") {
+                refreshRequested.complete(Unit)
+                gate2.await()
+            }
+            val (s, body, h) = jsonRespond(
+                if (req.url.encodedPath == "/works") """[{"id":"all","title":"Everything","editions":[]}]"""
+                else """[{"id":"new","title":"Kotlin In Action","editions":[]}]""",
+            )
+            respond(body, s, h)
+        }
+        val state2 = WorksState(ApiClient("http://t", engine = engine2))
+        val refresh = async { state2.refresh() }
+        refreshRequested.await()
+        state2.search("kotlin")
+        gate2.complete(Unit)
+        refresh.await()
+
+        assertEquals("kotlin", state2.searchQuery)
+        assertEquals(listOf("new"), state2.items?.map { it.id })
+    }
+
+    @Test
+    fun loadMoreDuringANewSearchDoesNotRestoreTheOldList() = runTest {
+        // A new search resets endReached while the old list is still shown,
+        // so the list asks for more; that must not page the new query onto
+        // the old items (it showed the whole catalog as "12 results").
+        val searchRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val payload = if (req.url.encodedPath == "/works") {
+                worksJson(0..2)
+            } else if (req.url.parameters["offset"] == "0") {
+                searchRequested.complete(Unit)
+                gate.await()
+                worksJson(100..100)
+            } else {
+                "[]"
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine), pageSize = 50)
+        state.refresh()
+        assertTrue(state.endReached)
+
+        val search = async { state.search("aigner") }
+        searchRequested.await()
+        state.loadMore() // the list is near its end and endReached was reset
+        gate.complete(Unit)
+        search.await()
+
+        assertEquals(listOf("w100"), state.items?.map { it.id })
+        assertTrue(engine.requestHistory.none { it.url.parameters["offset"] == "3" })
+    }
+
+    @Test
+    fun searchWhoseCallerIsCancelledStillLandsItsResults() = runTest {
+        // An author link's search ran in the detail layout's scope, which
+        // the nav change disposed: the query switched but the old list
+        // stayed under it until the user typed.
+        val searchRequested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine { req ->
+            val payload = if (req.url.encodedPath == "/works") {
+                worksJson(0..2)
+            } else {
+                searchRequested.complete(Unit)
+                gate.await()
+                worksJson(100..100)
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+        state.refresh()
+
+        val caller = launch { state.search("isakova") }
+        searchRequested.await()
+        caller.cancel()
+        gate.complete(Unit)
+        caller.join()
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("isakova", state.searchQuery)
+        assertEquals(listOf("w100"), state.items?.map { it.id })
+        assertNull(state.error)
+    }
+
+    @Test
+    fun findKeepsAnOpenedWorkThatASearchLeavesOut() = runTest {
+        val engine = MockEngine { req ->
+            val payload = when (req.url.encodedPath) {
+                "/works/a" -> """{"id":"a","title":"A","editions":[]}"""
+                "/works/search" -> """[{"id":"b","title":"B","editions":[]}]"""
+                else -> """[{"id":"a","title":"A","editions":[]},{"id":"b","title":"B","editions":[]}]"""
+            }
+            val (s, body, h) = jsonRespond(payload)
+            respond(body, s, h)
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+        state.refresh()
+        state.refreshOne("a") // the book page is open
+
+        state.search("b")
+
+        assertEquals(listOf("b"), state.items?.map { it.id })
+        assertEquals("A", state.find("a")?.title)
     }
 
     @Test

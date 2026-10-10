@@ -780,6 +780,40 @@ func TestSearchWorksMatchesTitleAuthorsDescription(t *testing.T) {
 	}
 }
 
+// ISBNs match exactly whether or not either side is hyphenated, and an
+// ISBN hit ranks above a text hit on the same digits.
+func TestSearchWorksMatchesISBN(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupAndLogin(t, ts.URL, "search6@x.com", testPassword, "S6")
+
+	for _, w := range []map[string]any{
+		{"title": "Refactoring", "authors": "Martin Fowler", "isbn": "978-0-201-48567-7"},
+		{"title": "The Mythical Man-Month", "authors": "Fred Brooks", "isbn": "020183595x"},
+		{"title": "Catalog notes", "description": "Not to be confused with 9780201485677."},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/works", mustJSON(t, w))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", auth)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create work: err=%v code=%d body=%s", err, statusOf(resp), readBody(resp))
+		}
+	}
+
+	for _, q := range []string{"9780201485677", "978-0-201-48567-7", "978 0201 48567 7"} {
+		got := searchTitles(t, ts.URL, q)
+		if len(got) == 0 || got[0] != "Refactoring" {
+			t.Fatalf("isbn %q: want Refactoring first, got %v", q, got)
+		}
+	}
+	if got := searchTitles(t, ts.URL, "0-201-83595-X"); len(got) != 1 || got[0] != "The Mythical Man-Month" {
+		t.Fatalf("isbn-10 with X: want only Mythical Man-Month, got %v", got)
+	}
+	if got := searchTitles(t, ts.URL, "9780201485670"); len(got) != 0 {
+		t.Fatalf("a different isbn must not match, got %v", got)
+	}
+}
+
 func TestSearchWorksEmptyQueryReturns400(t *testing.T) {
 	ts, _ := newTestServer(t)
 	resp, err := http.Get(ts.URL + "/works/search?q=")

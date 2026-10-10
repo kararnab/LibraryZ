@@ -342,7 +342,9 @@ internal fun Root(
     // Hoisted edition-action handlers so compact + expanded layouts share
     // them. They consult the platform support flags first and snackbar the
     // right "Not yet" message otherwise.
-    // An author link on Book detail: Browse, searching for that name.
+    // An author link on Book detail: Browse, searching for that name. It
+    // runs in Root's scope: the detail layout that was clicked leaves the
+    // composition with the nav change, and its scope with it.
     val searchAuthor: (String) -> Unit = { name ->
         nav.replace(Screen.Browse)
         scope.launch { works.search(name) }
@@ -462,6 +464,7 @@ internal fun Root(
                 if (expanded) {
                     ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
                         ListDetailLayout(
+                            onAuthorClick = searchAuthor,
                             nav = nav,
                             auth = auth,
                             works = works,
@@ -505,6 +508,7 @@ internal fun Root(
                 } else if (expanded) {
                     ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
                         ListDetailLayout(
+                            onAuthorClick = searchAuthor,
                             nav = nav,
                             auth = auth,
                             works = works,
@@ -556,6 +560,7 @@ internal fun Root(
                     if (expanded) {
                         ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
                             ListDetailLayout(
+                                onAuthorClick = searchAuthor,
                                 nav = nav,
                                 auth = auth,
                                 works = works,
@@ -600,6 +605,7 @@ internal fun Root(
                 if (expanded) {
                     ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
                         ListDetailLayout(
+                            onAuthorClick = searchAuthor,
                             nav = nav,
                             auth = auth,
                             works = works,
@@ -1138,9 +1144,8 @@ private fun ListDetailLayout(
     onLibraryRemove: (String) -> Unit,
     onRemoveWork: ((Work, String) -> Unit)? = null,
     onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
+    onAuthorClick: (String) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-
     LaunchedEffect(selectedWorkId) {
         if (selectedWorkId != null) {
             works.refreshOne(selectedWorkId)
@@ -1183,7 +1188,7 @@ private fun ListDetailLayout(
                     onRead = { ed -> onRead(work, ed) },
                     onDownload = { ed -> onDownload(work, ed) },
                     onSuggestEdit = { nav.push(Screen.EditWork(work.id)) },
-                    onAuthorClick = { name -> nav.replace(Screen.Browse); scope.launch { works.search(name) } },
+                    onAuthorClick = onAuthorClick,
                     libraryEnabled = auth.isAuthenticated,
                     libraryEntry = library.entryFor(work.id),
                     onLibraryUpsert = { req -> onLibraryUpsert(work.id, req) },
