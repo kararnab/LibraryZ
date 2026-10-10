@@ -240,7 +240,7 @@ fun BrowseScreen(
 
 /** "LibraryZ" in Literata, the Z in library green. */
 @Composable
-fun Wordmark(modifier: Modifier = Modifier) {
+fun Wordmark(modifier: Modifier = Modifier, size: Int = 22) {
     val primary = MaterialTheme.colorScheme.primary
     Text(
         text = buildAnnotatedString {
@@ -249,8 +249,8 @@ fun Wordmark(modifier: Modifier = Modifier) {
         },
         fontFamily = LibraryZ.tokens.serif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
+        fontSize = size.sp,
+        lineHeight = (size * 1.22f).sp,
         letterSpacing = (-0.01).em,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = modifier,

@@ -1,5 +1,14 @@
 package com.libraryz
 
+import androidx.compose.foundation.layout.Arrangement
+import com.libraryz.ui.screens.VerifyEmailBanner
+import com.libraryz.ui.screens.VerifyEmailScreen
+import com.libraryz.ui.screens.ResetPasswordScreen
+import com.libraryz.ui.screens.ForgotPasswordScreen
+import com.libraryz.data.launchDeepLink
+import com.libraryz.data.DeepLink
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import androidx.compose.material.icons.automirrored.outlined.FactCheck
 import androidx.compose.material.icons.automirrored.rounded.FactCheck
 import androidx.compose.material.icons.rounded.Explore
@@ -183,34 +192,73 @@ private fun Splash() {
     }
 }
 
+/**
+ * Everything below the theme and snackbar host. [startAt] opens a given
+ * screen instead of sign-in (the README screenshot generator uses it).
+ */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun Root(
+internal fun Root(
     api: ApiClient,
     auth: AuthState,
     works: WorksState,
     contributions: ContributionsState,
     library: LibraryState,
     recs: RecommendationsState,
+    startAt: Screen? = null,
 ) {
-    val nav = rememberNavigator(Screen.Auth)
+    // An emailed reset / verification link (web: the page URL) opens its screen.
+    val launchLink = remember { launchDeepLink() }
+    val nav = rememberNavigator(
+        startAt ?: when (launchLink) {
+            is DeepLink.ResetPassword -> Screen.ResetPassword(launchLink.token)
+            is DeepLink.VerifyEmail -> Screen.VerifyEmail(launchLink.token)
+            null -> Screen.Auth
+        },
+    )
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbar.current
 
     // Follow the session: a restored one jumps straight to Browse; losing it
     // (logout, or expiry detected by ApiClient anywhere in the app) returns
     // to sign-in.
+    // Recovery screens work signed in or out, so the session doesn't move them.
     LaunchedEffect(auth.isAuthenticated) {
+        val recovering = nav.current.let {
+            it is Screen.ForgotPassword || it is Screen.ResetPassword || it is Screen.VerifyEmail
+        }
+        if (recovering) return@LaunchedEffect
         if (auth.isAuthenticated) {
             if (nav.current == Screen.Auth) nav.replace(Screen.Browse)
         } else if (nav.current != Screen.Auth) {
             nav.replace(Screen.Auth)
         }
     }
+    var passwordChanged by remember { mutableStateOf(false) }
+
+    // "Verify your email" atop Browse until the backend says it's done.
+    val resendVerification: () -> Unit = {
+        scope.launch {
+            try {
+                api.requestEmailVerification()
+                snackbar.showSnackbar("Sent a new link to ${auth.user?.email ?: "your email"}.")
+            } catch (e: Throwable) {
+                snackbar.showSnackbar(
+                    if ((e as? ApiException)?.status == 429) "Please wait a few minutes before asking for another link."
+                    else "Couldn’t send the link. Please try again.",
+                )
+            }
+        }
+    }
+    val verifyBanner: (@Composable () -> Unit)? = auth.user?.takeIf { !it.emailVerified }?.let { u ->
+        { VerifyEmailBanner(u.email, onResend = resendVerification) }
+    }
+    // An expired session lands on sign-in with a banner explaining why.
+    var expiredNotice by remember { mutableStateOf(false) }
     LaunchedEffect(auth.sessionExpired) {
         if (auth.sessionExpired) {
             auth.acknowledgeSessionExpired()
-            snackbar.showSnackbar("Your session expired. Please sign in again.")
+            expiredNotice = true
         }
     }
     // Ends the session server-side too (best effort — offline still logs out
@@ -246,6 +294,11 @@ private fun Root(
                 snackbar.showSnackbar("Couldn't dismiss: ${e.message ?: "unknown"}")
             }
         }
+    }
+
+    // Resolves a work for screens that only hold its id (the review queue).
+    val loadWork: suspend (String) -> Work? = { id ->
+        works.find(id) ?: runCatching { api.getWork(id) }.getOrNull()
     }
 
     // Load the library up front: it powers "Continue reading" on Browse.
@@ -361,7 +414,12 @@ private fun Root(
         when (val s = nav.current) {
             Screen.Auth -> AuthGateScreen(
                 api = api,
+                sessionExpired = expiredNotice,
+                passwordChanged = passwordChanged,
+                onForgotPassword = { email -> nav.push(Screen.ForgotPassword(email)) },
                 onAuthenticated = { session ->
+                    expiredNotice = false
+                    passwordChanged = false
                     auth.signIn(session)        // suspends until token persisted
                     works.refresh()             // pull initial list
                     nav.replace(Screen.Browse)
@@ -380,6 +438,7 @@ private fun Root(
                             onSelect = { w -> nav.push(Screen.WorkDetail(w.id)) },
                             onRead = readEdition,
                             onReadFromLibrary = readFromLibrary,
+                            extraHeader = verifyBanner,
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
@@ -394,7 +453,7 @@ private fun Root(
                             onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
                             onUploadClick = { nav.push(Screen.Upload()) },
                             compact = true,
-                            header = continueReadingHeader(library, readFromLibrary),
+                            header = stackHeaders(verifyBanner, continueReadingHeader(library, readFromLibrary)),
                             libraryWorkIds = library.workIds,
                         )
                     }
@@ -425,6 +484,7 @@ private fun Root(
                             },
                             onRead = readEdition,
                             onReadFromLibrary = readFromLibrary,
+                            extraHeader = verifyBanner,
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
@@ -474,6 +534,7 @@ private fun Root(
                                 },
                                 onRead = readEdition,
                             onReadFromLibrary = readFromLibrary,
+                            extraHeader = verifyBanner,
                                 onDownload = downloadEdition,
                                 onLibraryUpsert = libraryUpsert,
                                 onLibraryRemove = libraryRemove,
@@ -495,11 +556,8 @@ private fun Root(
                         work = work,
                         isDesktop = expanded,
                         onDismiss = { nav.pop() },
-                        onSubmit = { patch ->
-                            api.submitContribution(work.id, patch)
-                            snackbar.showSnackbar("Edit submitted for review.")
-                            nav.pop()
-                        },
+                        // The sheet shows its own "Sent for review" state.
+                        onSubmit = { patch -> api.submitContribution(work.id, patch) },
                     )
                 }
             }
@@ -520,6 +578,7 @@ private fun Root(
                             },
                             onRead = readEdition,
                             onReadFromLibrary = readFromLibrary,
+                            extraHeader = verifyBanner,
                             onDownload = downloadEdition,
                             onLibraryUpsert = libraryUpsert,
                             onLibraryRemove = libraryRemove,
@@ -538,13 +597,18 @@ private fun Root(
                 UploadSheet(
                     mode = if (s.workId == null) UploadMode.NewWork else UploadMode.AddEdition,
                     isDesktop = expanded,
+                    target = s.workId?.let { works.find(it) },
                     onDismiss = { nav.pop() },
+                    onViewBook = { workId ->
+                        nav.replace(Screen.Browse)
+                        nav.push(Screen.WorkDetail(workId))
+                    },
                     onUnsupportedFilePicker = {
                         scope.launch {
                             snackbar.showSnackbar("File picker not yet implemented on this platform.")
                         }
                     },
-                    onSubmit = { submission ->
+                    onSubmit = { submission, onProgress ->
                         when (submission) {
                             is UploadSubmission.NewWork -> {
                                 val created = api.createWork(
@@ -562,17 +626,22 @@ private fun Root(
                                         language = submission.language,
                                         fileName = submission.file.name,
                                         bytes = submission.file.bytes,
+                                        onProgress = onProgress,
                                     )
                                 } catch (e: Throwable) {
                                     // Don't leave an empty work behind when its
                                     // only upload was rejected (e.g. duplicate
-                                    // file). Creators may remove their own
-                                    // still-empty work. Best effort.
-                                    runCatching { api.deleteWork(created.id, "Upload failed; discarding the empty work") }
+                                    // file) or cancelled. Creators may remove
+                                    // their own still-empty work. Best effort,
+                                    // and it must run even when cancelled.
+                                    withContext(NonCancellable) {
+                                        runCatching { api.deleteWork(created.id, "Upload failed; discarding the empty work") }
+                                    }
                                     throw e
                                 } finally {
-                                    works.refresh()
+                                    withContext(NonCancellable) { works.refresh() }
                                 }
+                                created.id
                             }
                             is UploadSubmission.AddEdition -> {
                                 val wid = s.workId
@@ -583,11 +652,12 @@ private fun Root(
                                     language = submission.language,
                                     fileName = submission.file.name,
                                     bytes = submission.file.bytes,
+                                    onProgress = onProgress,
                                 )
                                 works.refreshOne(wid)
+                                wid
                             }
                         }
-                        nav.pop()
                     },
                 )
             }
@@ -628,11 +698,11 @@ private fun Root(
                         ContributionQueueScreen(
                             state = contributions,
                             isWide = true,
-                            onBack = null,
                             onOpenWork = { workId ->
                                 nav.replace(Screen.Browse)
                                 nav.push(Screen.WorkDetail(workId))
                             },
+                            loadWork = loadWork,
                         )
                     }
                 } else {
@@ -640,8 +710,8 @@ private fun Root(
                         ContributionQueueScreen(
                             state = contributions,
                             isWide = false,
-                            onBack = null,
                             onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
+                            loadWork = loadWork,
                         )
                     }
                 }
@@ -710,6 +780,34 @@ private fun Root(
                     }
                 }
             }
+
+            is Screen.ForgotPassword -> ForgotPasswordScreen(
+                api = api,
+                initialEmail = s.email,
+                onBack = { if (!nav.pop()) nav.replace(Screen.Auth) },
+            )
+
+            is Screen.ResetPassword -> ResetPasswordScreen(
+                api = api,
+                token = s.token,
+                onDone = {
+                    // The reset ended every session, this device's included.
+                    scope.launch {
+                        if (auth.isAuthenticated) auth.clear()
+                        passwordChanged = true
+                        nav.replace(Screen.Auth)
+                    }
+                },
+                onRequestNewLink = { nav.replace(Screen.Auth); nav.push(Screen.ForgotPassword()) },
+            )
+
+            is Screen.VerifyEmail -> VerifyEmailScreen(
+                api = api,
+                token = s.token,
+                onVerified = { if (auth.isAuthenticated) auth.reloadUser() },
+                onContinue = { nav.replace(if (auth.isAuthenticated) Screen.Browse else Screen.Auth) },
+                onResend = if (auth.isAuthenticated) ({ api.requestEmailVerification() }) else null,
+            )
 
             Screen.Settings -> {
                 val settings = @Composable {
@@ -969,6 +1067,15 @@ private fun NavIcon(selected: Boolean, outlined: ImageVector, filled: ImageVecto
     Icon(if (selected) filled else outlined, contentDescription = null)
 }
 
+/** Stacks optional Browse headers (verify-email banner, Continue reading) with a gap. */
+private fun stackHeaders(vararg headers: (@Composable () -> Unit)?): (@Composable () -> Unit)? {
+    val present = headers.filterNotNull()
+    if (present.isEmpty()) return null
+    return {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { present.forEach { it() } }
+    }
+}
+
 /** The "Continue reading" banner atop Browse, or null when there's nothing to resume. */
 private fun continueReadingHeader(
     library: LibraryState,
@@ -988,6 +1095,7 @@ private fun ListDetailLayout(
     onSelect: (Work) -> Unit,
     onRead: (Work, Edition) -> Unit,
     onReadFromLibrary: (UserBook) -> Unit,
+    extraHeader: (@Composable () -> Unit)?,
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
@@ -1010,7 +1118,7 @@ private fun ListDetailLayout(
                 onWorkClick = onSelect,
                 onUploadClick = { nav.push(Screen.Upload()) },
                 compact = false,
-                header = continueReadingHeader(library, onReadFromLibrary),
+                header = stackHeaders(extraHeader, continueReadingHeader(library, onReadFromLibrary)),
                 libraryWorkIds = library.workIds,
                 selectedWorkId = selectedWorkId,
             )

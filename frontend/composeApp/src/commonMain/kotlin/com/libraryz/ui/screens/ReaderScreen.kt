@@ -322,6 +322,10 @@ private fun ProgressReporter(
     }
     DisposableEffect(key) {
         onDispose {
+            // Only a loaded book's last move counts. The loading phase
+            // (key == null) is disposed when the book arrives, and reporting
+            // then would record merely opening it.
+            if (key == null) return@onDispose
             val last = latest
             if (last != null && last != reported) report(last)
         }

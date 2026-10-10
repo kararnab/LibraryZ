@@ -12,6 +12,34 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+- **Visual refresh of the client** from the "LibraryZ Visual Refresh"
+  design: a library-green Material 3 theme in light and dark, Literata +
+  Figtree (bundled, OFL), and generated cloth covers for every book.
+- **Reading flow**: a "Continue reading" card on Browse and a one-tap Read
+  button on every book; the reader opens where you left off and saves your
+  place (page and percent) to your library as you read. The PDF reader has
+  keyboard, tap and swipe page turns, a page scrubber, hideable bars and an
+  end-of-book card to rate and mark as read; the text reader has light,
+  sepia and dark reading themes, text size, line spacing and column width.
+- **Navigation and account**: a bottom navigation bar on phones, a Settings
+  screen (account, reading text size, sign out, sign out everywhere,
+  server, app version), and system back on Android.
+- **Upload** shows real progress, a safety-check step, and specific errors
+  (too large, unsupported format, already in the catalog with a link to it,
+  upload limit, failed check). **Suggest an edit** marks each changed field
+  with its old value and an undo. The **review queue** shows a word-level
+  before/after diff.
+- **Password reset and email verification screens** (client only; the
+  endpoints come next). See `ApiClient`'s recovery section for the
+  expected contract.
+- README screenshots are now generated from the real UI
+  (`ScreenshotsTest`, see `docs/screenshots/README.md`).
+
+### Changed
+- The upload screen only offers the formats the server accepts (PDF, EPUB,
+  TXT); AZW3, DJVU and CBZ were listed before but always rejected.
+
 ### Security
 - **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0**
   ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the

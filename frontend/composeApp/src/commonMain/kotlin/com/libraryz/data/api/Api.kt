@@ -20,6 +20,7 @@ import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.forms.formData
+import io.ktor.client.plugins.onUpload
 import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
@@ -49,6 +50,15 @@ data class SignUpRequest(val email: String, val password: String, val name: Stri
 
 @Serializable
 data class LoginRequest(val email: String, val password: String)
+
+@Serializable
+data class PasswordResetRequest(val email: String)
+
+@Serializable
+data class CompletePasswordResetRequest(val token: String, val newPassword: String)
+
+@Serializable
+data class TokenRequest(val token: String)
 
 @Serializable
 data class CreateWorkRequest(
@@ -114,7 +124,10 @@ interface SessionHooks {
  * (possibly stale) access token: sending one to `/auth/refresh` would also
  * let the bearer provider try to "refresh" a failed refresh.
  */
-private val anonymousAuthPaths = listOf("/auth/login", "/auth/signup", "/auth/refresh", "/auth/logout")
+private val anonymousAuthPaths = listOf(
+    "/auth/login", "/auth/signup", "/auth/refresh", "/auth/logout",
+    "/auth/password-reset", "/auth/password-reset/complete", "/auth/email-verification/complete",
+)
 
 /** [filename] is null when the server didn't name the file. */
 class DownloadedFile(val filename: String?, val bytes: ByteArray)
@@ -331,6 +344,53 @@ class ApiClient(
         }
     }
 
+    // ----- Password reset & email verification -----
+    //
+    // Client side of a contract the backend implements on top of iam's
+    // Recovery (StartPasswordReset / CompletePasswordReset /
+    // StartEmailVerification / CompleteEmailVerification). iam issues the
+    // single-use tokens; the server emails them as links. Status codes:
+    //   2xx success · 400 password rejected by policy (body is user-facing)
+    //   410 token unknown, used or expired · 429 throttled
+
+    /**
+     * Anonymous. Asks for a reset link for [email]. The server answers the
+     * same whether or not the account exists, so this can't reveal which
+     * emails are registered.
+     */
+    suspend fun requestPasswordReset(email: String) {
+        val resp = client.post("$baseUrl/auth/password-reset") { setBody(PasswordResetRequest(email)) }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "password reset request failed")
+        }
+    }
+
+    /** Anonymous. Sets a new password with the emailed [token]; signs out every session. */
+    suspend fun completePasswordReset(token: String, newPassword: String) {
+        val resp = client.post("$baseUrl/auth/password-reset/complete") {
+            setBody(CompletePasswordResetRequest(token, newPassword))
+        }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "password reset failed")
+        }
+    }
+
+    /** Authenticated. Emails the current user a verification link. */
+    suspend fun requestEmailVerification() {
+        val resp = client.post("$baseUrl/me/email-verification")
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "email verification request failed")
+        }
+    }
+
+    /** Anonymous. Confirms the address the emailed [token] was sent to. */
+    suspend fun completeEmailVerification(token: String) {
+        val resp = client.post("$baseUrl/auth/email-verification/complete") { setBody(TokenRequest(token)) }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "email verification failed")
+        }
+    }
+
     // ----- Catalog -----
 
     suspend fun listWorks(limit: Int = 50, offset: Int = 0): List<Work> {
@@ -542,6 +602,9 @@ class ApiClient(
         language: String?,
         fileName: String,
         bytes: ByteArray,
+        // Fraction of the request body sent, 0..1. Reaching 1 means the
+        // server now has the file and is checking it.
+        onProgress: ((Float) -> Unit)? = null,
     ): Edition {
         val resp = client.submitFormWithBinaryData(
             url = "$baseUrl/works/$workId/editions",
@@ -556,7 +619,13 @@ class ApiClient(
                     },
                 )
             },
-        )
+        ) {
+            if (onProgress != null) {
+                onUpload { sent, total ->
+                    if (total != null && total > 0) onProgress((sent.toFloat() / total).coerceIn(0f, 1f))
+                }
+            }
+        }
         if (resp.status == HttpStatusCode.Conflict) {
             val dup = runCatching {
                 json.decodeFromString(DuplicateEditionBody.serializer(), resp.bodyAsText())

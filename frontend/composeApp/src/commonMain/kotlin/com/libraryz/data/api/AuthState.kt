@@ -67,7 +67,7 @@ class AuthState(private val store: TokenStore) : SessionHooks {
         val saved = store.load()?.let(::decodeSession)
         if (saved != null) {
             session = saved
-            refreshUser()
+            reloadUser()
         }
         bootstrapped = true
     }
@@ -76,7 +76,7 @@ class AuthState(private val store: TokenStore) : SessionHooks {
         store.save(encodeSession(s))
         session = s
         sessionExpired = false
-        refreshUser()
+        reloadUser()
     }
 
     suspend fun clear() {
@@ -101,7 +101,8 @@ class AuthState(private val store: TokenStore) : SessionHooks {
         sessionExpired = false
     }
 
-    private suspend fun refreshUser() {
+    /** Re-reads the signed-in user (e.g. after verifying their email). */
+    suspend fun reloadUser() {
         val fetch = userFetcher ?: return
         user = runCatching { fetch.invoke() }.getOrNull()
     }

@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -376,11 +378,11 @@ fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(16.dp).height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             BookCover(title, authors, CoverSize.M)
-            Column(Modifier.weight(1f).height(CoverSize.M.height)) {
+            Column(Modifier.weight(1f).fillMaxHeight().heightIn(min = CoverSize.M.height)) {
                 Text(
                     "CONTINUE READING",
                     style = MaterialTheme.typography.labelMedium,
@@ -407,6 +409,44 @@ fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier
                     Text("${entry.progressPercent}%", style = MaterialTheme.typography.labelLarge)
                 }
             }
+        }
+    }
+}
+
+/** Tones for [Banner], from the design's inline status messages. */
+enum class BannerTone { Info, Calm, Error, Plain }
+
+/**
+ * An inline status message: icon, optional bold [title], [body], and an
+ * optional trailing [action] (usually a TextButton).
+ */
+@Composable
+fun Banner(
+    tone: BannerTone,
+    icon: ImageVector,
+    body: String,
+    modifier: Modifier = Modifier,
+    title: String? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
+    val (bg, fg) = when (tone) {
+        BannerTone.Info -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        BannerTone.Calm -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+        BannerTone.Error -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        BannerTone.Plain -> MaterialTheme.colorScheme.surfaceContainerHigh to MaterialTheme.colorScheme.onSurface
+    }
+    Surface(color = bg, contentColor = fg, shape = MaterialTheme.shapes.medium, modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (title != null) Text(title, style = MaterialTheme.typography.labelLarge)
+                Text(body, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (action != null) Box(Modifier.align(Alignment.CenterVertically)) { action() }
         }
     }
 }

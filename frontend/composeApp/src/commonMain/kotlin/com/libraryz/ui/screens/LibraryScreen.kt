@@ -5,6 +5,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -203,12 +206,17 @@ private fun LibraryCard(ub: UserBook, onOpenWork: (String) -> Unit, onRead: (Use
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth(),
     ) {
+        // At least cover-height, taller when a long title needs it, so the
+        // action button is never squeezed.
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(12.dp).height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             BookCover(title, ub.work?.authors, CoverSize.M)
-            Column(Modifier.weight(1f).height(CoverSize.M.height), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                Modifier.weight(1f).fillMaxHeight().heightIn(min = CoverSize.M.height),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Text(title, style = LibraryZ.tokens.bookTitle, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val authors = ub.work?.authors
                 if (!authors.isNullOrBlank()) {

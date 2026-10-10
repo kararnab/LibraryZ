@@ -26,6 +26,11 @@ sealed interface Screen {
     data object Library : Screen
     data object ForYou : Screen
     data object Settings : Screen
+    // Account recovery. The last two are opened from emailed links and
+    // work signed in or out.
+    data class ForgotPassword(val email: String = "") : Screen
+    data class ResetPassword(val token: String) : Screen
+    data class VerifyEmail(val token: String) : Screen
 }
 
 @Stable

@@ -13,8 +13,9 @@ to rediscover the toolchain each session.
   `glebarez/sqlite` — no Docker needed.
 - **Frontend** — Kotlin / Compose Multiplatform under `frontend/`. Targets
   Android, Desktop (JVM), Web (Wasm/JS), iOS. Same `commonMain` UI for all.
-  Wireframes live at `LibraryZ Wireframes.html` in the design bundle
-  (imported 2026-05-25). Screens are under
+  The visual spec is the Claude Design canvas
+  <https://claude.ai/artifact/SvHwbXULQMdr7fr2E8XiEZ> (read it with the
+  Artifact tool). Screens are under
   `frontend/composeApp/src/commonMain/kotlin/com/libraryz/ui/screens/`.
 
 ## Toolchain on this machine
@@ -107,7 +108,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (105 each).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (115 each;
+# desktop also has the opt-in ScreenshotsTest, see docs/screenshots).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -209,7 +211,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 127 backend + 105 frontend
+  `FakeTokenStore`. **As of 2026-10-10: 127 backend + 115 frontend
   tests** (+1 with `-tags=eval`, +11 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -292,6 +294,16 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   generates them; `coverIndex` must stay identical to the design's JS hash
   (tested). Reading themes (`ReadingTheme`) are independent of the app theme;
   `ReaderPrefs` lives in `App` (session-only, not persisted yet).
+  Sign-in, Upload, Suggest edit and the Review queue follow the same canvas
+  (second pass). Upload only offers what `sanitize.Validate` accepts
+  (PDF/EPUB/TXT, 500 MB); its "safety check" step is the wait between the
+  last byte sent and the response, so a 400 then means the content was
+  rejected (`classifyUploadError`). The "Future" board (password reset,
+  email verification, notifications) needs backend work and isn't built.
+- **App version: `libraryz.version` in `frontend/gradle.properties`** is the
+  single source: it generates `com.libraryz.AppVersion` (Settings › About)
+  and is the Android `versionName`. The desktop installer's
+  `packageVersion` stays separate (jpackage requires MAJOR ≥ 1).
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in
