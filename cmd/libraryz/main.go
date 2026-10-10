@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kararnab/iam/redisstore/v2"
+	"github.com/kararnab/iam/v2/ratelimit"
+	"github.com/kararnab/libraryZ/internal/auth"
 	"github.com/kararnab/libraryZ/internal/catalog"
 	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
@@ -19,6 +23,7 @@ import (
 	"github.com/kararnab/libraryZ/internal/storage"
 	"github.com/kararnab/libraryZ/pkg/config"
 	"github.com/kararnab/libraryZ/pkg/db"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -74,18 +79,32 @@ func main() {
 		log.Fatalf("storage: %v", err)
 	}
 
-	h := server.New(server.Deps{
-		DB:              dbConn,
-		Storage:         store,
-		MaxUploadBytes:  cfg.MaxUploadBytes,
-		AllowedOrigins:  cfg.AllowedOrigins,
-		AllowPrivateLAN: cfg.CORSAllowPrivateLAN,
-		AccessTokenTTL:  cfg.AccessTokenTTL,
-		RefreshTokenTTL: cfg.RefreshTokenTTL,
+	perAccount, perIP, err := loginLimiters(cfg)
+	if err != nil {
+		log.Fatalf("login limiter: %v", err)
+	}
+	h, err := server.New(server.Deps{
+		DB:                     dbConn,
+		Storage:                store,
+		MaxUploadBytes:         cfg.MaxUploadBytes,
+		AllowedOrigins:         cfg.AllowedOrigins,
+		AllowPrivateLAN:        cfg.CORSAllowPrivateLAN,
+		JWTSecret:              cfg.JWTSecret,
+		JWTPreviousSecret:      cfg.JWTPreviousSecret,
+		AccessTokenTTL:         cfg.AccessTokenTTL,
+		RefreshTokenTTL:        cfg.RefreshTokenTTL,
+		VerifySessionOnAccess:  cfg.VerifySessionOnAccess,
+		LoginLimiterPerAccount: perAccount,
+		LoginLimiterPerIP:      perIP,
+		TrustedProxies:         cfg.TrustedProxies,
 	})
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
 
 	startRecommendationTraining(dbConn, cfg)
 	startBlobGC(catalog.NewService(dbConn, store), cfg)
+	startSessionPurge(auth.NewSessions(dbConn), cfg)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -215,6 +234,50 @@ func startRecommendationTraining(dbConn *gorm.DB, cfg *config.Config) {
 		defer ticker.Stop()
 		for range ticker.C {
 			train()
+		}
+	}()
+}
+
+// loginLimiters returns the shared, Redis-backed login throttles when
+// LIBRARYZ_REDIS_ADDR is set; otherwise nil, nil (iam then uses per-process
+// in-memory limiters, which only hold up with a single instance). The
+// thresholds match iam's defaults: 5 failures per account and 100 per IP in
+// 15 minutes, then a growing back-off.
+func loginLimiters(cfg *config.Config) (perAccount, perIP ratelimit.Limiter, err error) {
+	if cfg.RedisAddr == "" {
+		log.Printf("auth: LIBRARYZ_REDIS_ADDR unset; login throttling is per-instance (in memory)")
+		return nil, nil, nil
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return nil, nil, fmt.Errorf("redis %s: %w", cfg.RedisAddr, err)
+	}
+	perAccount, err = redisstore.NewLimiter(rdb, "{libraryz}:login:", ratelimit.Config{Threshold: 5})
+	if err != nil {
+		return nil, nil, err
+	}
+	perIP, err = redisstore.NewLimiter(rdb, "{libraryz}:ip:", ratelimit.Config{Threshold: 100})
+	if err != nil {
+		return nil, nil, err
+	}
+	return perAccount, perIP, nil
+}
+
+// startSessionPurge deletes expired sessions on a ticker. Idempotent, so
+// every replica can run it without coordination.
+func startSessionPurge(sessions *auth.Sessions, cfg *config.Config) {
+	go func() {
+		ticker := time.NewTicker(cfg.SessionPurgeInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			n, err := sessions.PurgeExpired(context.Background(), time.Now())
+			if err != nil {
+				log.Printf("auth: session purge failed: %v", err)
+			} else if n > 0 {
+				log.Printf("auth: purged %d expired sessions", n)
+			}
 		}
 	}()
 }

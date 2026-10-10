@@ -90,7 +90,8 @@ curl -s localhost:8080/ready    # readiness: Postgres + blob storage reachable (
 
 curl -s -X POST localhost:8080/auth/signup \
   -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"hunter2","name":"You"}'
+  -d '{"email":"you@example.com","password":"correct horse battery","name":"You"}'
+# {"access_token":"...","refresh_token":"...","token_type":"Bearer","expires_in":900}
 ```
 
 Then point the frontend at it — jump to [Running the client](#running-the-client) below.
@@ -151,8 +152,9 @@ Design notes worth knowing before you contribute:
   splits into `PagedReader` (PDF) and `TextReader` (TXT). New formats are
   a `when` branch in `openReader`, not a new per-platform actual.
 - **Kong is the edge in `docker compose up`.** Per-IP rate limits on
-  `/auth/login` (5/min), `/auth/signup` (3/min), edition uploads (10/hour),
-  service-wide fallback (60/min). The `libraryz` container is intentionally
+  `/auth/login` (5/min), `/auth/signup` (3/min), `/auth/refresh` (20/min),
+  edition uploads (10/hour), service-wide fallback (60/min). The app adds
+  per-account login throttling on top (iam, Redis-backed). The `libraryz` container is intentionally
   not published to the host. See [deploy/kong/kong.yml](deploy/kong/kong.yml).
 
 Deeper walkthrough — component layout, data model, storage interface,
@@ -162,7 +164,9 @@ recommender pipeline, per-platform frontend shims — in
 ## Tech stack
 
 **Backend** — Go 1.26+ · gorilla/mux · GORM · Postgres 16 (SQLite for tests
-via `glebarez/sqlite`) · golang-jwt · bcrypt · minio-go · gonum (for ALS).
+via `glebarez/sqlite`) · [kararnab/iam](https://github.com/kararnab/iam)
+(auth: argon2id, JWT access + rotating refresh tokens, RBAC, login
+throttling) · go-redis · minio-go · gonum (for ALS).
 
 **Frontend** — Kotlin 2.4.21 · Compose Multiplatform 1.12.1 · Ktor client ·
 kotlinx.serialization · AGP 9.4.1 · PDFBox (Desktop) / `PdfRenderer`
@@ -191,7 +195,14 @@ All via environment variables. Defaults work for `docker compose up`.
 | `LIBRARYZ_REC_RETRAIN_INTERVAL`           | `6h`                                                               |
 | `LIBRARYZ_REC_FACTORS`                    | `32`                                                               |
 | `LIBRARYZ_REC_ALPHA`                      | `40`                                                               |
-| `JWT_SECRET`                              | _(unset)_ — must be ≥32 bytes for `cmd/libraryz`; tests use a built-in dev value |
+| `JWT_SECRET`                              | _(unset)_ — HS256 key, must be ≥32 bytes                           |
+| `JWT_SECRET_PREVIOUS`                     | _(unset)_ — old secret, still verifies during a rotation           |
+| `LIBRARYZ_ACCESS_TOKEN_TTL`               | `15m`                                                              |
+| `LIBRARYZ_REFRESH_TOKEN_TTL`              | `720h` — a session's absolute lifetime (also ends after 14 days unused) |
+| `LIBRARYZ_VERIFY_SESSION_ON_ACCESS`       | `false` — `true` makes logout/revocation kill access tokens at once (one DB lookup per request) |
+| `LIBRARYZ_REDIS_ADDR` / `_REDIS_PASSWORD` | _(unset)_ — Redis for login throttling shared by all replicas; unset = per-process memory |
+| `LIBRARYZ_TRUSTED_PROXIES`                | _(unset)_ — CIDRs whose `X-Forwarded-For` is believed (set behind Kong / an LB) |
+| `LIBRARYZ_SESSION_PURGE_INTERVAL`         | `1h` — how often expired sessions are deleted                      |
 
 ## Running the client
 
@@ -223,7 +234,7 @@ Full spec: [openapi/libraryz.yaml](openapi/libraryz.yaml).
 ```
 GET  /health                       liveness
 GET  /ready                        readiness (DB + storage), 503 when degraded
-POST /auth/signup                  {email, password, name}
+POST /auth/signup                  {email, password, name} -> token pair (password: 12–1024 chars)
 POST /auth/login                   {email, password}     -> {access_token, refresh_token, expires_in}
 POST /auth/refresh                 {refresh_token}       -> new pair (single-use, rotating)
 POST /auth/logout                  {refresh_token}       ends that session
@@ -236,11 +247,17 @@ GET  /contributions[?status=pending&limit=&offset=]
 GET  /contributions/{id}
 ```
 
-**Authenticated** (`Authorization: Bearer <jwt>`)
+Tokens come back in the JSON body only. Failed logins are throttled per
+account (5 per 15 minutes) and per IP (100), answering `429` with
+`Retry-After`.
+
+**Authenticated** (`Authorization: Bearer <access_token>`)
 
 ```
 GET  /auth/me
-POST /auth/logout-all                      ends every session (revokes all tokens)
+POST /auth/logout-all                      ends every session (no more refreshes)
+GET  /me/sessions                          the caller's sessions (devices)
+DEL  /me/sessions/{id}                     ends one of them
 POST /works                                {title, authors, description, ...}
 POST /works/{id}/editions                  multipart: format, language?, file
 POST /works/{id}/contributions             {patch: {field: value, ...}}
@@ -253,7 +270,9 @@ GET  /me/recommendations
 POST /me/recommendations/{work_id}/dismiss
 ```
 
-**Moderator-only** (promote users with `UPDATE users SET is_moderator = true WHERE email = '...'`)
+**Moderator-only** (role `moderator`; there's no admin endpoint, promote with
+`INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '...'`.
+Roles ride in the access token, so it takes effect at the next refresh or login.)
 
 ```
 POST /contributions/{id}/approve
@@ -271,12 +290,10 @@ blobs.
 Example:
 
 ```bash
-TOKEN=$(curl -si -X POST localhost:8080/auth/login \
+TOKEN=$(curl -s -X POST localhost:8080/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"a@b.com","password":"x"}' \
-  | awk '/^[Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+/ {
-      sub(/^[Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+/, "");
-      sub(/[\r\n]+$/, ""); print; exit }')
+  -d '{"email":"you@example.com","password":"correct horse battery"}' \
+  | jq -r .access_token)
 
 curl -X POST localhost:8080/works \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

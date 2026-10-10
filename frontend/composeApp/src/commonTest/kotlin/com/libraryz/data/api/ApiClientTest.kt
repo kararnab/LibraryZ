@@ -28,14 +28,18 @@ private fun json(payload: String, status: HttpStatusCode = HttpStatusCode.OK) =
 class ApiClientTest {
 
     @Test
-    fun signupSendsPostAndAcceptsCreated() = runTest {
+    fun signupSendsPostAndReturnsTokenPair() = runTest {
         val engine = MockEngine { req ->
             assertEquals(HttpMethod.Post, req.method)
             assertEquals("/auth/signup", req.url.encodedPath)
-            respond("", HttpStatusCode.Created)
+            respond(
+                """{"access_token":"acc","refresh_token":"ref","token_type":"Bearer","expires_in":900}""",
+                HttpStatusCode.Created,
+                headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
         }
         val api = ApiClient(BASE, engine = engine)
-        api.signUp(SignUpRequest("a@b.com", "pw", "Ada"))
+        assertEquals(Session("acc", "ref"), api.signUp(SignUpRequest("a@b.com", "pw", "Ada")))
         assertEquals(1, engine.requestHistory.size)
     }
 
@@ -50,7 +54,8 @@ class ApiClientTest {
     }
 
     @Test
-    fun loginExtractsBearerFromAuthorizationHeader() = runTest {
+    fun loginIgnoresAuthorizationResponseHeader() = runTest {
+        // Tokens travel in the JSON body only; a header-only response is broken.
         val engine = MockEngine {
             respond(
                 content = "",
@@ -59,12 +64,11 @@ class ApiClientTest {
             )
         }
         val api = ApiClient(BASE, engine = engine)
-        val session = api.login(LoginRequest("a@b.com", "pw"))
-        assertEquals("the.jwt.value", session.token)
+        assertFailsWith<ApiException> { api.login(LoginRequest("a@b.com", "pw")) }
     }
 
     @Test
-    fun loginWithoutAuthHeaderThrows() = runTest {
+    fun loginWithoutTokenPairThrows() = runTest {
         val engine = MockEngine { respond("", HttpStatusCode.OK) }
         val api = ApiClient(BASE, engine = engine)
         assertFailsWith<ApiException> { api.login(LoginRequest("a@b.com", "pw")) }

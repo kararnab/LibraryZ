@@ -32,12 +32,13 @@ build / run commands, see [README.md](README.md) and
                        └──────────────┬──────────────┘
                                       │
                        Ktor HTTP client (commonMain)
-                       JWT in Authorization header
+                 access JWT in Authorization header,
+                 refreshed via Ktor Auth/bearer plugin
                                       │
                                       ▼
    ┌─────────────────────────────────────────────────────────────┐
    │  gorilla/mux router  (internal/server.New(Deps))            │
-   │  ── corsForDev → JWT middleware → handler                   │
+   │  ── cors → iam httpauth.Protect → RequireAuth/Permission → h │
    └─┬────────┬─────────┬─────────────┬──────────────┬──────────┘
      │        │         │             │              │
      ▼        ▼         ▼             ▼              ▼
@@ -66,19 +67,20 @@ build / run commands, see [README.md](README.md) and
 ```
 cmd/libraryz/main.go      single entrypoint: config → DB → storage → trainer → server
 internal/
-  auth/                   signup/login/me, bcrypt hashing, JWT issuance
+  auth/                   iam wiring, GORM stores (users/roles/identities/
+                          credentials/sessions), auth endpoints
   catalog/                Work / Edition / Tag model + service + handlers + search
   contribution/           proposed edits, moderator approve/reject, apply diffs
   library/                UserBook: shelf/status/progress/rating per (user, work)
   recommendation/         implicit-ALS trainer, scorer, cold-start fallback, dismissals
   storage/                Storage interface, Local (FS), S3 (minio-go) impls
-  middleware/             Bearer-JWT middleware, injects user_id into ctx
+  middleware/             UserID(ctx) from iam's subject; IsModerator lookup
   server/                 New(Deps) wires router; shared by main + smoke tests
   httpx/                  small request/response helpers
 pkg/
   config/                 env-var config struct + Load()
   db/                     GORM + Postgres init with pool tuning
-  utils/                  JWT helpers, bcrypt helpers, AppError wrapper
+  utils/                  AppError wrapper
 openapi/libraryz.yaml     hand-written OpenAPI 3.1 spec
 ```
 
@@ -144,9 +146,10 @@ Notable choices:
   both Postgres and SQLite. We deliberately don't use pgvector — it would
   fork the test DB strategy. If recall starts to matter more than
   portability we can revisit.
-- **`User.IsModerator` is `json:"-"`.** The signup handler cannot
-  privilege-escalate via the request body. The `/auth/me` response uses a
-  separate `MeResponse` struct that *does* surface the flag on output.
+- **Roles live in `user_roles`, never in a request body.** Sign-up grants
+  no roles (iam's open sign-up with empty default roles), so the request
+  body can't escalate privileges. `/auth/me` reports `roles` and
+  `is_moderator` from that table.
 
 ## Storage abstraction
 
@@ -268,18 +271,62 @@ real time.
 
 ## Auth + moderation
 
-- **JWT, HS256, in-memory secret.** `JWT_SECRET` from env. No refresh
-  tokens; client logs in again when the token expires.
-- **Bcrypt for passwords.** Cost factor from `golang.org/x/crypto/bcrypt`
-  default.
-- **Middleware** in `internal/middleware/auth.go` parses
-  `Authorization: Bearer …` and injects `user_id` into the request
-  context. Handlers read it with a typed helper, never touch the header.
+Built on [kararnab/iam](https://github.com/kararnab/iam) v2.2.0 (core
+module only). `internal/auth` wires it up; iam does the security-sensitive
+parts, LibraryZ supplies storage and endpoints.
+
+- **Bearer sessions only.** The clients are native apps and Wasm, so there
+  are no cookies and no CSRF tokens. Login and sign-up return a short-lived
+  access token (HS256 JWT, `iss=libraryz`, `aud=libraryz-api`, `kid` per
+  secret, 15 min) and an opaque 256-bit refresh token in the JSON body.
+  Refresh tokens rotate on every use; presenting a rotated one is treated as
+  theft and revokes the whole session. Sessions end after 30 days, or 14
+  days unused. `JWT_SECRET` (≥32 bytes) signs; `JWT_SECRET_PREVIOUS` still
+  verifies during a rotation.
+- **Access tokens are stateless by default.** `logout`, `logout-all` and
+  `DELETE /me/sessions/{id}` stop refreshing at once, but an issued access
+  token works until it expires (≤15 min). That was a deliberate trade for
+  no per-request DB lookup; `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` flips
+  it (one session lookup per authenticated request, immediate revocation).
+- **Passwords:** argon2id (iam's OWASP baseline parameters), 12–1024
+  characters. bcrypt hashes from before iam are verified and upgraded on
+  login. Unknown accounts cost the same hash time as wrong passwords, and
+  get the same `401`.
+- **Login throttling:** iam's per-account (5 failures / 15 min) and per-IP
+  (100) limiters with a growing back-off, on Redis (`LIBRARYZ_REDIS_ADDR`,
+  `iam/redisstore`) so every replica shares the counts; in-memory per process
+  when unset. This sits on top of Kong's per-IP route limits. The client IP
+  comes from `X-Forwarded-For` only when the peer is in
+  `LIBRARYZ_TRUSTED_PROXIES` — set it behind Kong, or every client shares
+  Kong's IP.
+- **Storage is ours, checked by iam's conformance suite.** GORM adapters in
+  `internal/auth` implement `iam.UserStore` + `password.CredentialStore`
+  (`users`, `user_roles`, `identities`, `password_credentials`) and
+  `session.Store` (`sessions`, `session_rotations`). We don't use
+  `iam/pgstore`: it uses Postgres-only types (`TEXT[]`, `JSONB`) and raw pgx,
+  while our tests run on SQLite and our DB layer is GORM.
+  `internal/auth/store_test.go` runs `storetest.Users` / `storetest.Sessions`
+  on SQLite, and `store_postgres_test.go` on Postgres (`-tags=postgres`).
+  Expired sessions are purged hourly (`LIBRARYZ_SESSION_PURGE_INTERVAL`).
+- **Numeric user ids stay.** `users.id` is still a `uint` referenced by
+  contributions, user_books, rec_* and editions.uploaded_by; it crosses the
+  iam boundary as a decimal string. `middleware.UserID(ctx) (uint, bool)`
+  reads iam's subject (`httpauth.SubjectFrom`), so handlers didn't change.
+- **Middleware:** `httpauth.Protect` wraps the router and identifies the
+  caller from `Authorization: Bearer …` (missing or invalid → anonymous; two
+  headers → anonymous). `RequireAuth` gates the authed routes. Its
+  cross-origin protection is off: with no ambient credentials it has nothing
+  to protect, and browser access is governed by the CORS allowlist.
+- **Moderation is RBAC.** Role `moderator` grants `moderate contribution`,
+  `delete edition` and `delete work`; routes check them with
+  `RequirePermission`, deny by default. Roles ride in the access token, so a
+  promotion or demotion reaches those routes at the next refresh (≤15 min).
+  `/auth/me` and the service-level check in `catalog.DeleteWork` read
+  `user_roles` directly, so they're immediate.
 - **Moderator promotion is by DB write.** There's deliberately no admin
-  endpoint yet — `UPDATE users SET is_moderator = true WHERE email = '…'`
-  is the supported v0. This keeps the attack surface tiny while we're
-  small. A real `/admin/users` flow is on the roadmap once we have any
-  notion of an admin role beyond "is_moderator boolean."
+  endpoint yet:
+  `INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '…'`.
+  This keeps the attack surface tiny while we're small.
 
 ## Frontend architecture
 
@@ -290,7 +337,8 @@ The Compose Multiplatform app lives under `frontend/`. Three layers in
 commonMain/        UI screens (ui/screens/*), state holders, ApiClient,
                    navigation, Reader interface, TextReader impl. Knows
                    nothing about platforms.
-commonTest/        ktor-client-mock based tests for ApiClient, AuthState.
+commonTest/        ktor-client-mock based tests for ApiClient, AuthState
+                   (incl. token refresh via Ktor's Auth/bearer plugin).
                    Uses FakeTokenStore.
 androidMain/       actuals: AndroidPdfReader (PdfRenderer),
                    ActivityResultContracts file picker,

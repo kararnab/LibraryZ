@@ -4,12 +4,14 @@ go 1.26.0
 
 require (
 	github.com/glebarez/sqlite v1.11.0
-	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
+	github.com/kararnab/iam/redisstore/v2 v2.2.0
+	github.com/kararnab/iam/v2 v2.2.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/pdfcpu/pdfcpu v0.16.1
 	github.com/pressly/goose/v3 v3.28.0
+	github.com/redis/go-redis/v9 v9.22.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
 	gonum.org/v1/gonum v0.17.0
@@ -47,6 +49,7 @@ require (
 	github.com/sethvargo/go-retry v0.5.0 // indirect
 	github.com/tinylib/msgp v1.6.5 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/image v0.46.0 // indirect

@@ -13,6 +13,15 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 ## [Unreleased]
 
 ### Security
+- **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.2.0**
+  ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the
+  hand-written JWT/refresh code. Passwords are hashed with argon2id (bcrypt
+  hashes are upgraded on login) and must be 12–1024 characters (was 8).
+  Failed logins are throttled per account (5 per 15 minutes) and per IP
+  (100), with a growing back-off; the counters live in Redis
+  (`LIBRARYZ_REDIS_ADDR`) so every replica shares them. Unknown accounts and
+  wrong passwords take the same time and get the same answer. Behind Kong,
+  set `LIBRARYZ_TRUSTED_PROXIES` so the per-IP limit sees real client IPs.
 - **PDF sanitization runs in a memory-capped child process.** pdfcpu
   inflates compressed object streams in full while parsing, so a ~300 KiB
   PDF could drive the server to gigabytes of heap and an OOM kill. PDFs are
@@ -86,6 +95,23 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   modal. Optimized with pngquant (~75% size reduction).
 
 ### Changed
+- **Auth API** ([#21](https://github.com/kararnab/LibraryZ/issues/21)):
+  `POST /auth/signup` now signs in and returns the token pair (`201`);
+  login and signup return tokens in the JSON body only (the `Authorization`
+  response header is gone). New `GET /me/sessions` and
+  `DELETE /me/sessions/{id}`. `/auth/me` adds `roles`. Moderation is the
+  RBAC role `moderator` (`INSERT INTO user_roles …`) instead of
+  `users.is_moderator`; roles ride in the access token, so a promotion
+  reaches moderator routes at the next refresh. Access tokens are stateless
+  by default: logout / logout-all stop refreshes at once, but issued access
+  tokens last until they expire (≤15 min) unless
+  `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true`. Kong rate-limits `/auth/refresh`
+  (20/min) and `/auth/logout` (10/min) separately. The schema changed (new
+  `user_roles`, `identities`, `password_credentials`, `sessions`,
+  `session_rotations`; `refresh_tokens` and the password / moderator /
+  token-version columns are gone): wipe dev databases with
+  `docker compose down -v`. The frontend renews tokens with Ktor's `Auth`
+  bearer plugin.
 - **Frontend toolchain upgrade.** Kotlin 2.0.21 → 2.4.21, Compose
   Multiplatform 1.7.3 → 1.12.1, AGP 8.7.3 → 9.4.1, Gradle 8.14.3 → 9.8.1,
   compileSdk/targetSdk 35 → 37, plus Ktor 3.6.0, kotlinx-coroutines 1.11.0,

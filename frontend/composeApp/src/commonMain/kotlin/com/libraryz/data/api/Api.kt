@@ -11,12 +11,14 @@ import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.call.body
 import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.plugins.auth.Auth
+import io.ktor.client.plugins.auth.providers.BearerTokens
+import io.ktor.client.plugins.auth.providers.RefreshTokensParams
+import io.ktor.client.plugins.auth.providers.bearer
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
-import io.ktor.client.request.HttpRequestBuilder
-import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.delete
@@ -32,6 +34,7 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.encodedPath
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
@@ -94,8 +97,8 @@ data class TokenPairResponse(
 
 /**
  * How [ApiClient] keeps a session alive. Implemented by [AuthState]:
- * - [refreshToken] is presented to `/auth/refresh` when an authenticated
- *   call gets a 401;
+ * - [refreshToken] is presented to `/auth/refresh` when a call gets a 401
+ *   (Ktor's `Auth` plugin, `bearer { refreshTokens }`);
  * - [onRefreshed] persists the rotated pair;
  * - [onSessionExpired] is called when the session can't be renewed (refresh
  *   token rejected), so the app can clear it and send the user to sign in.
@@ -105,6 +108,13 @@ interface SessionHooks {
     suspend fun onRefreshed(session: Session)
     suspend fun onSessionExpired()
 }
+
+/**
+ * Endpoints that take credentials in the body and must never carry a
+ * (possibly stale) access token: sending one to `/auth/refresh` would also
+ * let the bearer provider try to "refresh" a failed refresh.
+ */
+private val anonymousAuthPaths = listOf("/auth/login", "/auth/signup", "/auth/refresh", "/auth/logout")
 
 /** [filename] is null when the server didn't name the file. */
 class DownloadedFile(val filename: String?, val bytes: ByteArray)
@@ -176,8 +186,13 @@ class DuplicateEditionException(
 /**
  * Tiny HTTP client wrapping the LibraryZ backend. Engine is auto-selected
  * from whichever ktor-client-<engine> dep is on the source set's classpath.
- * `tokenProvider` supplies the JWT for authenticated endpoints — callers
- * that need auth opt in via [maybeAuth]; public endpoints don't.
+ *
+ * Auth is Ktor's `Auth` plugin with a `bearer` provider: [tokenProvider]
+ * supplies the access token, attached to every request except the
+ * credential endpoints ([anonymousAuthPaths]); on a 401 the plugin calls
+ * [renew], which rotates the pair via `/auth/refresh` and retries once.
+ * Public endpoints accept the token too (an expired one is simply ignored
+ * server-side), so there's no per-call opt-in.
  */
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 class ApiClient(
@@ -201,85 +216,86 @@ class ApiClient(
         expectSuccess = false
         install(ContentNegotiation) { json(this@ApiClient.json) }
         install(Logging) { level = LogLevel.INFO }
+        install(Auth) {
+            bearer {
+                // AuthState is the source of truth (sign-in, sign-out and
+                // refreshes all go through it), so read it on every request
+                // rather than letting the plugin cache a stale pair.
+                cacheTokens = false
+                loadTokens { tokenProvider()?.let { BearerTokens(it, sessionHooks?.refreshToken) } }
+                sendWithoutRequest { req -> anonymousAuthPaths.none { req.url.encodedPath.endsWith(it) } }
+                refreshTokens { renew() }
+            }
+        }
         defaultRequest {
             contentType(ContentType.Application.Json)
         }
     }
-
-    private fun HttpRequestBuilder.maybeAuth() {
-        tokenProvider()?.let { bearerAuth(it) }
-    }
-
-    private enum class RefreshOutcome { Refreshed, Expired, Unavailable }
 
     // Refresh tokens are single-use and the backend revokes the whole session
     // if one is presented twice, so concurrent 401s must share one refresh.
     private val refreshLock = Mutex()
 
     /**
-     * Runs an authenticated request ([send] must call [maybeAuth], so a retry
-     * picks up the new token). On 401 it refreshes the session once and
-     * retries. If the session can't be renewed it reports expiry via
-     * [SessionHooks.onSessionExpired] and returns the 401 for the caller to
-     * surface. A transient refresh failure (offline, 5xx) keeps the session.
+     * The bearer provider's `refreshTokens`: rotates the pair via
+     * `/auth/refresh`. Returns the new tokens (the plugin retries the request
+     * with them) or null (the 401 goes back to the caller).
+     *
+     * - Another request already refreshed while we waited: reuse its tokens.
+     * - Refresh rejected (401/400): the session is gone — report it via
+     *   [SessionHooks.onSessionExpired] so the app signs the user out.
+     * - Transient failure (offline, 429, 5xx): keep the session.
      */
-    private suspend fun authed(send: suspend () -> HttpResponse): HttpResponse {
-        val hooks = sessionHooks
-        val tokenUsed = tokenProvider()
-        val resp = send()
-        if (resp.status != HttpStatusCode.Unauthorized || hooks == null || tokenUsed == null) return resp
-        return when (refreshAfter401(hooks, tokenUsed)) {
-            RefreshOutcome.Refreshed -> {
-                val retry = send()
-                // Fresh token still refused: the session was revoked server-side.
-                if (retry.status == HttpStatusCode.Unauthorized) hooks.onSessionExpired()
-                retry
+    private suspend fun RefreshTokensParams.renew(): BearerTokens? {
+        val hooks = sessionHooks ?: return null
+        return refreshLock.withLock {
+            val current = tokenProvider() ?: return@withLock null
+            if (current != oldTokens?.accessToken) {
+                return@withLock BearerTokens(current, hooks.refreshToken)
             }
-            RefreshOutcome.Expired -> {
+            val refresh = hooks.refreshToken ?: run {
                 hooks.onSessionExpired()
-                resp
+                return@withLock null
             }
-            RefreshOutcome.Unavailable -> resp
-        }
-    }
-
-    private suspend fun refreshAfter401(hooks: SessionHooks, staleToken: String): RefreshOutcome =
-        refreshLock.withLock {
-            val current = tokenProvider() ?: return@withLock RefreshOutcome.Expired
-            // Another request refreshed while we waited for the lock.
-            if (current != staleToken) return@withLock RefreshOutcome.Refreshed
-            val refresh = hooks.refreshToken ?: return@withLock RefreshOutcome.Expired
             val resp = try {
-                client.post("$baseUrl/auth/refresh") { setBody(RefreshRequest(refresh)) }
+                client.post("$baseUrl/auth/refresh") {
+                    markAsRefreshTokenRequest()
+                    setBody(RefreshRequest(refresh))
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                return@withLock RefreshOutcome.Unavailable
+                return@withLock null
             }
             when {
                 resp.status.isSuccess() -> {
                     val pair: TokenPairResponse = resp.body()
                     hooks.onRefreshed(Session(pair.accessToken, pair.refreshToken))
-                    RefreshOutcome.Refreshed
+                    BearerTokens(pair.accessToken, pair.refreshToken)
                 }
-                resp.status == HttpStatusCode.TooManyRequests || resp.status.value >= 500 ->
-                    RefreshOutcome.Unavailable
-                else -> RefreshOutcome.Expired
+                resp.status == HttpStatusCode.TooManyRequests || resp.status.value >= 500 -> null
+                else -> {
+                    hooks.onSessionExpired()
+                    null
+                }
             }
         }
+    }
 
     // ----- Auth -----
 
-    suspend fun signUp(req: SignUpRequest) {
+    /** Creates the account and signs in: the server returns a token pair. */
+    suspend fun signUp(req: SignUpRequest): Session {
         val resp = client.post("$baseUrl/auth/signup") { setBody(req) }
         if (resp.status != HttpStatusCode.Created) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "signup failed")
         }
+        return resp.toSession("signup")
     }
 
     /** Authenticated. Reads live DB state for `is_moderator`. */
     suspend fun me(): User {
-        val resp = authed { client.get("$baseUrl/auth/me") { maybeAuth() } }
+        val resp = client.get("$baseUrl/auth/me")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "me failed")
         }
@@ -291,20 +307,15 @@ class ApiClient(
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "login failed")
         }
-        // Current backends return the token pair as JSON; older ones only set
-        // the Authorization header (no refresh token).
-        val pair = runCatching { resp.body<TokenPairResponse>() }.getOrNull()
-        if (pair != null && pair.accessToken.isNotBlank()) {
-            return Session(pair.accessToken, pair.refreshToken.ifBlank { null })
+        return resp.toSession("login")
+    }
+
+    private suspend fun HttpResponse.toSession(what: String): Session {
+        val pair = runCatching { body<TokenPairResponse>() }.getOrNull()
+        if (pair == null || pair.accessToken.isBlank() || pair.refreshToken.isBlank()) {
+            throw ApiException(status.value, bodyAsText(), "$what response has no token pair")
         }
-        val auth = resp.headers["Authorization"]
-            ?: throw ApiException(resp.status.value, resp.bodyAsText(),
-                "login response missing Authorization header")
-        val token = auth.removePrefix("Bearer ").trim()
-        if (token.isEmpty()) {
-            throw ApiException(resp.status.value, auth, "empty bearer token")
-        }
-        return Session(token)
+        return Session(pair.accessToken, pair.refreshToken)
     }
 
     /** Ends the session [refreshToken] belongs to. Best-effort; never throws for HTTP errors. */
@@ -314,7 +325,7 @@ class ApiClient(
 
     /** Authenticated. Ends every session of the current user on every device. */
     suspend fun logoutAll() {
-        val resp = authed { client.post("$baseUrl/auth/logout-all") { maybeAuth() } }
+        val resp = client.post("$baseUrl/auth/logout-all")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "logout everywhere failed")
         }
@@ -373,7 +384,7 @@ class ApiClient(
 
     /** Moderator-only. Approves a pending contribution and applies its patch. */
     suspend fun approveContribution(id: String): Contribution {
-        val resp = authed { client.post("$baseUrl/contributions/$id/approve") { maybeAuth() } }
+        val resp = client.post("$baseUrl/contributions/$id/approve")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "approve failed")
         }
@@ -382,7 +393,7 @@ class ApiClient(
 
     /** Moderator-only. Rejects a pending contribution without applying it. */
     suspend fun rejectContribution(id: String): Contribution {
-        val resp = authed { client.post("$baseUrl/contributions/$id/reject") { maybeAuth() } }
+        val resp = client.post("$baseUrl/contributions/$id/reject")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "reject failed")
         }
@@ -391,11 +402,8 @@ class ApiClient(
 
     /** Authenticated. Submits a proposed edit (flat partial patch) for a work. */
     suspend fun submitContribution(workId: String, patch: Map<String, JsonElement>): Contribution {
-        val resp = authed {
-            client.post("$baseUrl/works/$workId/contributions") {
-                maybeAuth()
-                setBody(SubmitContributionRequest(patch))
-            }
+        val resp = client.post("$baseUrl/works/$workId/contributions") {
+            setBody(SubmitContributionRequest(patch))
         }
         if (resp.status != HttpStatusCode.Created) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "submit contribution failed")
@@ -408,11 +416,8 @@ class ApiClient(
      * work; anyone else only a work they created that has no editions.
      */
     suspend fun deleteWork(id: String, reason: String) {
-        val resp = authed {
-            client.delete("$baseUrl/works/$id") {
-                maybeAuth()
-                setBody(RemovalRequest(reason))
-            }
+        val resp = client.delete("$baseUrl/works/$id") {
+            setBody(RemovalRequest(reason))
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove work failed")
@@ -421,11 +426,8 @@ class ApiClient(
 
     /** Moderator-only. Takes a single edition down (soft delete). */
     suspend fun deleteEdition(id: String, reason: String) {
-        val resp = authed {
-            client.delete("$baseUrl/editions/$id") {
-                maybeAuth()
-                setBody(RemovalRequest(reason))
-            }
+        val resp = client.delete("$baseUrl/editions/$id") {
+            setBody(RemovalRequest(reason))
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove edition failed")
@@ -434,11 +436,8 @@ class ApiClient(
 
     /** Authenticated. Creates a new Work (no file attached). */
     suspend fun createWork(req: CreateWorkRequest): Work {
-        val resp = authed {
-            client.post("$baseUrl/works") {
-                maybeAuth()
-                setBody(req)
-            }
+        val resp = client.post("$baseUrl/works") {
+            setBody(req)
         }
         if (resp.status != HttpStatusCode.Created) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "create work failed")
@@ -450,12 +449,9 @@ class ApiClient(
 
     /** Lists the caller's library entries, optionally filtered. */
     suspend fun listLibrary(status: String? = null, shelf: String? = null): List<UserBook> {
-        val resp = authed {
-            client.get("$baseUrl/me/library") {
-                maybeAuth()
-                if (status != null) parameter("status", status)
-                if (shelf != null) parameter("shelf", shelf)
-            }
+        val resp = client.get("$baseUrl/me/library") {
+            if (status != null) parameter("status", status)
+            if (shelf != null) parameter("shelf", shelf)
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "list library failed")
@@ -469,7 +465,7 @@ class ApiClient(
      * error, so it maps to null rather than throwing.
      */
     suspend fun getLibraryEntry(workId: String): UserBook? {
-        val resp = authed { client.get("$baseUrl/me/library/$workId") { maybeAuth() } }
+        val resp = client.get("$baseUrl/me/library/$workId")
         if (resp.status == HttpStatusCode.NotFound) return null
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "get library entry failed")
@@ -479,11 +475,8 @@ class ApiClient(
 
     /** Creates or updates the caller's entry for [workId] (partial patch). */
     suspend fun upsertLibraryEntry(workId: String, req: UpsertLibraryRequest): UserBook {
-        val resp = authed {
-            client.put("$baseUrl/me/library/$workId") {
-                maybeAuth()
-                setBody(req)
-            }
+        val resp = client.put("$baseUrl/me/library/$workId") {
+            setBody(req)
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "upsert library entry failed")
@@ -493,7 +486,7 @@ class ApiClient(
 
     /** Removes the work from the caller's library. */
     suspend fun removeFromLibrary(workId: String) {
-        val resp = authed { client.delete("$baseUrl/me/library/$workId") { maybeAuth() } }
+        val resp = client.delete("$baseUrl/me/library/$workId")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove from library failed")
         }
@@ -501,11 +494,8 @@ class ApiClient(
 
     /** Authenticated. Personalized recommendations (MF model + fallback). */
     suspend fun recommendations(limit: Int = 20): List<Recommendation> {
-        val resp = authed {
-            client.get("$baseUrl/me/recommendations") {
-                maybeAuth()
-                parameter("limit", limit)
-            }
+        val resp = client.get("$baseUrl/me/recommendations") {
+            parameter("limit", limit)
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "recommendations failed")
@@ -515,7 +505,7 @@ class ApiClient(
 
     /** Authenticated. Hides a work from future recommendations. */
     suspend fun dismissRecommendation(workId: String) {
-        val resp = authed { client.post("$baseUrl/me/recommendations/$workId/dismiss") { maybeAuth() } }
+        val resp = client.post("$baseUrl/me/recommendations/$workId/dismiss")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "dismiss recommendation failed")
         }
@@ -553,24 +543,20 @@ class ApiClient(
         fileName: String,
         bytes: ByteArray,
     ): Edition {
-        val resp = authed {
-            client.submitFormWithBinaryData(
-                url = "$baseUrl/works/$workId/editions",
-                formData = formData {
-                    append("format", format)
-                    if (!language.isNullOrBlank()) append("language", language)
-                    append(
-                        key = "file",
-                        value = bytes,
-                        headers = Headers.build {
-                            append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
-                        },
-                    )
-                },
-            ) {
-                maybeAuth()
-            }
-        }
+        val resp = client.submitFormWithBinaryData(
+            url = "$baseUrl/works/$workId/editions",
+            formData = formData {
+                append("format", format)
+                if (!language.isNullOrBlank()) append("language", language)
+                append(
+                    key = "file",
+                    value = bytes,
+                    headers = Headers.build {
+                        append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                    },
+                )
+            },
+        )
         if (resp.status == HttpStatusCode.Conflict) {
             val dup = runCatching {
                 json.decodeFromString(DuplicateEditionBody.serializer(), resp.bodyAsText())

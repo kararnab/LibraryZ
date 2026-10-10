@@ -174,8 +174,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   reintroduce one. **Downloads stream through the backend**
   (`GET /editions/{id}/download` → `store.Get` → `io.Copy`); there are
   **no presigned URLs** — fine at the current scale (public downloads,
-  500 MiB cap). Current `golang.org/x/*`, pdfcpu and goose releases
-  require **go 1.26** (the go.mod directive); the Docker builder
+  500 MiB cap). Current `golang.org/x/*`, pdfcpu, goose and
+  `kararnab/iam` releases require **go 1.26** (the go.mod directive); the Docker builder
   (`golang:1.27-alpine`) and CI build with Go 1.27. pdfcpu ≥0.16 takes a
   `context.Context` on `api.ReadContext`/`WriteContext`.
   **Compose runs RustFS, not MinIO** (`rustfs/rustfs`, pinned): MinIO stopped
@@ -209,8 +209,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST /me/recommendations/{id}/dismiss`, and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-08: 127 backend + 88 frontend
-  tests** (+1 with `-tags=eval`, +9 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-10: 127 backend + 91 frontend
+  tests** (+1 with `-tags=eval`, +11 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -221,14 +221,17 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (`catalog.Service.CollectGarbage`, `runlock.KeyBlobGC`) deletes blobs no
   live edition references after `LIBRARYZ_BLOB_GC_RETENTION`; it needs
   `storage.Storage.List`.
-- **Moderator promotion (v0): there is no admin endpoint.** Update the
-  DB directly. Postgres or sqlite:
+- **Moderator promotion (v0): there is no admin endpoint.** Moderation is
+  the RBAC role `moderator` in `user_roles`; grant it in the DB directly.
+  Postgres or sqlite:
   ```sql
-  UPDATE users SET is_moderator = true WHERE email = 'you@example.com';
+  INSERT INTO user_roles (user_id, role)
+  SELECT id, 'moderator' FROM users WHERE email = 'you@example.com';
   ```
-  `User.IsModerator` is `json:"-"` so signup-time privilege escalation
-  via the request body is blocked; the `/auth/me` response uses its own
-  `MeResponse` struct to expose the flag on output.
+  Roles ride in the access token, so moderator routes see a promotion at
+  the user's next refresh/login (≤15 min); `/auth/me` and
+  `middleware.IsModerator` read the table and see it at once. Sign-up never
+  grants roles, so the request body can't escalate privileges.
 - **Wasm parity (2026-05-26):** file picker, download, **and PDF
   preview** all real. PDF preview uses pdf.js v3.11.174 (UMD global)
   loaded from cdnjs in `index.html`; Wasm `PdfBackend` bridges via
@@ -251,16 +254,30 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
     resolve callback, JS invokes it, Kotlin wraps in
     `suspendCancellableCoroutine`. Look for `awaitHandle` / `awaitBytes`
     in that file. Don't replace those with `.await()`.
-- **Sessions = short access JWT + rotating refresh token.** Access tokens
-  (15m, `kid` header, `tv` claim) are checked against `users.token_version`
-  by `middleware.Auth(db)` — bump it to revoke everything
-  (`/auth/logout-all`). Refresh tokens are opaque, stored as sha256, single
-  use; presenting a spent one revokes its whole family. Frontend:
-  `ApiClient` wraps authed calls in `authed {}` (one serialized refresh on
-  401, then retry); `AuthState` is its `SessionHooks` and raises
-  `sessionExpired` when renewal fails, which sends `App` to sign-in. Never
-  run two refreshes for one session in parallel. Secret rotation:
-  `JWT_SECRET_PREVIOUS`.
+- **Auth is github.com/kararnab/iam v2.2.0 (core module only), bearer
+  mode only.** `internal/auth` wires it: argon2id passwords (12–1024 chars),
+  15m HS256 access JWTs + opaque single-use refresh tokens (reuse revokes the
+  session), RBAC, per-account/per-IP login throttling (Redis via
+  `iam/redisstore` when `LIBRARYZ_REDIS_ADDR` is set, else memory). **Don't
+  switch to `iam/pgstore`** — it needs Postgres-only types and pgx; our GORM
+  adapters (`internal/auth/users.go`, `sessions.go`) must keep passing iam's
+  `storetest` suite (`store_test.go` on sqlite, `store_postgres_test.go`).
+  User ids stay `uint`; they cross the iam boundary as decimal strings
+  (`middleware.SubjectID` / `ParseSubjectID`), and `middleware.UserID(ctx)`
+  reads `httpauth.SubjectFrom`. Access tokens are **stateless** by default
+  (`VerifySessionOnAccess` off): logout / logout-all / `DELETE
+  /me/sessions/{id}` stop refreshes at once, but issued access tokens live
+  out their 15 minutes; `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` changes
+  that. httpauth's CSRF/cross-origin checks are disabled on purpose (no
+  cookies; CORS governs browsers). Set `LIBRARYZ_TRUSTED_PROXIES` behind
+  Kong or the per-IP limit sees every client as Kong. Secret rotation:
+  `JWT_SECRET_PREVIOUS`. Frontend: `ApiClient` uses Ktor's `Auth` plugin
+  (`bearer { loadTokens; refreshTokens }`, `cacheTokens = false` so it
+  reads `AuthState` per request); `renew()` serializes refreshes behind a
+  mutex and reuses a refresh another request already did. Never run two
+  refreshes for one session in parallel. `AuthState` is its `SessionHooks`
+  and raises `sessionExpired` when renewal fails, which sends `App` to
+  sign-in with a snackbar.
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

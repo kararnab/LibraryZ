@@ -810,6 +810,9 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      reachable. ✓
 103. **Auth header parsing + stricter JWT validation** ([#8](https://github.com/kararnab/LibraryZ/issues/8)).
      Match the scheme case-insensitively, require `exp`, and pin HS256. ✓
+     **Superseded by slice 7.5** ([#21](https://github.com/kararnab/LibraryZ/issues/21)):
+     header parsing and JWT validation are now iam's (`httpauth`, `token/jwt`);
+     the smoke test `TestMalformedAuthorizationHeaders` keeps the regression cover.
 104. **Escape `LIKE` wildcards in the sqlite search fallback** ([#9](https://github.com/kararnab/LibraryZ/issues/9)). ✓
 
 **Slice 7.3 — 2-instance readiness (the next steps after Phase 6).**
@@ -846,6 +849,10 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      the NewWork upload flow does so when its upload is rejected. ✓
 110. Weighted `ts_rank` relevance ordering on Postgres search ([#14](https://github.com/kararnab/LibraryZ/issues/14)). ✓
 111. Short-lived access tokens + refresh + revocation ([#15](https://github.com/kararnab/LibraryZ/issues/15)). ✓
+     **Superseded by slice 7.5** ([#21](https://github.com/kararnab/LibraryZ/issues/21)):
+     the hand-written token/refresh implementation was replaced by iam's
+     sessions. Note the one behavior change: access tokens are now stateless
+     by default (no per-request `token_version` check), see item 117.
 112. Versioned migrations (sqlite + Postgres), run under a lock
      ([#16](https://github.com/kararnab/LibraryZ/issues/16)). **Framework
      landed early** (goose, Go migrations over GORM, Postgres advisory lock,
@@ -862,9 +869,52 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
 114. Tag **`v0.1.0`** once 7.1–7.3 are merged (CHANGELOG `[Unreleased]` →
      dated section).
 
+**Slice 7.5 — adopt [kararnab/iam](https://github.com/kararnab/iam) for auth**
+([#21](https://github.com/kararnab/LibraryZ/issues/21); supersedes the custom
+auth of #15 and #8, and covers #6's frontend part).
+115. **iam core module, GORM stores.** `internal/auth` wires iam v2.2.0:
+     password provider (argon2id, 12–1024 chars, bcrypt upgraded on login),
+     bearer sessions, HS256 JWTs (`JWT_SECRET`, `JWT_SECRET_PREVIOUS`), RBAC.
+     Not `iam/pgstore` (Postgres-only `TEXT[]`/`JSONB`, raw pgx); instead GORM
+     adapters for `iam.UserStore` + `password.CredentialStore` (`users`,
+     `user_roles`, `identities`, `password_credentials`) and `session.Store`
+     (`sessions`, `session_rotations`), checked by iam's `storetest` suite on
+     sqlite and Postgres. User ids stay `uint`, as decimal strings at the iam
+     boundary; `middleware.UserID` reads `httpauth.SubjectFrom`. Removed:
+     the old auth service, `pkg/utils/jwt.go`, `middleware.Auth/Moderator`,
+     `golang-jwt`. Baseline edited in place (pre-alpha). ✓
+116. **API.** Login/signup return the token pair in the JSON body (no
+     `Authorization` response header); `/auth/refresh`, `/auth/logout`,
+     `/auth/logout-all`, `/auth/me`, plus `GET /me/sessions` and
+     `DELETE /me/sessions/{id}`. Kong gives `/auth/refresh` its own limit
+     (20/min) separate from `/auth/logout` (10/min). Moderator routes use
+     `RequirePermission` on role `moderator` (promote via
+     `INSERT INTO user_roles`). ✓
+117. **Stateless access tokens (trade-off).** `VerifySessionOnAccess` is off:
+     logout / logout-all / session revocation stop refreshing immediately,
+     but an issued access token stays valid until it expires (≤15 min).
+     Before 7.5, logout-all killed access tokens at once via
+     `users.token_version` (one lookup per request). Roles also ride in the
+     token, so a promotion or demotion reaches moderator routes at the next
+     refresh. `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` restores immediate
+     revocation (not role freshness) at one session lookup per request.
+     Revisit if a real takedown-of-a-user flow appears. ✓
+118. **Login throttling.** iam's per-account (5 failures / 15 min) and
+     per-IP (100) limiters with back-off, on Redis via `iam/redisstore`
+     (`LIBRARYZ_REDIS_ADDR`), shared by every replica; on top of Kong's
+     per-IP route limits. Falls back to per-process memory when unset (fine
+     for one instance). The client IP honors `X-Forwarded-For` only from
+     `LIBRARYZ_TRUSTED_PROXIES` (compose trusts the private ranges, i.e. Kong). ✓
+119. **Frontend.** `ApiClient` uses Ktor's `Auth` plugin
+     (`bearer { loadTokens; refreshTokens }` against `/auth/refresh`,
+     refreshes serialized and de-duplicated); a rejected refresh clears
+     `AuthState` and returns to `Screen.Auth` with a snackbar; signup signs
+     in directly. `TokenStore` stays an interface and stores both tokens. ✓
+
 **Sequencing.** 7.1 → 7.2 → 7.3 are each one PR-sized slice and land in
-order. 7.4 items are independent and can go in any order after that. Schema
-changes (#13, #15) went straight into the migration baseline.
+order. 7.4 items are independent and can go in any order after that. 7.5
+lands before the `v0.1.0` tag, since it changes the auth API and schema.
+Schema changes (#13, #15, #21) went straight into the migration baseline.
 
 **Pre-alpha data policy (decided 2026-10-04).** LibraryZ is not even alpha,
 and there is no deployment whose data matters. **Data loss is acceptable

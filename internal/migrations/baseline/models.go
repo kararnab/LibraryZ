@@ -19,23 +19,49 @@ import (
 )
 
 type User struct {
-	ID           uint   `gorm:"primaryKey"`
-	Email        string `gorm:"uniqueIndex"`
-	Password     string
-	Name         string
-	IsModerator  bool
-	TokenVersion int `gorm:"not null;default:0"`
+	ID        uint   `gorm:"primaryKey"`
+	Email     string `gorm:"uniqueIndex"`
+	Name      string
+	Disabled  bool `gorm:"not null;default:false"`
+	CreatedAt time.Time
 }
 
-type RefreshToken struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
-	UserID    uint      `gorm:"not null;index"`
-	FamilyID  uuid.UUID `gorm:"type:uuid;not null;index"`
-	TokenHash string    `gorm:"size:64;not null;uniqueIndex"`
-	ExpiresAt time.Time `gorm:"not null"`
-	UsedAt    *time.Time
-	RevokedAt *time.Time
-	CreatedAt time.Time
+type UserRole struct {
+	UserID uint   `gorm:"primaryKey;autoIncrement:false"`
+	Role   string `gorm:"primaryKey;size:64"`
+	User   User   `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type Identity struct {
+	Provider   string `gorm:"primaryKey;size:64"`
+	ProviderID string `gorm:"primaryKey;size:320"`
+	UserID     uint   `gorm:"not null;index"`
+	User       User   `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	CreatedAt  time.Time
+}
+
+type PasswordCredential struct {
+	Login     string `gorm:"primaryKey;size:320"`
+	Hash      string `gorm:"not null"`
+	UpdatedAt time.Time
+}
+
+type Session struct {
+	ID         string    `gorm:"primaryKey;size:64"`
+	SubjectID  string    `gorm:"not null;index;size:32"`
+	Mode       string    `gorm:"not null;size:16"`
+	TokenHash  []byte    `gorm:"not null;uniqueIndex"`
+	CreatedAt  time.Time `gorm:"not null"`
+	LastUsedAt time.Time `gorm:"not null"`
+	ExpiresAt  time.Time `gorm:"not null;index"`
+	Attrs      datatypes.JSON
+}
+
+type SessionRotation struct {
+	TokenHash []byte    `gorm:"primaryKey"`
+	SessionID string    `gorm:"not null;index;size:64"`
+	Session   Session   `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE"`
+	RotatedAt time.Time `gorm:"not null"`
 }
 
 type Work struct {
@@ -146,7 +172,7 @@ func (Dismissal) TableName() string { return "rec_dismissals" }
 // All lists every model, in dependency order, for AutoMigrate.
 func All() []any {
 	return []any{
-		&User{}, &RefreshToken{},
+		&User{}, &UserRole{}, &Identity{}, &PasswordCredential{}, &Session{}, &SessionRotation{},
 		&Work{}, &Edition{}, &Tag{},
 		&Contribution{},
 		&UserBook{},

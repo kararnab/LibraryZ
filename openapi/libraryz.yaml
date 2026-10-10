@@ -16,14 +16,21 @@ info:
     ```sh
     BASE=http://localhost:8080          # Kong in `docker compose up`
     TOKEN=...      REFRESH=...          # from POST /auth/login (see its sample)
-    WORK_ID=...    EDITION_ID=...    CONTRIBUTION_ID=...
+    WORK_ID=...    EDITION_ID=...    CONTRIBUTION_ID=...    SESSION_ID=...
     ```
 
-    **Authentication.** `POST /auth/login` returns a short-lived access token
-    (JWT, 15 minutes by default) and a single-use refresh token. Send the
-    access token as `Authorization: Bearer <token>`. On a `401`, call
-    `POST /auth/refresh` once and retry; if that also fails, log in again.
-    Presenting an already-used refresh token revokes the whole session.
+    **Authentication** (built on [kararnab/iam](https://github.com/kararnab/iam)).
+    `POST /auth/signup` and `POST /auth/login` return a token pair in the JSON
+    body: a short-lived access token (JWT, 15 minutes by default) and a
+    single-use refresh token. Send the access token as
+    `Authorization: Bearer <token>`. On a `401`, call `POST /auth/refresh`
+    once and retry; if that also fails, log in again. Presenting an
+    already-used refresh token revokes the whole session. Access tokens are
+    stateless by default: logging out stops refreshing at once, but an issued
+    access token works until it expires (unless the server runs with
+    `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true`). Roles (e.g. `moderator`) are
+    carried in the access token, so a role change reaches moderator-only
+    routes at the next refresh.
 
     **Errors.** `4xx`/`5xx` bodies are short `text/plain` messages (`4xx`
     messages are safe to show to users), except where an operation documents
@@ -31,9 +38,12 @@ info:
     details are only logged server-side.
 
     **Rate limits.** In the compose/production setup Kong enforces per-IP
-    limits (login 5/min, signup 3/min, refresh/logout 20/min, edition upload
-    10/hour, everything else 60/min) and answers `429` when exceeded. Request
-    bodies are capped at 5 MB except edition uploads (500 MiB).
+    limits (login 5/min, signup 3/min, refresh 20/min, logout 10/min,
+    edition upload 10/hour, everything else 60/min) and answers `429` when
+    exceeded. On top of that the app throttles failed logins per account
+    (5 failures in 15 minutes) and per IP (100), with a growing back-off;
+    those `429`s carry `Retry-After`. Request bodies are capped at 5 MB
+    except edition uploads (500 MiB).
 servers:
   - url: http://localhost:8080
     description: Local dev
@@ -115,7 +125,10 @@ paths:
     post:
       operationId: signUp
       tags: [auth]
-      summary: Create a new user account
+      summary: Create a new user account and start a session
+      description: |
+        Passwords are hashed with argon2id and must be 12–1024 characters.
+        Returns the same token pair as `POST /auth/login`.
       requestBody:
         required: true
         content:
@@ -127,10 +140,15 @@ paths:
           label: cURL
           source: |
             curl -s -X POST "$BASE/auth/signup" -H 'Content-Type: application/json' \
-              -d '{"email":"you@example.com","password":"hunter22","name":"You"}'
+              -d '{"email":"you@example.com","password":"correct horse battery","name":"You"}' > tokens.json
+            TOKEN=$(jq -r .access_token tokens.json)
+            REFRESH=$(jq -r .refresh_token tokens.json)
       responses:
         "201":
-          description: Created
+          description: Created; signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
         "400":
           $ref: "#/components/responses/BadRequest"
         "500":
@@ -151,8 +169,8 @@ paths:
       description: |
         Starts a new session. The access token is a short-lived JWT
         (`LIBRARYZ_ACCESS_TOKEN_TTL`, default 15m); renew it with
-        `POST /auth/refresh`. The access token is also mirrored in the
-        `Authorization` response header.
+        `POST /auth/refresh`. Tokens are returned in the body only.
+        Unknown accounts and wrong passwords get the same `401`.
       requestBody:
         required: true
         content:
@@ -165,17 +183,12 @@ paths:
           source: |
             # Keep both tokens: the access token expires in 15 minutes.
             curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
-              -d '{"email":"you@example.com","password":"hunter22"}' > tokens.json
+              -d '{"email":"you@example.com","password":"correct horse battery"}' > tokens.json
             TOKEN=$(jq -r .access_token tokens.json)
             REFRESH=$(jq -r .refresh_token tokens.json)
       responses:
         "200":
           description: Authenticated
-          headers:
-            Authorization:
-              description: "`Bearer <access_token>`"
-              schema:
-                type: string
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TokenPair" }
@@ -184,7 +197,18 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          description: |
+            Too many requests: Kong's per-IP limit, or the app's failed-login
+            throttle for this account or IP (with `Retry-After`).
+          headers:
+            Retry-After:
+              description: Seconds until the next attempt is allowed
+              schema: { type: integer }
+          content:
+            text/plain:
+              schema: { type: string }
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 
   /auth/refresh:
     post:
@@ -219,12 +243,23 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Unknown, expired, revoked, or reused refresh token — log in again
+          description: |
+            Unknown, expired, revoked, or reused refresh token, or the user is
+            disabled — log in again
+          content:
+            text/plain:
+              schema: { type: string }
+        "409":
+          description: |
+            The token was rotated by a concurrent refresh moments ago (only
+            with a non-zero reuse grace window); use that refresh's result.
           content:
             text/plain:
               schema: { type: string }
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 
   /auth/logout:
     post:
@@ -234,8 +269,8 @@ paths:
       description: |
         Revokes the refresh token's session. No access token needed (it may
         already have expired). Unknown tokens are ignored. Outstanding access
-        tokens for the session stay valid until they expire (≤ access TTL);
-        use `/auth/logout-all` to kill those immediately.
+        tokens for the session stay valid until they expire (≤ access TTL)
+        unless the server verifies sessions on access.
       requestBody:
         required: true
         content:
@@ -261,8 +296,10 @@ paths:
       tags: [auth]
       summary: End every session of the current user
       description: |
-        Increments the user's token version — invalidating every outstanding
-        access token at once — and revokes all refresh tokens.
+        Revokes every session of the user, so no refresh token works any
+        more. Outstanding access tokens stay valid until they expire
+        (≤ access TTL) unless the server verifies sessions on access
+        (`LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true`).
       security:
         - bearerAuth: []
       x-codeSamples:
@@ -282,9 +319,10 @@ paths:
       tags: [auth]
       summary: Return the currently authenticated user
       description: |
-        Reads live DB state for `is_moderator`, not the JWT — so a user
-        promoted via SQL while logged in will see the new flag without
-        needing to re-login.
+        Reads live DB state for `roles` / `is_moderator`, not the JWT — so a
+        user promoted via SQL while logged in sees the new flag at once.
+        (Moderator-only routes check the roles in the access token, which
+        catch up at the next refresh.)
       security:
         - bearerAuth: []
       x-codeSamples:
@@ -298,6 +336,57 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /me/sessions:
+    get:
+      operationId: listSessions
+      tags: [auth]
+      summary: List the current user's sessions (devices)
+      security:
+        - bearerAuth: []
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s "$BASE/me/sessions" -H "Authorization: Bearer $TOKEN"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Session" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /me/sessions/{id}:
+    delete:
+      operationId: revokeSession
+      tags: [auth]
+      summary: End one of the current user's sessions
+      description: |
+        The session can no longer refresh. Its outstanding access token works
+        until it expires unless the server verifies sessions on access.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X DELETE "$BASE/me/sessions/$SESSION_ID" -H "Authorization: Bearer $TOKEN"
+      responses:
+        "204":
+          description: Session ended
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -1028,7 +1117,14 @@ components:
         text/plain:
           schema: { type: string }
     Forbidden:
-      description: Authenticated but not permitted (e.g. moderator required)
+      description: >
+        Authenticated but not permitted (e.g. the access token lacks the
+        `moderator` role; after a promotion, refresh to pick it up)
+      content:
+        text/plain:
+          schema: { type: string }
+    AuthUnavailable:
+      description: The session store could not be reached; retry (the credential was not judged)
       content:
         text/plain:
           schema: { type: string }
@@ -1098,19 +1194,32 @@ components:
 
     Me:
       type: object
-      required: [id, email, name, is_moderator]
+      required: [id, email, name, roles, is_moderator]
       properties:
         id:           { type: integer }
         email:        { type: string, format: email }
         name:         { type: string }
-        is_moderator: { type: boolean }
+        roles:        { type: array, items: { type: string }, example: [moderator] }
+        is_moderator: { type: boolean, description: "`roles` contains `moderator`" }
+
+    Session:
+      type: object
+      required: [id, created_at, last_used_at, expires_at, current]
+      properties:
+        id:           { type: string }
+        created_at:   { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+        expires_at:   { type: string, format: date-time, description: Absolute expiry; also ends after 14 days unused }
+        ip:           { type: string }
+        user_agent:   { type: string }
+        current:      { type: boolean, description: The session this request's access token belongs to }
 
     SignUpRequest:
       type: object
-      required: [email, password, name]
+      required: [email, password]
       properties:
         email:    { type: string, format: email }
-        password: { type: string, minLength: 1 }
+        password: { type: string, minLength: 12, maxLength: 1024 }
         name:     { type: string }
 
     LoginRequest:

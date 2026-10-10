@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
+import io.ktor.client.engine.mock.toByteArray
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
@@ -115,10 +116,10 @@ class SessionRefreshTest {
 
     @Test
     fun sessionWithoutRefreshTokenExpiresOn401() = runTest {
-        // A legacy token-only session can't be renewed: clear it (#6).
+        // Nothing to renew with: clear the session instead of retrying (#6).
         val engine = MockEngine { respondError(HttpStatusCode.Unauthorized, "expired") }
-        val auth = AuthState(FakeTokenStore(initial = "legacy-token"))
-        auth.bootstrap()
+        val auth = AuthState(FakeTokenStore())
+        auth.signIn(Session("access-only"))
         val api = ApiClient("http://t", tokenProvider = { auth.token }, engine = engine, sessionHooks = auth)
 
         assertFailsWith<ApiException> { api.recommendations() }
@@ -157,14 +158,62 @@ class SessionRefreshTest {
     }
 
     @Test
-    fun publicCallsNeverTriggerRefresh() = runTest {
-        val engine = MockEngine { respondError(HttpStatusCode.Unauthorized, "nope") }
-        val (auth, api) = signedIn(engine)
+    fun loginStoresBothTokens() = runTest {
+        // The App flow: login → AuthState.signIn → persisted pair.
+        val engine = MockEngine { respond(pair("acc", "ref"), HttpStatusCode.OK, jsonHeaders) }
+        val store = FakeTokenStore()
+        val auth = AuthState(store)
+        auth.signIn(ApiClient("http://t", engine = engine).login(LoginRequest("a@b.com", "pw")))
 
-        assertFailsWith<ApiException> { api.listWorks() }
+        assertEquals("acc", auth.token)
+        assertEquals("ref", auth.refreshToken)
+        assertTrue(store.stored!!.contains("acc") && store.stored!!.contains("ref"))
+    }
 
-        assertTrue(auth.isAuthenticated)
-        assertEquals(1, engine.requestHistory.size)
+    @Test
+    fun credentialEndpointsNeverCarryTheAccessToken() = runTest {
+        val engine = MockEngine { req ->
+            when (req.url.encodedPath) {
+                "/auth/login", "/auth/signup" -> respond(pair("acc", "ref"), HttpStatusCode.OK, jsonHeaders)
+                "/auth/logout" -> respond("", HttpStatusCode.NoContent)
+                else -> respond(ME, HttpStatusCode.OK, jsonHeaders)
+            }
+        }
+        val (_, api) = signedIn(engine)
+
+        api.login(LoginRequest("a@b.com", "pw"))
+        api.logout("refresh-1")
+        api.me()
+
+        val byPath = engine.requestHistory.associateBy { it.url.encodedPath }
+        assertNull(byPath.getValue("/auth/login").headers[HttpHeaders.Authorization])
+        assertNull(byPath.getValue("/auth/logout").headers[HttpHeaders.Authorization])
+        assertEquals("Bearer old-access", byPath.getValue("/auth/me").headers[HttpHeaders.Authorization])
+    }
+
+    @Test
+    fun uploadIsResentAfterRefresh() = runTest {
+        // Multipart bodies must survive the plugin's retry.
+        val engine = MockEngine { req ->
+            when {
+                req.url.encodedPath == "/auth/refresh" ->
+                    respond(pair("new-access", "refresh-2"), HttpStatusCode.OK, jsonHeaders)
+                req.headers[HttpHeaders.Authorization] != "Bearer new-access" ->
+                    respondError(HttpStatusCode.Unauthorized, "expired")
+                else -> {
+                    val bytes = req.body.toByteArray()
+                    assertTrue(bytes.decodeToString().contains("file-bytes"), "retry lost the body")
+                    respond(
+                        """{"id":"e1","work_id":"w1","format":"txt","sha256":"x","size_bytes":10}""",
+                        HttpStatusCode.Created, jsonHeaders,
+                    )
+                }
+            }
+        }
+        val (_, api) = signedIn(engine)
+
+        api.uploadEdition("w1", "txt", null, "a.txt", "file-bytes".encodeToByteArray())
+        assertEquals(1, engine.requestHistory.count { it.url.encodedPath == "/auth/refresh" })
     }
 
     @Test

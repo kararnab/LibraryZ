@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/server"
 	"github.com/kararnab/libraryZ/internal/storage"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -41,7 +43,28 @@ func newTestDeps(t *testing.T) (server.Deps, *gorm.DB) {
 		t.Fatalf("storage: %v", err)
 	}
 
-	return server.Deps{DB: db, Storage: store, MaxUploadBytes: 16 << 20}, db
+	return server.Deps{
+		DB: db, Storage: store, MaxUploadBytes: 16 << 20,
+		JWTSecret: testJWTSecret,
+	}, db
+}
+
+// testJWTSecret is long enough for HS256 (32 bytes); testPassword meets
+// iam's default length policy (12 characters).
+const (
+	testJWTSecret = "test-secret-test-secret-test-secret!"
+	testPassword  = "hunter2hunter2"
+)
+
+func newServer(t *testing.T, deps server.Deps) *httptest.Server {
+	t.Helper()
+	h, err := server.New(deps)
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	return ts
 }
 
 func newTestServer(t *testing.T) (*httptest.Server, *gorm.DB) {
@@ -49,23 +72,29 @@ func newTestServer(t *testing.T) (*httptest.Server, *gorm.DB) {
 	deps, db := newTestDeps(t)
 	// Exercise allowlist mode explicitly; the CORS tests use this origin.
 	deps.AllowedOrigins = []string{"http://example.test"}
-	ts := httptest.NewServer(server.New(deps))
-	t.Cleanup(ts.Close)
-	return ts, db
+	return newServer(t, deps), db
 }
 
-// promoteModerator flips is_moderator on the user with the given email.
-// Mirrors the v0 production path ("update via psql") for tests that need
-// approve/reject to succeed.
-func promoteModerator(t *testing.T, db *gorm.DB, email string) {
+// grantModerator gives the user the "moderator" role, the v0 production
+// path ("insert via psql").
+func grantModerator(t *testing.T, db *gorm.DB, email string) {
 	t.Helper()
-	res := db.Table("users").Where("email = ?", email).Update("is_moderator", true)
+	res := db.Exec(`INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = ?`, email)
 	if res.Error != nil {
 		t.Fatalf("promote %s: %v", email, res.Error)
 	}
 	if res.RowsAffected != 1 {
 		t.Fatalf("promote %s: expected 1 row affected, got %d", email, res.RowsAffected)
 	}
+}
+
+// promoteModerator grants the role and logs in again: moderator routes
+// check the roles carried by the access token, which a token issued before
+// the promotion doesn't have. Returns the new "Bearer …" value.
+func promoteModerator(t *testing.T, base string, db *gorm.DB, email string) string {
+	t.Helper()
+	grantModerator(t, db, email)
+	return "Bearer " + loginPair(t, base, email, testPassword).AccessToken
 }
 
 func TestSmokeHappyPath(t *testing.T) {
@@ -77,21 +106,13 @@ func TestSmokeHappyPath(t *testing.T) {
 	}
 
 	// Signup
-	signup := mustJSON(t, map[string]string{"email": "a@b.com", "password": "hunter22", "name": "Test"})
+	signup := mustJSON(t, map[string]string{"email": "a@b.com", "password": testPassword, "name": "Test"})
 	if resp, err := http.Post(ts.URL+"/auth/signup", "application/json", signup); err != nil || resp.StatusCode != 201 {
 		t.Fatalf("signup: err=%v code=%d", err, statusOf(resp))
 	}
 
-	// Login -> Authorization header
-	login := mustJSON(t, map[string]string{"email": "a@b.com", "password": "hunter22"})
-	loginResp, err := http.Post(ts.URL+"/auth/login", "application/json", login)
-	if err != nil || loginResp.StatusCode != 200 {
-		t.Fatalf("login: err=%v code=%d", err, statusOf(loginResp))
-	}
-	auth := loginResp.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		t.Fatalf("login: missing Bearer token, got %q", auth)
-	}
+	// Login -> token pair in the body
+	auth := "Bearer " + loginPair(t, ts.URL, "a@b.com", testPassword).AccessToken
 
 	// Create work (authenticated)
 	createBody := mustJSON(t, map[string]any{
@@ -213,8 +234,7 @@ func (failingStore) Exists(context.Context, string) (bool, error) {
 func TestReadyReturns503WhenADependencyIsDown(t *testing.T) {
 	deps, db := newTestDeps(t)
 	deps.Storage = failingStore{deps.Storage}
-	ts := httptest.NewServer(server.New(deps))
-	t.Cleanup(ts.Close)
+	ts := newServer(t, deps)
 
 	resp, _ := http.Get(ts.URL + "/ready")
 	body := readBody(resp)
@@ -244,15 +264,7 @@ func TestReadyReturns503WhenADependencyIsDown(t *testing.T) {
 // signupLogin creates a user and returns its "Bearer …" Authorization value.
 func signupLogin(t *testing.T, base, email string) string {
 	t.Helper()
-	body := map[string]string{"email": email, "password": "hunter22", "name": "T"}
-	if resp, err := http.Post(base+"/auth/signup", "application/json", mustJSON(t, body)); err != nil || resp.StatusCode != 201 {
-		t.Fatalf("signup: err=%v code=%d", err, statusOf(resp))
-	}
-	resp, err := http.Post(base+"/auth/login", "application/json", mustJSON(t, body))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("login: err=%v code=%d", err, statusOf(resp))
-	}
-	return resp.Header.Get("Authorization")
+	return signupAndLogin(t, base, email, testPassword, "T")
 }
 
 // postWork creates a work from an arbitrary JSON body and returns the
@@ -406,14 +418,14 @@ func TestCORSExposesAuthorizationOnRealRequest(t *testing.T) {
 	ts, _ := newTestServer(t)
 
 	signup := mustJSON(t, map[string]string{
-		"email": "cors@example.com", "password": "hunter22", "name": "C",
+		"email": "cors@example.com", "password": testPassword, "name": "C",
 	})
 	if r, err := http.Post(ts.URL+"/auth/signup", "application/json", signup); err != nil ||
 		r.StatusCode != http.StatusCreated {
 		t.Fatalf("signup: err=%v code=%d", err, statusOf(r))
 	}
 
-	login := mustJSON(t, map[string]string{"email": "cors@example.com", "password": "hunter22"})
+	login := mustJSON(t, map[string]string{"email": "cors@example.com", "password": testPassword})
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/login", login)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://example.test")
@@ -474,8 +486,7 @@ func TestCORSDevModePrivateLAN(t *testing.T) {
 
 	// Flag off: localhost allowed, private LAN rejected.
 	off, _ := newTestDeps(t)
-	tsOff := httptest.NewServer(server.New(off))
-	t.Cleanup(tsOff.Close)
+	tsOff := newServer(t, off)
 	if got := preflightAllowOrigin(t, tsOff.URL, "http://localhost:3000"); got != "http://localhost:3000" {
 		t.Fatalf("localhost should be allowed in dev mode, got %q", got)
 	}
@@ -486,8 +497,7 @@ func TestCORSDevModePrivateLAN(t *testing.T) {
 	// Flag on: private LAN now allowed.
 	on, _ := newTestDeps(t)
 	on.AllowPrivateLAN = true
-	tsOn := httptest.NewServer(server.New(on))
-	t.Cleanup(tsOn.Close)
+	tsOn := newServer(t, on)
 	if got := preflightAllowOrigin(t, tsOn.URL, lan); got != lan {
 		t.Fatalf("private LAN should be allowed with opt-in, got %q", got)
 	}
@@ -501,7 +511,7 @@ func TestCORSDevModePrivateLAN(t *testing.T) {
 
 func TestContributionSubmitAndList(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "contrib1@x.com", "hunter22", "C1")
+	auth := signupAndLogin(t, ts.URL, "contrib1@x.com", testPassword, "C1")
 	workID := createWork(t, ts.URL, auth, "Moby-Dick", "Melville")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{
@@ -544,8 +554,8 @@ func TestContributionSubmitAndList(t *testing.T) {
 
 func TestContributionApproveUpdatesWork(t *testing.T) {
 	ts, db := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "contrib2@x.com", "hunter22", "C2")
-	promoteModerator(t, db, "contrib2@x.com")
+	auth := signupAndLogin(t, ts.URL, "contrib2@x.com", testPassword, "C2")
+	auth = promoteModerator(t, ts.URL, db, "contrib2@x.com")
 	workID := createWork(t, ts.URL, auth, "Old Title", "Old Author")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{
@@ -576,8 +586,8 @@ func TestContributionApproveUpdatesWork(t *testing.T) {
 
 func TestContributionRejectDoesNotUpdateWork(t *testing.T) {
 	ts, db := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "contrib3@x.com", "hunter22", "C3")
-	promoteModerator(t, db, "contrib3@x.com")
+	auth := signupAndLogin(t, ts.URL, "contrib3@x.com", testPassword, "C3")
+	auth = promoteModerator(t, ts.URL, db, "contrib3@x.com")
 	workID := createWork(t, ts.URL, auth, "Original", "Author A")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{"title": "Different"})
@@ -602,8 +612,8 @@ func TestContributionRejectDoesNotUpdateWork(t *testing.T) {
 
 func TestContributionDoubleApproveReturns409(t *testing.T) {
 	ts, db := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "contrib4@x.com", "hunter22", "C4")
-	promoteModerator(t, db, "contrib4@x.com")
+	auth := signupAndLogin(t, ts.URL, "contrib4@x.com", testPassword, "C4")
+	auth = promoteModerator(t, ts.URL, db, "contrib4@x.com")
 	workID := createWork(t, ts.URL, auth, "W", "")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{"title": "T"})
@@ -623,7 +633,7 @@ func TestContributionDoubleApproveReturns409(t *testing.T) {
 
 func TestContributionInvalidPatchRejectedAtSubmit(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "contrib5@x.com", "hunter22", "C5")
+	auth := signupAndLogin(t, ts.URL, "contrib5@x.com", testPassword, "C5")
 	workID := createWork(t, ts.URL, auth, "Title A", "")
 
 	for name, patch := range map[string]map[string]any{
@@ -658,7 +668,7 @@ func TestContributionInvalidPatchRejectedAtSubmit(t *testing.T) {
 
 func TestModeratorRequiredForApprove(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "nonmod1@x.com", "hunter22", "NM1")
+	auth := signupAndLogin(t, ts.URL, "nonmod1@x.com", testPassword, "NM1")
 	// Deliberately NOT promoted. Submit a contribution against a work we
 	// create, then attempt to approve as a plain user — expect 403.
 	workID := createWork(t, ts.URL, auth, "T", "")
@@ -676,7 +686,7 @@ func TestModeratorRequiredForApprove(t *testing.T) {
 
 func TestModeratorRequiredForReject(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "nonmod2@x.com", "hunter22", "NM2")
+	auth := signupAndLogin(t, ts.URL, "nonmod2@x.com", testPassword, "NM2")
 	workID := createWork(t, ts.URL, auth, "T", "")
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{"title": "New"})
 	var c struct {
@@ -692,7 +702,7 @@ func TestModeratorRequiredForReject(t *testing.T) {
 
 func TestAuthMeReturnsCurrentUser(t *testing.T) {
 	ts, db := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "meendpoint@x.com", "hunter22", "Me Tester")
+	auth := signupAndLogin(t, ts.URL, "meendpoint@x.com", testPassword, "Me Tester")
 
 	// Initial fetch: not a moderator.
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth/me", nil)
@@ -719,7 +729,7 @@ func TestAuthMeReturnsCurrentUser(t *testing.T) {
 
 	// Promote and re-fetch — IsModerator should flip without a re-login,
 	// confirming /auth/me reads live DB state rather than the JWT.
-	promoteModerator(t, db, "meendpoint@x.com")
+	grantModerator(t, db, "meendpoint@x.com")
 	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth/me", nil)
 	req2.Header.Set("Authorization", auth)
 	resp2, _ := http.DefaultClient.Do(req2)
@@ -747,7 +757,7 @@ func TestAuthMeRequiresAuth(t *testing.T) {
 
 func TestSearchWorksMatchesTitleAuthorsDescription(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "search1@x.com", "hunter22", "S1")
+	auth := signupAndLogin(t, ts.URL, "search1@x.com", testPassword, "S1")
 
 	// Seed three works with distinct title / authors / description so we can
 	// assert the LIKE fan-out hits each column independently.
@@ -791,7 +801,7 @@ func TestSearchWorksEmptyQueryReturns400(t *testing.T) {
 
 func TestSearchWorksNoMatchReturnsEmptyArray(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "search2@x.com", "hunter22", "S2")
+	auth := signupAndLogin(t, ts.URL, "search2@x.com", testPassword, "S2")
 	createWorkFull(t, ts.URL, auth, "Foo", "", "")
 
 	got := searchTitles(t, ts.URL, "zzz-not-a-word")
@@ -802,7 +812,7 @@ func TestSearchWorksNoMatchReturnsEmptyArray(t *testing.T) {
 
 func TestSearchWorksOrderedByCreatedAtDesc(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "search3@x.com", "hunter22", "S3")
+	auth := signupAndLogin(t, ts.URL, "search3@x.com", testPassword, "S3")
 
 	// Create three works in known order; ordering is by created_at DESC so
 	// the last-created should appear first.
@@ -823,7 +833,7 @@ func TestSearchWorksOrderedByCreatedAtDesc(t *testing.T) {
 // hit, which outranks a description-only hit — regardless of recency.
 func TestSearchWorksRanksTitleMatchesFirst(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "search5@x.com", "hunter22", "S5")
+	auth := signupAndLogin(t, ts.URL, "search5@x.com", testPassword, "S5")
 
 	createWorkFull(t, ts.URL, auth, "Leviathan", "Thomas Hobbes", "")
 	createWorkFull(t, ts.URL, auth, "Whale Facts", "Leviathan Press", "")
@@ -838,7 +848,7 @@ func TestSearchWorksRanksTitleMatchesFirst(t *testing.T) {
 
 func TestSearchWorksTreatsLikeWildcardsLiterally(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "search4@x.com", "hunter22", "S4")
+	auth := signupAndLogin(t, ts.URL, "search4@x.com", testPassword, "S4")
 
 	createWorkFull(t, ts.URL, auth, "snake_case handbook", "", "")
 	createWorkFull(t, ts.URL, auth, "100% Pure Prose", "", "")
@@ -863,7 +873,7 @@ func TestSearchWorksTreatsLikeWildcardsLiterally(t *testing.T) {
 
 func TestLibraryUpsertRequiresAuth(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "lib0@x.com", "hunter22", "L0")
+	auth := signupAndLogin(t, ts.URL, "lib0@x.com", testPassword, "L0")
 	wid := createWork(t, ts.URL, auth, "Dune", "Herbert")
 
 	// No Authorization header -> 401.
@@ -878,7 +888,7 @@ func TestLibraryUpsertRequiresAuth(t *testing.T) {
 
 func TestLibraryUpsertThenGetEmbedsWork(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "lib1@x.com", "hunter22", "L1")
+	auth := signupAndLogin(t, ts.URL, "lib1@x.com", testPassword, "L1")
 	wid := createWork(t, ts.URL, auth, "Dune", "Herbert")
 
 	up := putLibrary(t, ts.URL, auth, wid, map[string]any{
@@ -915,7 +925,7 @@ func TestLibraryUpsertThenGetEmbedsWork(t *testing.T) {
 
 func TestLibraryListFiltersByStatus(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "lib2@x.com", "hunter22", "L2")
+	auth := signupAndLogin(t, ts.URL, "lib2@x.com", testPassword, "L2")
 	w1 := createWork(t, ts.URL, auth, "A", "")
 	w2 := createWork(t, ts.URL, auth, "B", "")
 	putLibrary(t, ts.URL, auth, w1, map[string]any{"status": "reading"})
@@ -938,7 +948,7 @@ func TestLibraryListFiltersByStatus(t *testing.T) {
 
 func TestLibraryDeleteThenGet404(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "lib3@x.com", "hunter22", "L3")
+	auth := signupAndLogin(t, ts.URL, "lib3@x.com", testPassword, "L3")
 	wid := createWork(t, ts.URL, auth, "Dune", "")
 	putLibrary(t, ts.URL, auth, wid, map[string]any{"status": "want"})
 
@@ -959,7 +969,7 @@ func TestLibraryDeleteThenGet404(t *testing.T) {
 
 func TestLibraryUpsertInvalidStatus400(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "lib4@x.com", "hunter22", "L4")
+	auth := signupAndLogin(t, ts.URL, "lib4@x.com", testPassword, "L4")
 	wid := createWork(t, ts.URL, auth, "Dune", "")
 
 	body := mustJSON(t, map[string]any{"status": "skimming"})
@@ -1012,7 +1022,7 @@ func TestRecommendationsRequireAuth(t *testing.T) {
 
 func TestRecommendationsReturnsContentMatch(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "rec@x.com", "hunter22", "Rec")
+	auth := signupAndLogin(t, ts.URL, "rec@x.com", testPassword, "Rec")
 
 	// Two works by the same author; the user likes one, expects the other.
 	liked := createWorkFull(t, ts.URL, auth, "Dune", "Frank Herbert", "")
@@ -1051,7 +1061,7 @@ func TestRecommendationsReturnsContentMatch(t *testing.T) {
 
 func TestRecommendationsMatrixFactorizationPersonalized(t *testing.T) {
 	ts, db := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "mfmain@x.com", "hunter22", "Main")
+	auth := signupAndLogin(t, ts.URL, "mfmain@x.com", testPassword, "Main")
 
 	// Cluster A (3 works) and cluster B (3 works).
 	a := []string{
@@ -1122,7 +1132,7 @@ func TestRecommendationsMatrixFactorizationPersonalized(t *testing.T) {
 
 func TestRecommendationDismissHidesWork(t *testing.T) {
 	ts, _ := newTestServer(t)
-	auth := signupAndLogin(t, ts.URL, "dismiss@x.com", "hunter22", "D")
+	auth := signupAndLogin(t, ts.URL, "dismiss@x.com", testPassword, "D")
 	a0 := createWork(t, ts.URL, auth, "Dune", "Frank Herbert")
 	a1 := createWork(t, ts.URL, auth, "Dune Messiah", "Frank Herbert")
 	putLibrary(t, ts.URL, auth, a0, map[string]any{"status": "read", "rating": 5})
@@ -1200,16 +1210,7 @@ func signupAndLogin(t *testing.T, base, email, password, name string) string {
 	if r, err := http.Post(base+"/auth/signup", "application/json", signup); err != nil || r.StatusCode != http.StatusCreated {
 		t.Fatalf("signup %s: err=%v code=%d", email, err, statusOf(r))
 	}
-	login := mustJSON(t, map[string]string{"email": email, "password": password})
-	resp, err := http.Post(base+"/auth/login", "application/json", login)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("login %s: err=%v code=%d", email, err, statusOf(resp))
-	}
-	auth := resp.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
-		t.Fatalf("login %s: no Bearer token, got %q", email, auth)
-	}
-	return auth
+	return "Bearer " + loginPair(t, base, email, password).AccessToken
 }
 
 func createWork(t *testing.T, base, auth, title, authors string) string {
@@ -1375,9 +1376,9 @@ func editionID(t *testing.T, resp *http.Response) string {
 
 func TestModeratorRemovesEdition(t *testing.T) {
 	ts, db := newTestServer(t)
-	mod := signupAndLogin(t, ts.URL, "takedown1@x.com", "hunter22", "Mod")
-	promoteModerator(t, db, "takedown1@x.com")
-	user := signupAndLogin(t, ts.URL, "takedown1u@x.com", "hunter22", "User")
+	mod := signupAndLogin(t, ts.URL, "takedown1@x.com", testPassword, "Mod")
+	mod = promoteModerator(t, ts.URL, db, "takedown1@x.com")
+	user := signupAndLogin(t, ts.URL, "takedown1u@x.com", testPassword, "User")
 	workID := createWork(t, ts.URL, user, "Takedown Work", "")
 	content := []byte("infringing bytes\n")
 	keep := editionID(t, uploadEdition(t, ts.URL, user, workID, "txt", "en", []byte("fine bytes\n")))
@@ -1425,8 +1426,8 @@ func TestModeratorRemovesEdition(t *testing.T) {
 
 func TestModeratorRemovesWork(t *testing.T) {
 	ts, db := newTestServer(t)
-	mod := signupAndLogin(t, ts.URL, "takedown2@x.com", "hunter22", "Mod")
-	promoteModerator(t, db, "takedown2@x.com")
+	mod := signupAndLogin(t, ts.URL, "takedown2@x.com", testPassword, "Mod")
+	mod = promoteModerator(t, ts.URL, db, "takedown2@x.com")
 	workID := createWork(t, ts.URL, mod, "Zyzzyva Removed Title", "")
 	ed := editionID(t, uploadEdition(t, ts.URL, mod, workID, "txt", "en", []byte("zyzzyva\n")))
 	putLibrary(t, ts.URL, mod, workID, map[string]any{"status": "reading"})
@@ -1485,8 +1486,11 @@ func loginPair(t *testing.T, base, email, password string) tokenPair {
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Header.Get("Authorization") != "Bearer "+p.AccessToken {
-		t.Fatalf("Authorization header should mirror access_token")
+	if p.AccessToken == "" || p.RefreshToken == "" {
+		t.Fatalf("login: incomplete token pair %+v", p)
+	}
+	if h := resp.Header.Get("Authorization"); h != "" {
+		t.Fatalf("tokens belong in the body only; got Authorization header %q", h)
 	}
 	return p
 }
@@ -1513,9 +1517,9 @@ func postJSON(t *testing.T, url string, body any) *http.Response {
 
 func TestRefreshLogoutAndLogoutAll(t *testing.T) {
 	ts, _ := newTestServer(t)
-	signupAndLogin(t, ts.URL, "session1@x.com", "hunter22", "S")
-	a := loginPair(t, ts.URL, "session1@x.com", "hunter22")
-	b := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	signupAndLogin(t, ts.URL, "session1@x.com", testPassword, "S")
+	a := loginPair(t, ts.URL, "session1@x.com", testPassword)
+	b := loginPair(t, ts.URL, "session1@x.com", testPassword)
 	if a.RefreshToken == "" || a.ExpiresIn != 900 {
 		t.Fatalf("login pair: %+v", a)
 	}
@@ -1530,9 +1534,6 @@ func TestRefreshLogoutAndLogoutAll(t *testing.T) {
 	if a2.RefreshToken == a.RefreshToken || getMe(t, ts.URL, a2.AccessToken) != http.StatusOK {
 		t.Fatalf("rotated pair unusable: %+v", a2)
 	}
-	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("spent refresh token: want 401, got %d", r.StatusCode)
-	}
 	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{}); r.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing refresh token: want 400, got %d", r.StatusCode)
 	}
@@ -1544,24 +1545,271 @@ func TestRefreshLogoutAndLogoutAll(t *testing.T) {
 	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": b.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("refresh after logout: want 401, got %d", r.StatusCode)
 	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a2.RefreshToken}); r.StatusCode != http.StatusOK {
+		t.Fatalf("other session after logout: want 200, got %d", r.StatusCode)
+	}
 
-	// Logout-all kills outstanding access tokens immediately.
-	c := loginPair(t, ts.URL, "session1@x.com", "hunter22")
+	// Logout-all ends every session: nothing can refresh any more. Access
+	// tokens are stateless by default, so they run out their (short) life.
+	c := loginPair(t, ts.URL, "session1@x.com", testPassword)
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/logout-all", nil)
 	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusNoContent {
 		t.Fatalf("logout-all: %d", r.StatusCode)
 	}
-	for name, tok := range map[string]string{"a2": a2.AccessToken, "c": c.AccessToken} {
-		if code := getMe(t, ts.URL, tok); code != http.StatusUnauthorized {
-			t.Fatalf("access token %s after logout-all: want 401, got %d", name, code)
-		}
-	}
 	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": c.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("refresh after logout-all: want 401, got %d", r.StatusCode)
 	}
-	if code := getMe(t, ts.URL, loginPair(t, ts.URL, "session1@x.com", "hunter22").AccessToken); code != http.StatusOK {
+	if code := getMe(t, ts.URL, c.AccessToken); code != http.StatusOK {
+		t.Fatalf("stateless access token after logout-all: want 200 until expiry, got %d", code)
+	}
+	if code := getMe(t, ts.URL, loginPair(t, ts.URL, "session1@x.com", testPassword).AccessToken); code != http.StatusOK {
 		t.Fatalf("fresh login after logout-all: %d", code)
+	}
+}
+
+// With LIBRARYZ_VERIFY_SESSION_ON_ACCESS, ending a session kills its
+// access tokens at once.
+func TestVerifySessionOnAccessRevokesImmediately(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	deps.VerifySessionOnAccess = true
+	ts := newServer(t, deps)
+	signupAndLogin(t, ts.URL, "verify-on-access@x.com", testPassword, "V")
+	a := loginPair(t, ts.URL, "verify-on-access@x.com", testPassword)
+	b := loginPair(t, ts.URL, "verify-on-access@x.com", testPassword)
+
+	if r := postJSON(t, ts.URL+"/auth/logout", map[string]string{"refresh_token": a.RefreshToken}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout: %d", r.StatusCode)
+	}
+	if code := getMe(t, ts.URL, a.AccessToken); code != http.StatusUnauthorized {
+		t.Fatalf("access token of a logged-out session: want 401, got %d", code)
+	}
+	if code := getMe(t, ts.URL, b.AccessToken); code != http.StatusOK {
+		t.Fatalf("other session: want 200, got %d", code)
+	}
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+b.AccessToken)
+	if r, _ := http.DefaultClient.Do(req); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout-all: %d", r.StatusCode)
+	}
+	if code := getMe(t, ts.URL, b.AccessToken); code != http.StatusUnauthorized {
+		t.Fatalf("access token after logout-all: want 401, got %d", code)
+	}
+}
+
+// Presenting a spent refresh token is treated as theft: the whole session
+// is revoked, including the token it was rotated into.
+func TestRefreshTokenReuseRevokesSession(t *testing.T) {
+	ts, _ := newTestServer(t)
+	signupAndLogin(t, ts.URL, "reuse@x.com", testPassword, "R")
+	a := loginPair(t, ts.URL, "reuse@x.com", testPassword)
+
+	resp := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken})
+	var a2 tokenPair
+	_ = json.NewDecoder(resp.Body).Decode(&a2)
+	if resp.StatusCode != http.StatusOK || a2.RefreshToken == "" {
+		t.Fatalf("refresh: %d", resp.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("reused refresh token: want 401, got %d", r.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": a2.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("token rotated from a reused one: want 401 (session revoked), got %d", r.StatusCode)
+	}
+}
+
+// Roles travel in the access token: a promotion reaches moderator routes at
+// the next refresh, without a new login.
+func TestPromotionTakesEffectOnRefresh(t *testing.T) {
+	ts, db := newTestServer(t)
+	signupAndLogin(t, ts.URL, "promote@x.com", testPassword, "P")
+	p := loginPair(t, ts.URL, "promote@x.com", testPassword)
+	grantModerator(t, db, "promote@x.com")
+
+	url := ts.URL + "/contributions/" + uuid.NewString() + "/approve"
+	if r := postAuthed(t, url, "Bearer "+p.AccessToken); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("token issued before promotion: want 403, got %d", r.StatusCode)
+	} else if body := strings.TrimSpace(readBody(r)); body != "forbidden" {
+		t.Fatalf("403 body = %q", body)
+	}
+	resp := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": p.RefreshToken})
+	var p2 tokenPair
+	_ = json.NewDecoder(resp.Body).Decode(&p2)
+	// Past the permission check: the contribution doesn't exist.
+	if r := postAuthed(t, url, "Bearer "+p2.AccessToken); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("refreshed token: want 404 (authorized, unknown contribution), got %d %s", r.StatusCode, readBody(r))
+	}
+}
+
+func TestSignupValidation(t *testing.T) {
+	ts, _ := newTestServer(t)
+	for _, c := range []struct {
+		body map[string]string
+		code int
+		msg  string
+	}{
+		{map[string]string{"email": "not-an-email", "password": testPassword}, http.StatusBadRequest, "a valid email is required"},
+		{map[string]string{"email": "short@x.com", "password": "hunter22"}, http.StatusBadRequest, "password must be at least 12 characters"},
+		{map[string]string{"email": "Signup-OK@X.com", "password": testPassword, "name": " Ok "}, http.StatusCreated, ""},
+		{map[string]string{"email": "signup-ok@x.com", "password": testPassword}, http.StatusConflict, "email already registered"},
+	} {
+		r := postJSON(t, ts.URL+"/auth/signup", c.body)
+		body := readBody(r)
+		if r.StatusCode != c.code || (c.msg != "" && strings.TrimSpace(body) != c.msg) {
+			t.Fatalf("signup %v: got %d %q, want %d %q", c.body, r.StatusCode, body, c.code, c.msg)
+		}
+		if c.code == http.StatusCreated {
+			var p tokenPair
+			if err := json.Unmarshal([]byte(body), &p); err != nil || p.AccessToken == "" || p.RefreshToken == "" {
+				t.Fatalf("signup should return a token pair, got %s", body)
+			}
+			req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth/me", nil)
+			req.Header.Set("Authorization", "Bearer "+p.AccessToken)
+			resp, _ := http.DefaultClient.Do(req)
+			if me := readBody(resp); !strings.Contains(me, `"email":"signup-ok@x.com"`) || !strings.Contains(me, `"name":"Ok"`) {
+				t.Fatalf("me after signup: %s", me)
+			}
+		}
+	}
+	// Login normalizes the email the same way.
+	loginPair(t, ts.URL, "  SIGNUP-ok@x.com ", testPassword)
+}
+
+// Repeated failures for one account are throttled (iam's per-account
+// limiter: 5 failures, then a growing back-off), even with the right
+// password, and without touching other accounts.
+func TestLoginThrottling(t *testing.T) {
+	ts, _ := newTestServer(t)
+	signupAndLogin(t, ts.URL, "throttle@x.com", testPassword, "T")
+	signupAndLogin(t, ts.URL, "throttle-other@x.com", testPassword, "T")
+	wrong := map[string]string{"email": "throttle@x.com", "password": "wrong-password-123"}
+	for i := 0; i < 5; i++ {
+		if r := postJSON(t, ts.URL+"/auth/login", wrong); r.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("failure %d: want 401, got %d", i+1, r.StatusCode)
+		}
+	}
+	r := postJSON(t, ts.URL+"/auth/login", map[string]string{"email": "throttle@x.com", "password": testPassword})
+	if r.StatusCode != http.StatusTooManyRequests || r.Header.Get("Retry-After") == "" {
+		t.Fatalf("after 5 failures: want 429 with Retry-After, got %d %v", r.StatusCode, r.Header)
+	}
+	loginPair(t, ts.URL, "throttle-other@x.com", testPassword)
+}
+
+// The same opaque error for an unknown account and a wrong password.
+func TestLoginDoesNotRevealAccounts(t *testing.T) {
+	ts, _ := newTestServer(t)
+	signupAndLogin(t, ts.URL, "enum@x.com", testPassword, "E")
+	for _, email := range []string{"enum@x.com", "nobody-here@x.com"} {
+		r := postJSON(t, ts.URL+"/auth/login", map[string]string{"email": email, "password": "wrong-password-123"})
+		if body := strings.TrimSpace(readBody(r)); r.StatusCode != http.StatusUnauthorized || body != "invalid credentials" {
+			t.Fatalf("login %s: %d %q", email, r.StatusCode, body)
+		}
+	}
+}
+
+// Malformed or foreign Authorization headers never authenticate (#8).
+func TestMalformedAuthorizationHeaders(t *testing.T) {
+	ts, _ := newTestServer(t)
+	good := signupLogin(t, ts.URL, "headers@x.com")
+	tok := strings.TrimPrefix(good, "Bearer ")
+	for _, h := range []string{
+		"", tok, "Basic " + tok, "Bearer", "Bearer ", "Bearer  " + tok, "Bearer " + tok + " extra",
+		"xBearer " + tok, "Bearer " + tok[:len(tok)-2], "Bearer not.a.jwt",
+	} {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth/me", nil)
+		if h != "" {
+			req.Header.Set("Authorization", h)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("Authorization %q: want 401, got %d", h, resp.StatusCode)
+		}
+	}
+	// Two Authorization headers are ambiguous.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/auth/me", nil)
+	req.Header.Add("Authorization", good)
+	req.Header.Add("Authorization", good)
+	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("duplicate Authorization headers: want 401, got %d", resp.StatusCode)
+	}
+	if code := getMe(t, ts.URL, tok); code != http.StatusOK {
+		t.Fatalf("well-formed token: %d", code)
+	}
+}
+
+func TestListAndRevokeSessions(t *testing.T) {
+	ts, _ := newTestServer(t)
+	signupAndLogin(t, ts.URL, "devices@x.com", testPassword, "D")
+	a := loginPair(t, ts.URL, "devices@x.com", testPassword)
+	other := signupLogin(t, ts.URL, "devices-other@x.com")
+
+	list := func(access string) []map[string]any {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/me/sessions", nil)
+		req.Header.Set("Authorization", "Bearer "+access)
+		resp, _ := http.DefaultClient.Do(req)
+		var out []map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("list sessions: %d %v", resp.StatusCode, err)
+		}
+		return out
+	}
+	sessions := list(a.AccessToken)
+	if len(sessions) != 3 { // signup + signupAndLogin's login + a
+		t.Fatalf("want 3 sessions, got %+v", sessions)
+	}
+	var current, previous string
+	currents := 0
+	for _, s := range sessions {
+		if s["current"] == true {
+			current = s["id"].(string)
+			currents++
+		} else {
+			previous = s["id"].(string)
+		}
+	}
+	if currents != 1 || previous == "" {
+		t.Fatalf("exactly one session should be current: %+v", sessions)
+	}
+
+	// Someone else can't revoke it.
+	if r := deleteAuthed(t, ts.URL+"/me/sessions/"+previous, other, nil); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("revoke another user's session: want 404, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, ts.URL+"/me/sessions/"+previous, "Bearer "+a.AccessToken, nil); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("revoke: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+	got := list(a.AccessToken)
+	if len(got) != 2 || slices.ContainsFunc(got, func(s map[string]any) bool { return s["id"] == previous }) {
+		t.Fatalf("after revoke: %+v", got)
+	}
+	if !slices.ContainsFunc(got, func(s map[string]any) bool { return s["id"] == current }) {
+		t.Fatalf("current session gone after revoking another: %+v", got)
+	}
+	if r := deleteAuthed(t, ts.URL+"/me/sessions/"+previous, "Bearer "+a.AccessToken, nil); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("revoke twice: want 404, got %d", r.StatusCode)
+	}
+}
+
+// Pre-iam accounts had bcrypt hashes; they still log in and are upgraded to
+// argon2id on the way.
+func TestBcryptHashUpgradedOnLogin(t *testing.T) {
+	ts, db := newTestServer(t)
+	signupAndLogin(t, ts.URL, "bcrypt@x.com", testPassword, "B")
+	legacy, err := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Table("password_credentials").Where("login = ?", "bcrypt@x.com").Update("hash", string(legacy))
+
+	loginPair(t, ts.URL, "bcrypt@x.com", testPassword)
+	var hash string
+	db.Table("password_credentials").Select("hash").Where("login = ?", "bcrypt@x.com").Take(&hash)
+	if !strings.HasPrefix(hash, "$argon2id$") {
+		t.Fatalf("hash not upgraded: %q", hash)
 	}
 }
 
@@ -1569,8 +1817,8 @@ func TestRefreshLogoutAndLogoutAll(t *testing.T) {
 // what the new-work upload flow does when its first upload is rejected.
 func TestCreatorCanRemoveOwnEmptyWorkOnly(t *testing.T) {
 	ts, _ := newTestServer(t)
-	creator := signupAndLogin(t, ts.URL, "creator1@x.com", "hunter22", "C")
-	other := signupAndLogin(t, ts.URL, "creator2@x.com", "hunter22", "O")
+	creator := signupAndLogin(t, ts.URL, "creator1@x.com", testPassword, "C")
+	other := signupAndLogin(t, ts.URL, "creator2@x.com", testPassword, "O")
 	reason := map[string]string{"reason": "upload failed"}
 
 	empty := createWork(t, ts.URL, creator, "Empty Work", "")

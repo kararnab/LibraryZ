@@ -4,15 +4,17 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/kararnab/iam/v2/policy"
+	"github.com/kararnab/iam/v2/ratelimit"
 	"github.com/kararnab/libraryZ/internal/auth"
 	"github.com/kararnab/libraryZ/internal/catalog"
 	"github.com/kararnab/libraryZ/internal/contribution"
 	"github.com/kararnab/libraryZ/internal/library"
-	"github.com/kararnab/libraryZ/internal/middleware"
 	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/storage"
@@ -29,16 +31,44 @@ type Deps struct {
 	// AllowPrivateLAN additionally permits RFC-1918 private-IP origins in dev
 	// mode (when AllowedOrigins is empty). Ignored otherwise.
 	AllowPrivateLAN bool
+	// JWTSecret signs access tokens (at least 32 bytes); JWTPreviousSecret
+	// still verifies them during a rotation. See auth.Config.
+	JWTSecret         string
+	JWTPreviousSecret string
 	// Token lifetimes; zero means the auth package defaults.
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	// VerifySessionOnAccess makes revocation immediate (one lookup per
+	// authenticated request). See auth.Config.
+	VerifySessionOnAccess bool
+	// Login throttles; nil means per-process in-memory limiters.
+	LoginLimiterPerAccount ratelimit.Limiter
+	LoginLimiterPerIP      ratelimit.Limiter
+	// TrustedProxies whose X-Forwarded-For names the client IP (Kong).
+	TrustedProxies []netip.Prefix
 }
 
 // New builds the HTTP handler with all routes wired. Used by cmd/libraryz and
 // integration tests so production and tests exercise the same router.
-func New(d Deps) http.Handler {
-	authSvc := auth.NewService(d.DB, d.AccessTokenTTL, d.RefreshTokenTTL)
-	authH := auth.NewHandler(authSvc)
+func New(d Deps) (http.Handler, error) {
+	a, err := auth.New(auth.Config{
+		DB:                    d.DB,
+		JWTSecret:             d.JWTSecret,
+		JWTPreviousSecret:     d.JWTPreviousSecret,
+		AccessTokenTTL:        d.AccessTokenTTL,
+		RefreshTokenTTL:       d.RefreshTokenTTL,
+		VerifySessionOnAccess: d.VerifySessionOnAccess,
+		PerLogin:              d.LoginLimiterPerAccount,
+		PerIP:                 d.LoginLimiterPerIP,
+		TrustedProxies:        d.TrustedProxies,
+	})
+	if err != nil {
+		return nil, err
+	}
+	authH := auth.NewHandler(a)
+	requireMod := func(action policy.Action, resource string, h http.HandlerFunc) http.Handler {
+		return a.HTTP.RequirePermission(action, resource, nil)(h)
+	}
 
 	catSvc := catalog.NewService(d.DB, d.Storage)
 	catH := catalog.NewHandler(catSvc, d.MaxUploadBytes)
@@ -73,9 +103,11 @@ func New(d Deps) http.Handler {
 	r.HandleFunc("/contributions/{id}", contribH.Get).Methods(http.MethodGet)
 
 	authed := r.NewRoute().Subrouter()
-	authed.Use(middleware.Auth(d.DB))
+	authed.Use(a.HTTP.RequireAuth)
 	authed.HandleFunc("/auth/me", authH.Me).Methods(http.MethodGet)
 	authed.HandleFunc("/auth/logout-all", authH.LogoutAll).Methods(http.MethodPost)
+	authed.HandleFunc("/me/sessions", authH.ListSessions).Methods(http.MethodGet)
+	authed.HandleFunc("/me/sessions/{id}", authH.RevokeSession).Methods(http.MethodDelete)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)
 	authed.HandleFunc("/works/{id}/editions", catH.UploadEdition).Methods(http.MethodPost)
 	// Moderators, or the creator of a still-empty work; checked in the service.
@@ -95,18 +127,20 @@ func New(d Deps) http.Handler {
 	authed.HandleFunc("/me/recommendations", recH.Recommend).Methods(http.MethodGet)
 	authed.HandleFunc("/me/recommendations/{id}/dismiss", recH.Dismiss).Methods(http.MethodPost)
 
-	// Moderator-gated subset of the authed routes. Subrouter inherits the
-	// parent Auth middleware via gorilla/mux's chain composition, so a
-	// request hitting /contributions/{id}/approve gets Auth -> Moderator.
-	mod := authed.NewRoute().Subrouter()
-	mod.Use(middleware.Moderator(d.DB))
-	mod.HandleFunc("/contributions/{id}/approve", contribH.Approve).Methods(http.MethodPost)
-	mod.HandleFunc("/contributions/{id}/reject", contribH.Reject).Methods(http.MethodPost)
-	mod.HandleFunc("/editions/{id}", catH.DeleteEdition).Methods(http.MethodDelete)
+	// Moderator-gated: RBAC permissions (role "moderator", see auth.New),
+	// checked against the roles in the caller's access token.
+	authed.Handle("/contributions/{id}/approve",
+		requireMod(auth.ActionModerate, auth.ResourceContribution, contribH.Approve)).Methods(http.MethodPost)
+	authed.Handle("/contributions/{id}/reject",
+		requireMod(auth.ActionModerate, auth.ResourceContribution, contribH.Reject)).Methods(http.MethodPost)
+	authed.Handle("/editions/{id}",
+		requireMod(auth.ActionDelete, auth.ResourceEdition, catH.DeleteEdition)).Methods(http.MethodDelete)
 
-	// Wrap the whole router so OPTIONS preflights are handled by us before
-	// mux's method matcher returns 405. r.Use(...) would run AFTER routing.
-	return cors(r, d.AllowedOrigins, d.AllowPrivateLAN)
+	// Protect identifies the caller from the bearer token (anonymous if
+	// absent or invalid) for every route; RequireAuth/RequirePermission then
+	// gate. CORS wraps everything so OPTIONS preflights are answered before
+	// mux's method matcher returns 405 (r.Use would run after routing).
+	return cors(a.HTTP.Protect(r), d.AllowedOrigins, d.AllowPrivateLAN), nil
 }
 
 // cors is the CORS layer for browser clients. It reflects the request Origin
