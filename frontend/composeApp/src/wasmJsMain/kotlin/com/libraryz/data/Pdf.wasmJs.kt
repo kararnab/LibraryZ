@@ -65,6 +65,12 @@ class WasmPdfReader internal constructor(
         return Image.makeFromEncoded(bytes).toComposeImageBitmap()
     }
 
+    override suspend fun landscapePages(): Set<Int> {
+        val result = awaitBytes { resolve -> pdfJsLandscape(handle, resolve) } ?: return emptySet()
+        val flags = result.unsafeCast<Int8Array>()
+        return (0 until flags.length).filterTo(HashSet()) { flags[it].toInt() != 0 }
+    }
+
     override fun close() {
         pdfJsClose(handle)
     }
@@ -157,6 +163,29 @@ private external fun pdfJsRenderPage(
     widthPx: Int,
     resolve: (JsAny?) -> Unit,
 )
+
+// One flag per page (1 = wider than tall, rotation included), as an Int8Array.
+@JsFun(
+    """
+    (id, resolve) => {
+      const doc = globalThis.__libraryzPdfDocs && globalThis.__libraryzPdfDocs.get(id);
+      if (!doc) { resolve(null); return; }
+      const flags = new Int8Array(doc.numPages);
+      const pages = [];
+      for (let i = 0; i < doc.numPages; i++) {
+        pages.push(doc.getPage(i + 1).then(page => {
+          const vp = page.getViewport({ scale: 1 });
+          flags[i] = vp.width > vp.height ? 1 : 0;
+        }));
+      }
+      Promise.all(pages).then(() => resolve(flags), err => {
+        console.error('[libraryz] pdf.js page sizes failed:', err);
+        resolve(null);
+      });
+    }
+    """
+)
+private external fun pdfJsLandscape(id: Int, resolve: (JsAny?) -> Unit)
 
 @JsFun("(id) => { if (globalThis.__libraryzPdfDocs) globalThis.__libraryzPdfDocs.delete(id); }")
 private external fun pdfJsClose(id: Int)

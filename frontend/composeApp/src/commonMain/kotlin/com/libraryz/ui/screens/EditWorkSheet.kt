@@ -59,6 +59,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.libraryz.data.Work
 import com.libraryz.data.api.ApiException
+import com.libraryz.data.splitAuthors
+import com.libraryz.data.surname
+import com.libraryz.ui.components.AuthorChipsField
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.BannerTone
 import kotlinx.coroutines.launch
@@ -336,7 +339,17 @@ private fun FieldEditor(
 ) {
     val primary = MaterialTheme.colorScheme.primary
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OutlinedTextField(
+        if (field.key == "authors") {
+            // Names added here keep a primary outline until submitted.
+            AuthorChipsField(
+                value = value,
+                onValueChange = onChange,
+                label = field.label,
+                original = splitAuthors(field.initial),
+                highlight = changed && !invalid,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else OutlinedTextField(
             value = value,
             onValueChange = onChange,
             label = {
@@ -356,7 +369,6 @@ private fun FieldEditor(
             keyboardOptions = if (field.numeric) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default,
             supportingText = when {
                 invalid -> ({ Text("Use a whole number, like 1871") })
-                field.key == "authors" -> ({ Text("Separate several authors with semicolons (;)") })
                 field.key == "openlibrary_id" && !changed -> ({ Text("Looks like OL12345W") })
                 else -> null
             },
@@ -380,7 +392,12 @@ private fun FieldEditor(
                     Text("EDITED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
                 Text(
-                    if (field.initial.isBlank()) "Was empty" else "Was “${field.initial}”",
+                    when {
+                        field.initial.isBlank() -> "Was empty"
+                        // Surnames keep a long list of names on one line.
+                        field.key == "authors" -> "Was " + splitAuthors(field.initial).joinToString("; ") { surname(it) }
+                        else -> "Was “${field.initial}”"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

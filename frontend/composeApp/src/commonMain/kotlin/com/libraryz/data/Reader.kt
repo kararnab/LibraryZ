@@ -22,6 +22,13 @@ sealed interface Reader {
 interface PagedReader : Reader {
     val pageCount: Int
     suspend fun renderPage(pageIndex: Int, widthPx: Int): ImageBitmap
+
+    /**
+     * The pages that are wider than tall (as displayed, rotation included);
+     * a two-page spread shows those alone. Same threading rule as
+     * [renderPage].
+     */
+    suspend fun landscapePages(): Set<Int> = emptySet()
 }
 
 /**

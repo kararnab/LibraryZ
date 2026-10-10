@@ -49,6 +49,12 @@ class AndroidPdfReader(bytes: ByteArray) : PagedReader {
             }
         }
 
+    override suspend fun landscapePages(): Set<Int> = withContext(Dispatchers.IO) {
+        (0 until pageCount).filterTo(HashSet()) { i ->
+            renderer.openPage(i).use { it.width > it.height }
+        }
+    }
+
     override fun close() {
         runCatching { renderer.close() }
         runCatching { pfd.close() }

@@ -117,10 +117,18 @@ fun BrowseScreen(
     // cancelling the prior delay+search. An empty query restores the full
     // list (WorksState.search treats blank as "clear").
     if (onSearch != null) {
-        var first by remember { mutableStateOf(true) }
+        // Skips the search for text that didn't come from typing: the
+        // initial value, and a search started elsewhere (an author link).
+        var skip by remember { mutableStateOf(true) }
+        LaunchedEffect(activeSearchQuery) {
+            if (activeSearchQuery != null && activeSearchQuery != queryText.trim()) {
+                skip = true
+                queryText = activeSearchQuery
+            }
+        }
         LaunchedEffect(queryText) {
-            if (first) {
-                first = false
+            if (skip) {
+                skip = false
                 return@LaunchedEffect
             }
             delay(300)

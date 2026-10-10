@@ -24,3 +24,6 @@ interface TokenStore {
 }
 
 expect fun createTokenStore(): TokenStore
+
+/** The same kind of one-value store, holding the reader's per-book layouts ([com.libraryz.data.BookLayouts]). */
+expect fun createReaderLayoutStore(): TokenStore

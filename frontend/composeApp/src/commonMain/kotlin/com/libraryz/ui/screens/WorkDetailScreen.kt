@@ -1,5 +1,8 @@
 package com.libraryz.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.automirrored.rounded.LibraryBooks
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -22,8 +25,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -36,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -53,8 +59,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
 import com.libraryz.data.LibraryStatus
@@ -62,9 +79,12 @@ import com.libraryz.data.TEXT_POSITIONS
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import com.libraryz.data.api.UpsertLibraryRequest
+import com.libraryz.data.authorsFull
+import com.libraryz.data.joinAuthors
 import com.libraryz.data.pickReadableEdition
 import com.libraryz.data.prettySize
 import com.libraryz.data.readActionLabel
+import com.libraryz.data.splitAuthors
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EditionRow
@@ -82,6 +102,8 @@ fun WorkDetailScreen(
     onRead: (Edition) -> Unit,
     onDownload: (Edition) -> Unit,
     onSuggestEdit: (() -> Unit)? = null,
+    // Opens Browse searching for one author; null leaves the names as plain text.
+    onAuthorClick: ((String) -> Unit)? = null,
     // Personal-library controls. Shown only when [libraryEnabled] (signed in).
     // [libraryEntry] is the caller's current entry (null = not in library yet).
     libraryEnabled: Boolean = false,
@@ -172,7 +194,7 @@ fun WorkDetailScreen(
             ) {
                 // The one thing most visitors came for, so it leads.
                 val readable = pickReadableEdition(work.editions)
-                Header(work, wide) {
+                Header(work, wide, onAuthorClick) {
                     if (wide) ReadAction(work, readable, libraryEntry, wide = true, onRead = onRead)
                 }
                 if (!wide) ReadAction(work, readable, libraryEntry, wide = false, onRead = onRead)
@@ -232,9 +254,9 @@ fun WorkDetailScreen(
     }
 }
 
-/** Cover beside title, author and metadata; [extra] goes under the metadata (wide only). */
+/** Cover beside title, authors and metadata; [extra] goes under the metadata (wide only). */
 @Composable
-private fun Header(work: Work, wide: Boolean, extra: @Composable () -> Unit) {
+private fun Header(work: Work, wide: Boolean, onAuthorClick: ((String) -> Unit)?, extra: @Composable () -> Unit) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(if (wide) 32.dp else 20.dp),
         verticalAlignment = Alignment.Bottom,
@@ -248,9 +270,7 @@ private fun Header(work: Work, wide: Boolean, extra: @Composable () -> Unit) {
                 text = work.title,
                 style = if (wide) MaterialTheme.typography.displaySmall else MaterialTheme.typography.headlineSmall,
             )
-            if (!work.authors.isNullOrBlank()) {
-                Text(work.authors, style = MaterialTheme.typography.bodyLarge)
-            }
+            AuthorLine(splitAuthors(work.authors), wide, onAuthorClick)
             val meta = listOfNotNull(work.publicationYear?.toString(), work.language?.takeIf { it.isNotBlank() })
             val metaStyle = if (wide) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall
             if (wide) {
@@ -270,6 +290,116 @@ private fun Header(work: Work, wide: Boolean, extra: @Composable () -> Unit) {
                 }
             }
             extra()
+        }
+    }
+}
+
+/**
+ * "by A, B, C and D". Wide: each name is a link that searches Browse for
+ * it. Narrow: inline links can't be 44dp tall, so the whole line is one
+ * button that opens an Authors sheet (one author searches directly).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AuthorLine(names: List<String>, wide: Boolean, onAuthorClick: ((String) -> Unit)?) {
+    if (names.isEmpty()) return
+    val colors = MaterialTheme.colorScheme
+    var sheetOpen by remember { mutableStateOf(false) }
+    // Past six names: the first five, then "and N more" (which opens the sheet).
+    val shown = if (names.size <= 6) names else names.take(5)
+    val more = names.size - shown.size
+    val separator = { i: Int ->
+        when {
+            more > 0 -> if (i < shown.lastIndex) ", " else ""
+            i == shown.lastIndex -> ""
+            i == shown.lastIndex - 1 -> " and "
+            else -> ", "
+        }
+    }
+    val nameStyle = SpanStyle(color = colors.primary, fontWeight = FontWeight.SemiBold)
+    if (onAuthorClick == null) {
+        Text("by " + authorsFull(joinAuthors(names)), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+        return
+    }
+    if (wide) {
+        val linkStyle = TextLinkStyles(
+            style = nameStyle.copy(textDecoration = TextDecoration.Underline),
+            hoveredStyle = nameStyle.copy(textDecoration = TextDecoration.Underline, background = colors.primary.copy(alpha = 0.08f)),
+        )
+        Text(
+            buildAnnotatedString {
+                append("by ")
+                shown.forEachIndexed { i, name ->
+                    withLink(LinkAnnotation.Clickable("author:$i", linkStyle) { onAuthorClick(name) }) { append(name) }
+                    append(separator(i))
+                }
+                if (more > 0) {
+                    append(" and ")
+                    withLink(LinkAnnotation.Clickable("more", linkStyle) { sheetOpen = true }) { append("$more more") }
+                }
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = colors.onSurfaceVariant,
+        )
+    } else {
+        Surface(
+            onClick = { if (names.size == 1) onAuthorClick(names[0]) else sheetOpen = true },
+            color = Color.Transparent,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).semantics {
+                contentDescription = "Authors: ${authorsFull(joinAuthors(names))}. " +
+                    if (names.size == 1) "Find their books" else "Show authors"
+            },
+        ) {
+            Row(Modifier.padding(vertical = 9.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    buildAnnotatedString {
+                        append("by ")
+                        shown.forEachIndexed { i, name ->
+                            withStyle(nameStyle) { append(name) }
+                            append(separator(i))
+                        }
+                        if (more > 0) append(" and $more more")
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.onSurfaceVariant)
+            }
+        }
+    }
+    if (sheetOpen) {
+        ModalBottomSheet(onDismissRequest = { sheetOpen = false }, containerColor = colors.surfaceContainerLow) {
+            Text("Authors", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp))
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+                names.forEach { name ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .clickable(onClickLabel = "Find books by $name") {
+                                sheetOpen = false
+                                onAuthorClick(name)
+                            }
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape).background(colors.surfaceContainerHighest),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(name.first().uppercase(), style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant)
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(name, style = MaterialTheme.typography.bodyLarge)
+                            Text("Find their books in Browse", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                        }
+                        Icon(Icons.Rounded.Search, contentDescription = null, tint = colors.onSurfaceVariant)
+                    }
+                }
+            }
         }
     }
 }

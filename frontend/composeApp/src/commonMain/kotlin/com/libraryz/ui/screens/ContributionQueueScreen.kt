@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.sp
 import com.libraryz.data.Contribution
 import com.libraryz.data.Work
 import com.libraryz.data.api.ContributionsState
+import com.libraryz.data.authorsFull
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
@@ -450,7 +451,7 @@ private fun SuggestionDetail(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
-                book?.authors?.takeIf { it.isNotBlank() }?.let {
+                authorsFull(book?.authors).takeIf { it.isNotEmpty() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(

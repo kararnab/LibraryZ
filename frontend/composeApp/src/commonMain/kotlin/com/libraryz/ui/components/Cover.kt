@@ -35,6 +35,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.libraryz.data.coverAuthorsL
+import com.libraryz.data.coverAuthorsM
+import com.libraryz.data.coverAuthorsXL
 import com.libraryz.theme.LibraryZ
 import kotlin.math.abs
 
@@ -185,15 +188,20 @@ fun BookCover(
                             .background(ink.copy(alpha = 0.5f)),
                     )
                 }
-                if (!authors.isNullOrBlank()) {
+                val credit = when (size) {
+                    CoverSize.XL -> coverAuthorsXL(authors)
+                    CoverSize.L -> coverAuthorsL(authors)
+                    else -> coverAuthorsM(authors)
+                }
+                if (credit.isNotEmpty()) {
                     Text(
-                        text = authors.uppercase(),
+                        text = credit.uppercase(),
                         color = ink.copy(alpha = 0.85f),
                         fontWeight = FontWeight.SemiBold,
                         fontSize = size.author,
                         lineHeight = size.authorLine,
                         letterSpacing = 0.12.em,
-                        maxLines = 1,
+                        maxLines = if (size == CoverSize.XL) 2 else 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

@@ -51,6 +51,14 @@ private class IosPdfReader(private val doc: PDFDocument) : PagedReader {
             Image.makeFromEncoded(png.toByteArray()).toComposeImageBitmap()
         }
 
+    override suspend fun landscapePages(): Set<Int> = withContext(Dispatchers.Default) {
+        (0 until pageCount).filterTo(HashSet()) { i ->
+            val page = doc.pageAtIndex(i.toULong()) ?: return@filterTo false
+            val (w, h) = page.boundsForBox(kPDFDisplayBoxMediaBox).useContents { size.width to size.height }
+            if (page.rotation % 180 != 0L) h > w else w > h
+        }
+    }
+
     // PDFDocument has no explicit dispose; ARC reclaims it once unreferenced.
     override fun close() {}
 }
