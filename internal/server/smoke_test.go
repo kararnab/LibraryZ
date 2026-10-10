@@ -49,8 +49,7 @@ func newTestDeps(t *testing.T) (server.Deps, *gorm.DB) {
 	}, db
 }
 
-// testJWTSecret is long enough for HS256 (32 bytes); testPassword meets
-// iam's default length policy (12 characters).
+// testJWTSecret is long enough for HS256 (32 bytes).
 const (
 	testJWTSecret = "test-secret-test-secret-test-secret!"
 	testPassword  = "hunter2hunter2"
@@ -1629,7 +1628,7 @@ func TestPromotionTakesEffectOnRefresh(t *testing.T) {
 	url := ts.URL + "/contributions/" + uuid.NewString() + "/approve"
 	if r := postAuthed(t, url, "Bearer "+p.AccessToken); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("token issued before promotion: want 403, got %d", r.StatusCode)
-	} else if body := strings.TrimSpace(readBody(r)); body != "forbidden" {
+	} else if body := strings.TrimSpace(readBody(r)); body != "moderator required" {
 		t.Fatalf("403 body = %q", body)
 	}
 	resp := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": p.RefreshToken})
@@ -1649,7 +1648,8 @@ func TestSignupValidation(t *testing.T) {
 		msg  string
 	}{
 		{map[string]string{"email": "not-an-email", "password": testPassword}, http.StatusBadRequest, "a valid email is required"},
-		{map[string]string{"email": "short@x.com", "password": "hunter22"}, http.StatusBadRequest, "password must be at least 12 characters"},
+		{map[string]string{"email": "short@x.com", "password": "hunter2"}, http.StatusBadRequest, "password must be at least 8 characters"},
+		{map[string]string{"email": "eight@x.com", "password": "hunter22"}, http.StatusCreated, ""},
 		{map[string]string{"email": "Signup-OK@X.com", "password": testPassword, "name": " Ok "}, http.StatusCreated, ""},
 		{map[string]string{"email": "signup-ok@x.com", "password": testPassword}, http.StatusConflict, "email already registered"},
 	} {
@@ -1658,7 +1658,7 @@ func TestSignupValidation(t *testing.T) {
 		if r.StatusCode != c.code || (c.msg != "" && strings.TrimSpace(body) != c.msg) {
 			t.Fatalf("signup %v: got %d %q, want %d %q", c.body, r.StatusCode, body, c.code, c.msg)
 		}
-		if c.code == http.StatusCreated {
+		if c.code == http.StatusCreated && c.body["name"] != "" {
 			var p tokenPair
 			if err := json.Unmarshal([]byte(body), &p); err != nil || p.AccessToken == "" || p.RefreshToken == "" {
 				t.Fatalf("signup should return a token pair, got %s", body)

@@ -143,7 +143,7 @@ fun AuthGateScreen(
                             { Text(currentError, color = MaterialTheme.colorScheme.error) }
                         }
                         tab == 1 -> {
-                            { Text("At least 12 characters") }
+                            { Text("At least 8 characters") }
                         }
                         else -> null
                     }

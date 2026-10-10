@@ -127,7 +127,7 @@ paths:
       tags: [auth]
       summary: Create a new user account and start a session
       description: |
-        Passwords are hashed with argon2id and must be 12–1024 characters.
+        Passwords are hashed with argon2id and must be 8–1024 characters.
         Returns the same token pair as `POST /auth/login`.
       requestBody:
         required: true
@@ -1209,7 +1209,7 @@ components:
         id:           { type: string }
         created_at:   { type: string, format: date-time }
         last_used_at: { type: string, format: date-time }
-        expires_at:   { type: string, format: date-time, description: Absolute expiry; also ends after 14 days unused }
+        expires_at:   { type: string, format: date-time, description: "Hard cap (365 days by default); the session also ends after 30 days unused" }
         ip:           { type: string }
         user_agent:   { type: string }
         current:      { type: boolean, description: The session this request's access token belongs to }
@@ -1219,7 +1219,7 @@ components:
       required: [email, password]
       properties:
         email:    { type: string, format: email }
-        password: { type: string, minLength: 12, maxLength: 1024 }
+        password: { type: string, minLength: 8, maxLength: 1024 }
         name:     { type: string }
 
     LoginRequest:

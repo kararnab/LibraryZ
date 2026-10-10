@@ -873,7 +873,7 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
 ([#21](https://github.com/kararnab/LibraryZ/issues/21); supersedes the custom
 auth of #15 and #8, and covers #6's frontend part).
 115. **iam core module, GORM stores.** `internal/auth` wires iam v2.2.0:
-     password provider (argon2id, 12–1024 chars, bcrypt upgraded on login),
+     password provider (argon2id, 8–1024 chars, bcrypt upgraded on login),
      bearer sessions, HS256 JWTs (`JWT_SECRET`, `JWT_SECRET_PREVIOUS`), RBAC.
      Not `iam/pgstore` (Postgres-only `TEXT[]`/`JSONB`, raw pgx); instead GORM
      adapters for `iam.UserStore` + `password.CredentialStore` (`users`,

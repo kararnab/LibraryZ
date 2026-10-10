@@ -30,6 +30,9 @@ type Config struct {
 	// with a refresh token that lives RefreshTokenTTL.
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	// SessionMaxAge caps a session's total lifetime however often it's
+	// refreshed (LIBRARYZ_SESSION_MAX_AGE, default 365 days).
+	SessionMaxAge time.Duration
 	// VerifySessionOnAccess checks the session behind every access token,
 	// so logout / revocation is immediate rather than at access-token
 	// expiry. One extra lookup per authenticated request. Off by default:
@@ -112,6 +115,7 @@ func Load() *Config {
 		JWTPreviousSecret:      GetJWTPreviousSecret(),
 		AccessTokenTTL:         getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:        getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		SessionMaxAge:          getDurationEnv("LIBRARYZ_SESSION_MAX_AGE", 365*24*time.Hour),
 		VerifySessionOnAccess:  os.Getenv("LIBRARYZ_VERIFY_SESSION_ON_ACCESS") == "true",
 		SessionPurgeInterval:   getDurationEnv("LIBRARYZ_SESSION_PURGE_INTERVAL", time.Hour),
 		RedisAddr:              os.Getenv("LIBRARYZ_REDIS_ADDR"),

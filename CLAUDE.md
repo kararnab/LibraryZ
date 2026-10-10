@@ -255,7 +255,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
     `suspendCancellableCoroutine`. Look for `awaitHandle` / `awaitBytes`
     in that file. Don't replace those with `.await()`.
 - **Auth is github.com/kararnab/iam v2.2.0 (core module only), bearer
-  mode only.** `internal/auth` wires it: argon2id passwords (12–1024 chars),
+  mode only.** `internal/auth` wires it: argon2id passwords (8–1024 chars;
+  `auth.PasswordPolicy` deliberately overrides iam's 12-char default),
   15m HS256 access JWTs + opaque single-use refresh tokens (reuse revokes the
   session), RBAC, per-account/per-IP login throttling (Redis via
   `iam/redisstore` when `LIBRARYZ_REDIS_ADDR` is set, else memory). **Don't

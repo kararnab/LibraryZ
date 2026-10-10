@@ -198,7 +198,8 @@ All via environment variables. Defaults work for `docker compose up`.
 | `JWT_SECRET`                              | _(unset)_ — HS256 key, must be ≥32 bytes                           |
 | `JWT_SECRET_PREVIOUS`                     | _(unset)_ — old secret, still verifies during a rotation           |
 | `LIBRARYZ_ACCESS_TOKEN_TTL`               | `15m`                                                              |
-| `LIBRARYZ_REFRESH_TOKEN_TTL`              | `720h` — a session's absolute lifetime (also ends after 14 days unused) |
+| `LIBRARYZ_REFRESH_TOKEN_TTL`              | `720h` — a session ends after this long unused; every refresh restarts it |
+| `LIBRARYZ_SESSION_MAX_AGE`                | `8760h` (365 days) — hard cap on a session however often it's refreshed |
 | `LIBRARYZ_VERIFY_SESSION_ON_ACCESS`       | `false` — `true` makes logout/revocation kill access tokens at once (one DB lookup per request) |
 | `LIBRARYZ_REDIS_ADDR` / `_REDIS_PASSWORD` | _(unset)_ — Redis for login throttling shared by all replicas; unset = per-process memory |
 | `LIBRARYZ_TRUSTED_PROXIES`                | _(unset)_ — CIDRs whose `X-Forwarded-For` is believed (set behind Kong / an LB) |
@@ -234,7 +235,7 @@ Full spec: [openapi/libraryz.yaml](openapi/libraryz.yaml).
 ```
 GET  /health                       liveness
 GET  /ready                        readiness (DB + storage), 503 when degraded
-POST /auth/signup                  {email, password, name} -> token pair (password: 12–1024 chars)
+POST /auth/signup                  {email, password, name} -> token pair (password: 8–1024 chars)
 POST /auth/login                   {email, password}     -> {access_token, refresh_token, expires_in}
 POST /auth/refresh                 {refresh_token}       -> new pair (single-use, rotating)
 POST /auth/logout                  {refresh_token}       ends that session

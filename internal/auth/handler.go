@@ -36,7 +36,7 @@ func NewHandler(a *Auth) *Handler {
 // clients, so keep them short and safe.
 var (
 	errMsgInvalidEmail = "a valid email is required"
-	errMsgWeakPassword = fmt.Sprintf("password must be at least %d characters", password.DefaultPolicy.MinLength)
+	errMsgWeakPassword = fmt.Sprintf("password must be at least %d characters", PasswordPolicy.MinLength)
 	errMsgLongPassword = "password is too long"
 	errMsgEmailExists  = "email already registered"
 )

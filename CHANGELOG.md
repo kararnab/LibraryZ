@@ -16,7 +16,8 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 - **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.2.0**
   ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the
   hand-written JWT/refresh code. Passwords are hashed with argon2id (bcrypt
-  hashes are upgraded on login) and must be 12–1024 characters (was 8).
+  hashes are upgraded on login) and must be 8–1024 characters (the old 8-character minimum, now with a
+  maximum instead of bcrypt's silent 72-byte truncation).
   Failed logins are throttled per account (5 per 15 minutes) and per IP
   (100), with a growing back-off; the counters live in Redis
   (`LIBRARYZ_REDIS_ADDR`) so every replica shares them. Unknown accounts and

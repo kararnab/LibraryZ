@@ -47,7 +47,12 @@ const (
 const (
 	DefaultAccessTokenTTL  = 15 * time.Minute
 	DefaultRefreshTokenTTL = 30 * 24 * time.Hour
+	DefaultSessionMaxAge   = 365 * 24 * time.Hour
 )
+
+// PasswordPolicy keeps LibraryZ's 8-character minimum (iam's DefaultPolicy
+// asks for 12). The maximum bounds hashing cost.
+var PasswordPolicy = password.Policy{MinLength: 8, MaxLength: 1024}
 
 // Config configures New.
 type Config struct {
@@ -59,11 +64,13 @@ type Config struct {
 	JWTSecret         string
 	JWTPreviousSecret string
 
-	// AccessTokenTTL is the access-token lifetime; RefreshTokenTTL the
-	// absolute lifetime of a session (refresh-token family). Zero means the
-	// defaults above.
+	// AccessTokenTTL is the access-token lifetime. RefreshTokenTTL is how
+	// long a session survives unused: every refresh restarts it, so an
+	// active client stays signed in (as before iam). SessionMaxAge caps a
+	// session's total lifetime regardless. Zero means the defaults above.
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	SessionMaxAge   time.Duration
 
 	// VerifySessionOnAccess checks on every request that the access token's
 	// session still exists, so logout / logout-all / session revocation take
@@ -82,6 +89,9 @@ type Config struct {
 	// behind a proxy every client shares the proxy's IP and the per-IP
 	// login limit becomes global.
 	TrustedProxies []netip.Prefix
+
+	// Now is the clock (tests); nil means time.Now.
+	Now func() time.Time
 }
 
 // Auth bundles the iam service and its HTTP adapter.
@@ -106,12 +116,21 @@ func New(cfg Config) (*Auth, error) {
 	if cfg.RefreshTokenTTL <= 0 {
 		cfg.RefreshTokenTTL = DefaultRefreshTokenTTL
 	}
+	if cfg.SessionMaxAge <= 0 {
+		cfg.SessionMaxAge = DefaultSessionMaxAge
+	}
+	if cfg.SessionMaxAge < cfg.RefreshTokenTTL {
+		cfg.SessionMaxAge = cfg.RefreshTokenTTL
+	}
 
 	kp, err := keyProvider(cfg.JWTSecret, cfg.JWTPreviousSecret)
 	if err != nil {
 		return nil, err
 	}
-	jc := jwt.Config{Issuer: "libraryz", Audience: "libraryz-api", TTL: cfg.AccessTokenTTL}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	jc := jwt.Config{Issuer: "libraryz", Audience: "libraryz-api", TTL: cfg.AccessTokenTTL, Now: cfg.Now}
 	issuer, err := jwt.NewIssuer(kp, jc)
 	if err != nil {
 		return nil, err
@@ -126,7 +145,7 @@ func New(cfg Config) (*Auth, error) {
 	if err != nil {
 		return nil, err
 	}
-	passwords, err := password.NewProvider(users, hasher, password.DefaultPolicy)
+	passwords, err := password.NewProvider(users, hasher, PasswordPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +167,8 @@ func New(cfg Config) (*Auth, error) {
 		Users:     users,
 		Sessions:  sessions,
 		Session: session.Config{
-			Bearer: session.Timeouts{Absolute: cfg.RefreshTokenTTL},
+			Bearer: session.Timeouts{Idle: cfg.RefreshTokenTTL, Absolute: cfg.SessionMaxAge},
+			Now:    cfg.Now,
 		},
 		AllowedModes:          []session.Mode{session.ModeBearer},
 		TokenIssuer:           issuer,
@@ -157,6 +177,7 @@ func New(cfg Config) (*Auth, error) {
 		Policy:                rbac,
 		Signup:                iam.SignupConfig{Policy: invite.Open},
 		RateLimit:             iam.RateLimitConfig{PerLogin: cfg.PerLogin, PerIP: cfg.PerIP},
+		Now:                   cfg.Now,
 	})
 	if err != nil {
 		return nil, err
@@ -218,7 +239,8 @@ func writeError(w http.ResponseWriter, _ *http.Request, status int, err error) {
 	msg := "unauthenticated"
 	switch {
 	case errors.Is(err, httpauth.ErrForbidden):
-		msg = "forbidden"
+		// The only permissions LibraryZ checks are the moderator's.
+		msg = "moderator required"
 	case errors.Is(err, httpauth.ErrUnavailable):
 		msg = "authentication temporarily unavailable"
 	case status != http.StatusUnauthorized:

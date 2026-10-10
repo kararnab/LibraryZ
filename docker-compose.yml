@@ -153,10 +153,12 @@ services:
       # value here; tokens signed with either verify. Drop it once old access
       # tokens have expired (LIBRARYZ_ACCESS_TOKEN_TTL, default 15m).
       # JWT_SECRET_PREVIOUS: ""
-      # Token lifetimes (Go durations; defaults shown). The refresh TTL is a
-      # session's absolute lifetime; it also ends after 14 days unused.
+      # Token lifetimes (Go durations; defaults shown). A session ends after
+      # LIBRARYZ_REFRESH_TOKEN_TTL unused (each refresh restarts it), and at
+      # LIBRARYZ_SESSION_MAX_AGE regardless.
       # LIBRARYZ_ACCESS_TOKEN_TTL: "15m"
       # LIBRARYZ_REFRESH_TOKEN_TTL: "720h"
+      # LIBRARYZ_SESSION_MAX_AGE: "8760h"
       # Access tokens are stateless by default: logout / revocation stops
       # refreshing at once, but an issued access token works until it expires.
       # "true" checks the session on every request (one DB lookup) instead.

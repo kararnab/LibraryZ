@@ -38,6 +38,7 @@ type Deps struct {
 	// Token lifetimes; zero means the auth package defaults.
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	SessionMaxAge   time.Duration
 	// VerifySessionOnAccess makes revocation immediate (one lookup per
 	// authenticated request). See auth.Config.
 	VerifySessionOnAccess bool
@@ -57,6 +58,7 @@ func New(d Deps) (http.Handler, error) {
 		JWTPreviousSecret:     d.JWTPreviousSecret,
 		AccessTokenTTL:        d.AccessTokenTTL,
 		RefreshTokenTTL:       d.RefreshTokenTTL,
+		SessionMaxAge:         d.SessionMaxAge,
 		VerifySessionOnAccess: d.VerifySessionOnAccess,
 		PerLogin:              d.LoginLimiterPerAccount,
 		PerIP:                 d.LoginLimiterPerIP,

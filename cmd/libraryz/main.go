@@ -93,6 +93,7 @@ func main() {
 		JWTPreviousSecret:      cfg.JWTPreviousSecret,
 		AccessTokenTTL:         cfg.AccessTokenTTL,
 		RefreshTokenTTL:        cfg.RefreshTokenTTL,
+		SessionMaxAge:          cfg.SessionMaxAge,
 		VerifySessionOnAccess:  cfg.VerifySessionOnAccess,
 		LoginLimiterPerAccount: perAccount,
 		LoginLimiterPerIP:      perIP,

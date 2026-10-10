@@ -280,15 +280,16 @@ parts, LibraryZ supplies storage and endpoints.
   access token (HS256 JWT, `iss=libraryz`, `aud=libraryz-api`, `kid` per
   secret, 15 min) and an opaque 256-bit refresh token in the JSON body.
   Refresh tokens rotate on every use; presenting a rotated one is treated as
-  theft and revokes the whole session. Sessions end after 30 days, or 14
-  days unused. `JWT_SECRET` (≥32 bytes) signs; `JWT_SECRET_PREVIOUS` still
+  theft and revokes the whole session. A session ends after 30 days unused;
+  each refresh restarts that clock, so active clients stay signed in (as
+  before iam), up to a 365-day cap (`LIBRARYZ_SESSION_MAX_AGE`). `JWT_SECRET` (≥32 bytes) signs; `JWT_SECRET_PREVIOUS` still
   verifies during a rotation.
 - **Access tokens are stateless by default.** `logout`, `logout-all` and
   `DELETE /me/sessions/{id}` stop refreshing at once, but an issued access
   token works until it expires (≤15 min). That was a deliberate trade for
   no per-request DB lookup; `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` flips
   it (one session lookup per authenticated request, immediate revocation).
-- **Passwords:** argon2id (iam's OWASP baseline parameters), 12–1024
+- **Passwords:** argon2id (iam's OWASP baseline parameters), 8–1024
   characters. bcrypt hashes from before iam are verified and upgraded on
   login. Unknown accounts cost the same hash time as wrong passwords, and
   get the same `401`.
