@@ -42,6 +42,9 @@ type Deps struct {
 	// VerifySessionOnAccess makes revocation immediate (one lookup per
 	// authenticated request). See auth.Config.
 	VerifySessionOnAccess bool
+	// LoadSubjectOnAccess makes role changes and disabled users take effect
+	// at once. See auth.Config.
+	LoadSubjectOnAccess bool
 	// Login throttles; nil means per-process in-memory limiters.
 	LoginLimiterPerAccount ratelimit.Limiter
 	LoginLimiterPerIP      ratelimit.Limiter
@@ -60,6 +63,7 @@ func New(d Deps) (http.Handler, error) {
 		RefreshTokenTTL:       d.RefreshTokenTTL,
 		SessionMaxAge:         d.SessionMaxAge,
 		VerifySessionOnAccess: d.VerifySessionOnAccess,
+		LoadSubjectOnAccess:   d.LoadSubjectOnAccess,
 		PerLogin:              d.LoginLimiterPerAccount,
 		PerIP:                 d.LoginLimiterPerIP,
 		TrustedProxies:        d.TrustedProxies,
@@ -130,7 +134,8 @@ func New(d Deps) (http.Handler, error) {
 	authed.HandleFunc("/me/recommendations/{id}/dismiss", recH.Dismiss).Methods(http.MethodPost)
 
 	// Moderator-gated: RBAC permissions (role "moderator", see auth.New),
-	// checked against the roles in the caller's access token.
+	// checked against the caller's current roles (LoadSubjectOnAccess) or,
+	// with it off, the roles in their access token.
 	authed.Handle("/contributions/{id}/approve",
 		requireMod(auth.ActionModerate, auth.ResourceContribution, contribH.Approve)).Methods(http.MethodPost)
 	authed.Handle("/contributions/{id}/reject",

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 
 	"github.com/kararnab/iam/v2"
 	"github.com/kararnab/iam/v2/password"
@@ -20,6 +21,7 @@ type Users struct{ db *gorm.DB }
 
 var (
 	_ iam.UserStore            = (*Users)(nil)
+	_ iam.SubjectDeleter       = (*Users)(nil)
 	_ password.CredentialStore = (*Users)(nil)
 )
 
@@ -103,10 +105,11 @@ func (u *Users) UnlinkIdentity(ctx context.Context, subjectID, prov, providerID 
 		Delete(&Identity{}).Error
 }
 
-// CreateSubject implements iam.IdentityStore: a users row plus the granted
+// CreateSubject implements iam.IdentityStore: a users row (with the display
+// name from the sign-up form, grant.Profile["name"]) plus the granted
 // roles, in one transaction. It doesn't link the identity (iam does).
 func (u *Users) CreateSubject(ctx context.Context, id provider.Identity, grant iam.SignupGrant) (string, error) {
-	user := User{Email: id.Email}
+	user := User{Email: id.Email, Name: strings.TrimSpace(grant.Profile["name"])}
 	db := u.db.WithContext(ctx)
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&user).Error; err != nil {
@@ -128,6 +131,24 @@ func (u *Users) CreateSubject(ctx context.Context, id provider.Identity, grant i
 		return "", err
 	}
 	return SubjectID(user.ID), nil
+}
+
+// DeleteSubject implements iam.SubjectDeleter: iam calls it when a sign-up
+// fails after CreateSubject. Roles and identities are deleted explicitly
+// (sqlite only enforces ON DELETE CASCADE with foreign_keys=ON).
+func (u *Users) DeleteSubject(ctx context.Context, subjectID string) error {
+	id, ok := ParseSubjectID(subjectID)
+	if !ok {
+		return nil
+	}
+	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, m := range []any{&UserRole{}, &Identity{}} {
+			if err := tx.Where("user_id = ?", id).Delete(m).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("id = ?", id).Delete(&User{}).Error
+	})
 }
 
 // GetCredential implements password.CredentialStore.

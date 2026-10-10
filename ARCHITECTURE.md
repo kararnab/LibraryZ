@@ -271,7 +271,7 @@ real time.
 
 ## Auth + moderation
 
-Built on [kararnab/iam](https://github.com/kararnab/iam) v2.2.0 (core
+Built on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0 (core
 module only). `internal/auth` wires it up; iam does the security-sensitive
 parts, LibraryZ supplies storage and endpoints.
 
@@ -300,6 +300,9 @@ parts, LibraryZ supplies storage and endpoints.
   comes from `X-Forwarded-For` only when the peer is in
   `LIBRARYZ_TRUSTED_PROXIES` — set it behind Kong, or every client shares
   Kong's IP.
+- **Sign-up** passes the display name to `CreateSubject` as profile data,
+  so the user row is written once; if a later sign-up step fails, iam
+  deletes the user again (`Users.DeleteSubject`).
 - **Storage is ours, checked by iam's conformance suite.** GORM adapters in
   `internal/auth` implement `iam.UserStore` + `password.CredentialStore`
   (`users`, `user_roles`, `identities`, `password_credentials`) and
@@ -307,7 +310,7 @@ parts, LibraryZ supplies storage and endpoints.
   `iam/pgstore`: it uses Postgres-only types (`TEXT[]`, `JSONB`) and raw pgx,
   while our tests run on SQLite and our DB layer is GORM.
   `internal/auth/store_test.go` runs `storetest.Users` / `storetest.Sessions`
-  on SQLite, and `store_postgres_test.go` on Postgres (`-tags=postgres`).
+  / `storetest.Purger` on SQLite, and `store_postgres_test.go` on Postgres (`-tags=postgres`).
   Expired sessions are purged hourly (`LIBRARYZ_SESSION_PURGE_INTERVAL`).
 - **Numeric user ids stay.** `users.id` is still a `uint` referenced by
   contributions, user_books, rec_* and editions.uploaded_by; it crosses the
@@ -315,15 +318,17 @@ parts, LibraryZ supplies storage and endpoints.
   reads iam's subject (`httpauth.SubjectFrom`), so handlers didn't change.
 - **Middleware:** `httpauth.Protect` wraps the router and identifies the
   caller from `Authorization: Bearer …` (missing or invalid → anonymous; two
-  headers → anonymous). `RequireAuth` gates the authed routes. Its
-  cross-origin protection is off: with no ambient credentials it has nothing
-  to protect, and browser access is governed by the CORS allowlist.
+  headers → anonymous). `RequireAuth` gates the authed routes. Being
+  bearer-only, it makes no CSRF or cross-origin checks (there are no ambient
+  credentials to protect); browser access is governed by the CORS allowlist.
 - **Moderation is RBAC.** Role `moderator` grants `moderate contribution`,
   `delete edition` and `delete work`; routes check them with
-  `RequirePermission`, deny by default. Roles ride in the access token, so a
-  promotion or demotion reaches those routes at the next refresh (≤15 min).
-  `/auth/me` and the service-level check in `catalog.DeleteWork` read
-  `user_roles` directly, so they're immediate.
+  `RequirePermission`, deny by default. With `LoadSubjectOnAccess` (on by
+  default) iam loads the user on every authenticated request, so a
+  promotion, demotion or `users.disabled = true` applies to the next request,
+  and a disabled or deleted user's session is revoked. That's two small
+  lookups per authenticated request; `LIBRARYZ_LOAD_SUBJECT_ON_ACCESS=false`
+  falls back to the roles in the access token (stale for up to 15 min).
 - **Moderator promotion is by DB write.** There's deliberately no admin
   endpoint yet:
   `INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '…'`.

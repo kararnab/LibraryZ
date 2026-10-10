@@ -872,7 +872,7 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
 **Slice 7.5 — adopt [kararnab/iam](https://github.com/kararnab/iam) for auth**
 ([#21](https://github.com/kararnab/LibraryZ/issues/21); supersedes the custom
 auth of #15 and #8, and covers #6's frontend part).
-115. **iam core module, GORM stores.** `internal/auth` wires iam v2.2.0:
+115. **iam core module, GORM stores.** `internal/auth` wires iam v2.3.0:
      password provider (argon2id, 8–1024 chars, bcrypt upgraded on login),
      bearer sessions, HS256 JWTs (`JWT_SECRET`, `JWT_SECRET_PREVIOUS`), RBAC.
      Not `iam/pgstore` (Postgres-only `TEXT[]`/`JSONB`, raw pgx); instead GORM
@@ -894,11 +894,19 @@ auth of #15 and #8, and covers #6's frontend part).
      logout / logout-all / session revocation stop refreshing immediately,
      but an issued access token stays valid until it expires (≤15 min).
      Before 7.5, logout-all killed access tokens at once via
-     `users.token_version` (one lookup per request). Roles also ride in the
-     token, so a promotion or demotion reaches moderator routes at the next
-     refresh. `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` restores immediate
-     revocation (not role freshness) at one session lookup per request.
-     Revisit if a real takedown-of-a-user flow appears. ✓
+     `users.token_version` (one lookup per request).
+     `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` restores immediate revocation
+     at one session lookup per request. Revisit if a real
+     takedown-of-a-user flow appears. Roles, by contrast, are fresh: iam
+     v2.3.0's `LoadSubjectOnAccess` (on by default) reloads the user per
+     request, so promotions, demotions and disabling apply at once. ✓
+120. **Upstream fixes in iam v2.3.0** ([kararnab/iam#29](https://github.com/kararnab/iam/pull/29),
+     issues iam#23–#28, found during 7.5). LibraryZ uses all of them:
+     bearer-only httpauth skips cross-origin checks (our `CSRF.Disabled`
+     override is gone), `LoadSubjectOnAccess` (fresh roles),
+     `SignUpRequest.Profile` (name written with the user row),
+     `iam.SubjectDeleter` (failed sign-ups roll back the user), and
+     `session.Purger` + `storetest.Purger` for our session store. ✓
 118. **Login throttling.** iam's per-account (5 failures / 15 min) and
      per-IP (100) limiters with back-off, on Redis via `iam/redisstore`
      (`LIBRARYZ_REDIS_ADDR`), shared by every replica; on top of Kong's

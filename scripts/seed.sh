@@ -377,8 +377,6 @@ submit_contrib() {
 # ── Moderator promotion ───────────────────────────────────────────────────
 if [ "$DO_MOD" = "1" ]; then
   say "Promoting $MOD_EMAIL to moderator"
-  # Takes effect on the moderator's next login or token refresh (roles ride
-  # in the access token).
   SQL="INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '$MOD_EMAIL' ON CONFLICT DO NOTHING;"
   if docker compose ps postgres 2>/dev/null | grep -qE 'Up|running'; then
     docker compose exec -T postgres psql -U user -d libraryz -c "$SQL" >/dev/null

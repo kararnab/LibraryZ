@@ -72,6 +72,7 @@ func (h *Handler) SignUp(w http.ResponseWriter, r *http.Request) {
 	res, err := h.auth.Service.SignUp(r.Context(), iam.SignUpRequest{
 		Provider: password.ProviderName,
 		Params:   map[string]string{"username": email, "password": c.Password},
+		Profile:  map[string]string{"name": c.Name},
 		Client:   h.auth.HTTP.ClientInfo(r),
 	})
 	switch {
@@ -90,16 +91,6 @@ func (h *Handler) SignUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// iam's sign-up carries no profile fields, so the display name is set
-	// once the subject exists.
-	if name := strings.TrimSpace(c.Name); name != "" {
-		if uid, ok := ParseSubjectID(res.Subject.ID); ok {
-			if err := h.auth.db.WithContext(r.Context()).Model(&User{}).
-				Where("id = ?", uid).Update("name", name).Error; err != nil {
-				log.Printf("auth: set name for user %d: %v", uid, err)
-			}
-		}
-	}
 	h.writeTokens(w, http.StatusCreated, res.AccessToken, res.RefreshToken)
 }
 

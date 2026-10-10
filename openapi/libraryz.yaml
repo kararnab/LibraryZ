@@ -28,9 +28,9 @@ info:
     already-used refresh token revokes the whole session. Access tokens are
     stateless by default: logging out stops refreshing at once, but an issued
     access token works until it expires (unless the server runs with
-    `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true`). Roles (e.g. `moderator`) are
-    carried in the access token, so a role change reaches moderator-only
-    routes at the next refresh.
+    `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true`). Roles (e.g. `moderator`) and
+    a disabled account are re-read on every authenticated request, so they
+    apply at once.
 
     **Errors.** `4xx`/`5xx` bodies are short `text/plain` messages (`4xx`
     messages are safe to show to users), except where an operation documents
@@ -320,9 +320,8 @@ paths:
       summary: Return the currently authenticated user
       description: |
         Reads live DB state for `roles` / `is_moderator`, not the JWT — so a
-        user promoted via SQL while logged in sees the new flag at once.
-        (Moderator-only routes check the roles in the access token, which
-        catch up at the next refresh.)
+        user promoted via SQL while logged in sees the new flag at once, as
+        do moderator-only routes.
       security:
         - bearerAuth: []
       x-codeSamples:
@@ -1118,8 +1117,8 @@ components:
           schema: { type: string }
     Forbidden:
       description: >
-        Authenticated but not permitted (e.g. the access token lacks the
-        `moderator` role; after a promotion, refresh to pick it up)
+        Authenticated but not permitted (e.g. the user lacks the
+        `moderator` role)
       content:
         text/plain:
           schema: { type: string }

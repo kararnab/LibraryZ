@@ -58,3 +58,7 @@ func TestPostgresUsersConformance(t *testing.T) {
 func TestPostgresSessionsConformance(t *testing.T) {
 	storetest.Sessions(t, func(t *testing.T) session.Store { return auth.NewSessions(freshPostgres(t)) })
 }
+
+func TestPostgresSessionsPurgerConformance(t *testing.T) {
+	storetest.Purger(t, func(t *testing.T) storetest.PurgingSessionStore { return auth.NewSessions(freshPostgres(t)) })
+}

@@ -163,6 +163,9 @@ services:
       # refreshing at once, but an issued access token works until it expires.
       # "true" checks the session on every request (one DB lookup) instead.
       # LIBRARYZ_VERIFY_SESSION_ON_ACCESS: "true"
+      # Roles and disabled accounts are re-read on every request (two small
+      # lookups); "false" uses the access token's roles (≤15 min stale).
+      # LIBRARYZ_LOAD_SUBJECT_ON_ACCESS: "true"
       # Login throttling (5 failures per account, 100 per IP, per 15 minutes,
       # then back-off) shared across replicas. Unset = per-process memory.
       LIBRARYZ_REDIS_ADDR: "redis:6379"

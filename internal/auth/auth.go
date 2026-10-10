@@ -78,6 +78,13 @@ type Config struct {
 	// cost of one primary-key lookup per authenticated request.
 	VerifySessionOnAccess bool
 
+	// LoadSubjectOnAccess loads the user on every authenticated request, so
+	// a granted or revoked role and a disabled or deleted user take effect
+	// at once instead of when the access token expires (roles otherwise
+	// come from the token). Two small lookups (users, user_roles) per
+	// authenticated request. cmd/libraryz turns it on by default.
+	LoadSubjectOnAccess bool
+
 	// PerLogin and PerIP throttle failed logins. Nil means iam's in-memory
 	// limiters, which are per-process: use a shared one (redisstore) when
 	// running more than one instance.
@@ -174,6 +181,7 @@ func New(cfg Config) (*Auth, error) {
 		TokenIssuer:           issuer,
 		TokenVerifier:         verifier,
 		VerifySessionOnAccess: cfg.VerifySessionOnAccess,
+		LoadSubjectOnAccess:   cfg.LoadSubjectOnAccess,
 		Policy:                rbac,
 		Signup:                iam.SignupConfig{Policy: invite.Open},
 		RateLimit:             iam.RateLimitConfig{PerLogin: cfg.PerLogin, PerIP: cfg.PerIP},
@@ -185,13 +193,10 @@ func New(cfg Config) (*Auth, error) {
 
 	mw, err := httpauth.New(httpauth.Config{
 		Service: svc,
-		Modes:   []session.Mode{session.ModeBearer},
-		// Bearer only: there's no ambient credential (no cookies) for a
-		// cross-site request to ride on, so neither CSRF tokens nor
-		// cross-origin protection apply. Leaving the latter on would reject
-		// the Wasm client's cross-origin POSTs; browser access is governed
-		// by the server's CORS allowlist instead.
-		CSRF:           httpauth.CSRFConfig{Disabled: true},
+		// Bearer only. With no cookie mode, httpauth (≥ v2.3.0) makes no
+		// CSRF or cross-origin checks, so the Wasm client's cross-origin
+		// requests work; browser access is governed by the CORS allowlist.
+		Modes:          []session.Mode{session.ModeBearer},
 		TrustedProxies: cfg.TrustedProxies,
 		ErrorHandler:   writeError,
 	})

@@ -44,6 +44,10 @@ func TestSessionsConformance(t *testing.T) {
 	storetest.Sessions(t, func(t *testing.T) session.Store { return auth.NewSessions(freshDB(t)) })
 }
 
+func TestSessionsPurgerConformance(t *testing.T) {
+	storetest.Purger(t, func(t *testing.T) storetest.PurgingSessionStore { return auth.NewSessions(freshDB(t)) })
+}
+
 func TestPurgeExpired(t *testing.T) {
 	ctx := context.Background()
 	s := auth.NewSessions(freshDB(t))

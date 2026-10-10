@@ -46,6 +46,8 @@ func newTestDeps(t *testing.T) (server.Deps, *gorm.DB) {
 	return server.Deps{
 		DB: db, Storage: store, MaxUploadBytes: 16 << 20,
 		JWTSecret: testJWTSecret,
+		// The production default (cmd/libraryz): roles are read per request.
+		LoadSubjectOnAccess: true,
 	}, db
 }
 
@@ -87,14 +89,7 @@ func grantModerator(t *testing.T, db *gorm.DB, email string) {
 	}
 }
 
-// promoteModerator grants the role and logs in again: moderator routes
-// check the roles carried by the access token, which a token issued before
-// the promotion doesn't have. Returns the new "Bearer …" value.
-func promoteModerator(t *testing.T, base string, db *gorm.DB, email string) string {
-	t.Helper()
-	grantModerator(t, db, email)
-	return "Bearer " + loginPair(t, base, email, testPassword).AccessToken
-}
+
 
 func TestSmokeHappyPath(t *testing.T) {
 	ts, _ := newTestServer(t)
@@ -554,7 +549,7 @@ func TestContributionSubmitAndList(t *testing.T) {
 func TestContributionApproveUpdatesWork(t *testing.T) {
 	ts, db := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "contrib2@x.com", testPassword, "C2")
-	auth = promoteModerator(t, ts.URL, db, "contrib2@x.com")
+	grantModerator(t, db, "contrib2@x.com")
 	workID := createWork(t, ts.URL, auth, "Old Title", "Old Author")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{
@@ -586,7 +581,7 @@ func TestContributionApproveUpdatesWork(t *testing.T) {
 func TestContributionRejectDoesNotUpdateWork(t *testing.T) {
 	ts, db := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "contrib3@x.com", testPassword, "C3")
-	auth = promoteModerator(t, ts.URL, db, "contrib3@x.com")
+	grantModerator(t, db, "contrib3@x.com")
 	workID := createWork(t, ts.URL, auth, "Original", "Author A")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{"title": "Different"})
@@ -612,7 +607,7 @@ func TestContributionRejectDoesNotUpdateWork(t *testing.T) {
 func TestContributionDoubleApproveReturns409(t *testing.T) {
 	ts, db := newTestServer(t)
 	auth := signupAndLogin(t, ts.URL, "contrib4@x.com", testPassword, "C4")
-	auth = promoteModerator(t, ts.URL, db, "contrib4@x.com")
+	grantModerator(t, db, "contrib4@x.com")
 	workID := createWork(t, ts.URL, auth, "W", "")
 
 	resp := submitContribution(t, ts.URL, auth, workID, map[string]any{"title": "T"})
@@ -1376,7 +1371,7 @@ func editionID(t *testing.T, resp *http.Response) string {
 func TestModeratorRemovesEdition(t *testing.T) {
 	ts, db := newTestServer(t)
 	mod := signupAndLogin(t, ts.URL, "takedown1@x.com", testPassword, "Mod")
-	mod = promoteModerator(t, ts.URL, db, "takedown1@x.com")
+	grantModerator(t, db, "takedown1@x.com")
 	user := signupAndLogin(t, ts.URL, "takedown1u@x.com", testPassword, "User")
 	workID := createWork(t, ts.URL, user, "Takedown Work", "")
 	content := []byte("infringing bytes\n")
@@ -1426,7 +1421,7 @@ func TestModeratorRemovesEdition(t *testing.T) {
 func TestModeratorRemovesWork(t *testing.T) {
 	ts, db := newTestServer(t)
 	mod := signupAndLogin(t, ts.URL, "takedown2@x.com", testPassword, "Mod")
-	mod = promoteModerator(t, ts.URL, db, "takedown2@x.com")
+	grantModerator(t, db, "takedown2@x.com")
 	workID := createWork(t, ts.URL, mod, "Zyzzyva Removed Title", "")
 	ed := editionID(t, uploadEdition(t, ts.URL, mod, workID, "txt", "en", []byte("zyzzyva\n")))
 	putLibrary(t, ts.URL, mod, workID, map[string]any{"status": "reading"})
@@ -1617,26 +1612,96 @@ func TestRefreshTokenReuseRevokesSession(t *testing.T) {
 	}
 }
 
-// Roles travel in the access token: a promotion reaches moderator routes at
-// the next refresh, without a new login.
-func TestPromotionTakesEffectOnRefresh(t *testing.T) {
+// Roles are read per request (LoadSubjectOnAccess, the default): a
+// promotion or demotion applies to the very next request on the same token.
+func TestRoleChangesApplyImmediately(t *testing.T) {
 	ts, db := newTestServer(t)
 	signupAndLogin(t, ts.URL, "promote@x.com", testPassword, "P")
-	p := loginPair(t, ts.URL, "promote@x.com", testPassword)
+	tok := "Bearer " + loginPair(t, ts.URL, "promote@x.com", testPassword).AccessToken
+	url := ts.URL + "/contributions/" + uuid.NewString() + "/approve"
+
+	if r := postAuthed(t, url, tok); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("before promotion: want 403, got %d", r.StatusCode)
+	} else if body := strings.TrimSpace(readBody(r)); body != "moderator required" {
+		t.Fatalf("403 body = %q", body)
+	}
 	grantModerator(t, db, "promote@x.com")
+	// Past the permission check: the contribution doesn't exist.
+	if r := postAuthed(t, url, tok); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("after promotion, same token: want 404, got %d %s", r.StatusCode, readBody(r))
+	}
+	db.Exec(`DELETE FROM user_roles WHERE role = 'moderator' AND user_id = (SELECT id FROM users WHERE email = ?)`, "promote@x.com")
+	if r := postAuthed(t, url, tok); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("after demotion, same token: want 403, got %d", r.StatusCode)
+	}
+}
+
+// A disabled user is cut off at once: the access token stops working and
+// the session can't refresh.
+func TestDisabledUserIsCutOffImmediately(t *testing.T) {
+	ts, db := newTestServer(t)
+	signupAndLogin(t, ts.URL, "disable@x.com", testPassword, "D")
+	p := loginPair(t, ts.URL, "disable@x.com", testPassword)
+	db.Table("users").Where("email = ?", "disable@x.com").Update("disabled", true)
+
+	if code := getMe(t, ts.URL, p.AccessToken); code != http.StatusUnauthorized {
+		t.Fatalf("access token of a disabled user: want 401, got %d", code)
+	}
+	if r := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": p.RefreshToken}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("refresh of a disabled user: want 401, got %d", r.StatusCode)
+	}
+	if r := postJSON(t, ts.URL+"/auth/login", map[string]string{"email": "disable@x.com", "password": testPassword}); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("login of a disabled user: want 401, got %d", r.StatusCode)
+	}
+}
+
+// With LIBRARYZ_LOAD_SUBJECT_ON_ACCESS=false roles come from the access
+// token: a promotion reaches moderator routes at the next refresh.
+func TestTokenRolesWithoutLoadOnAccess(t *testing.T) {
+	deps, db := newTestDeps(t)
+	deps.LoadSubjectOnAccess = false
+	ts := newServer(t, deps)
+	signupAndLogin(t, ts.URL, "tokenroles@x.com", testPassword, "T")
+	p := loginPair(t, ts.URL, "tokenroles@x.com", testPassword)
+	grantModerator(t, db, "tokenroles@x.com")
 
 	url := ts.URL + "/contributions/" + uuid.NewString() + "/approve"
 	if r := postAuthed(t, url, "Bearer "+p.AccessToken); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("token issued before promotion: want 403, got %d", r.StatusCode)
-	} else if body := strings.TrimSpace(readBody(r)); body != "moderator required" {
-		t.Fatalf("403 body = %q", body)
 	}
 	resp := postJSON(t, ts.URL+"/auth/refresh", map[string]string{"refresh_token": p.RefreshToken})
 	var p2 tokenPair
 	_ = json.NewDecoder(resp.Body).Decode(&p2)
-	// Past the permission check: the contribution doesn't exist.
 	if r := postAuthed(t, url, "Bearer "+p2.AccessToken); r.StatusCode != http.StatusNotFound {
-		t.Fatalf("refreshed token: want 404 (authorized, unknown contribution), got %d %s", r.StatusCode, readBody(r))
+		t.Fatalf("refreshed token: want 404, got %d %s", r.StatusCode, readBody(r))
+	}
+}
+
+// The Wasm client is served from another origin: its writes and its login
+// must not be rejected by cross-origin protection (bearer only, no cookies).
+func TestCrossOriginClientIsAccepted(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupLogin(t, ts.URL, "wasm@x.com")
+	send := func(path, auth string, body any) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, mustJSON(t, body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set("Origin", "http://example.test")
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	if r := send("/works", auth, map[string]any{"title": "From the web"}); r.StatusCode != http.StatusCreated {
+		t.Fatalf("cross-origin create: want 201, got %d %s", r.StatusCode, readBody(r))
+	}
+	if r := send("/auth/login", "", map[string]string{"email": "wasm@x.com", "password": testPassword}); r.StatusCode != http.StatusOK {
+		t.Fatalf("cross-origin login: want 200, got %d", r.StatusCode)
 	}
 }
 

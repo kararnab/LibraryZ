@@ -38,6 +38,12 @@ type Config struct {
 	// expiry. One extra lookup per authenticated request. Off by default:
 	// LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true.
 	VerifySessionOnAccess bool
+	// LoadSubjectOnAccess reloads the user's roles and disabled flag on
+	// every authenticated request, so promotions, demotions and account
+	// disabling apply at once. On by default; LIBRARYZ_LOAD_SUBJECT_ON_ACCESS
+	// =false saves two lookups per request, and roles then come from the
+	// access token (up to its TTL stale).
+	LoadSubjectOnAccess bool
 	// SessionPurgeInterval is how often expired sessions are deleted.
 	SessionPurgeInterval time.Duration
 	// RedisAddr (host:port) backs the login throttles shared by every
@@ -117,6 +123,7 @@ func Load() *Config {
 		RefreshTokenTTL:        getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		SessionMaxAge:          getDurationEnv("LIBRARYZ_SESSION_MAX_AGE", 365*24*time.Hour),
 		VerifySessionOnAccess:  os.Getenv("LIBRARYZ_VERIFY_SESSION_ON_ACCESS") == "true",
+		LoadSubjectOnAccess:    os.Getenv("LIBRARYZ_LOAD_SUBJECT_ON_ACCESS") != "false",
 		SessionPurgeInterval:   getDurationEnv("LIBRARYZ_SESSION_PURGE_INTERVAL", time.Hour),
 		RedisAddr:              os.Getenv("LIBRARYZ_REDIS_ADDR"),
 		RedisPassword:          os.Getenv("LIBRARYZ_REDIS_PASSWORD"),

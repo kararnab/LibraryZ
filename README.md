@@ -201,6 +201,7 @@ All via environment variables. Defaults work for `docker compose up`.
 | `LIBRARYZ_REFRESH_TOKEN_TTL`              | `720h` — a session ends after this long unused; every refresh restarts it |
 | `LIBRARYZ_SESSION_MAX_AGE`                | `8760h` (365 days) — hard cap on a session however often it's refreshed |
 | `LIBRARYZ_VERIFY_SESSION_ON_ACCESS`       | `false` — `true` makes logout/revocation kill access tokens at once (one DB lookup per request) |
+| `LIBRARYZ_LOAD_SUBJECT_ON_ACCESS`         | `true` — role changes and disabled users apply to the next request; `false` uses the token's roles (≤15 min stale) |
 | `LIBRARYZ_REDIS_ADDR` / `_REDIS_PASSWORD` | _(unset)_ — Redis for login throttling shared by all replicas; unset = per-process memory |
 | `LIBRARYZ_TRUSTED_PROXIES`                | _(unset)_ — CIDRs whose `X-Forwarded-For` is believed (set behind Kong / an LB) |
 | `LIBRARYZ_SESSION_PURGE_INTERVAL`         | `1h` — how often expired sessions are deleted                      |
@@ -273,7 +274,7 @@ POST /me/recommendations/{work_id}/dismiss
 
 **Moderator-only** (role `moderator`; there's no admin endpoint, promote with
 `INSERT INTO user_roles (user_id, role) SELECT id, 'moderator' FROM users WHERE email = '...'`.
-Roles ride in the access token, so it takes effect at the next refresh or login.)
+It applies to the user's next request.)
 
 ```
 POST /contributions/{id}/approve

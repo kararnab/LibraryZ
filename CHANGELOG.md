@@ -13,7 +13,7 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 ## [Unreleased]
 
 ### Security
-- **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.2.0**
+- **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0**
   ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the
   hand-written JWT/refresh code. Passwords are hashed with argon2id (bcrypt
   hashes are upgraded on login) and must be 8–1024 characters (the old 8-character minimum, now with a
@@ -102,8 +102,9 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   response header is gone). New `GET /me/sessions` and
   `DELETE /me/sessions/{id}`. `/auth/me` adds `roles`. Moderation is the
   RBAC role `moderator` (`INSERT INTO user_roles …`) instead of
-  `users.is_moderator`; roles ride in the access token, so a promotion
-  reaches moderator routes at the next refresh. Access tokens are stateless
+  `users.is_moderator`; role changes and disabling a user
+  (`users.disabled`) apply to the next request
+  (`LIBRARYZ_LOAD_SUBJECT_ON_ACCESS`, default on). Access tokens are stateless
   by default: logout / logout-all stop refreshes at once, but issued access
   tokens last until they expire (≤15 min) unless
   `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true`. Kong rate-limits `/auth/refresh`

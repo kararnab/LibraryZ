@@ -228,9 +228,9 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   INSERT INTO user_roles (user_id, role)
   SELECT id, 'moderator' FROM users WHERE email = 'you@example.com';
   ```
-  Roles ride in the access token, so moderator routes see a promotion at
-  the user's next refresh/login (≤15 min); `/auth/me` and
-  `middleware.IsModerator` read the table and see it at once. Sign-up never
+  It applies to the user's next request: iam reloads the user per request
+  (`LoadSubjectOnAccess`, default on; `LIBRARYZ_LOAD_SUBJECT_ON_ACCESS=false`
+  makes routes use the token's roles, ≤15 min stale). Sign-up never
   grants roles, so the request body can't escalate privileges.
 - **Wasm parity (2026-05-26):** file picker, download, **and PDF
   preview** all real. PDF preview uses pdf.js v3.11.174 (UMD global)
@@ -254,7 +254,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
     resolve callback, JS invokes it, Kotlin wraps in
     `suspendCancellableCoroutine`. Look for `awaitHandle` / `awaitBytes`
     in that file. Don't replace those with `.await()`.
-- **Auth is github.com/kararnab/iam v2.2.0 (core module only), bearer
+- **Auth is github.com/kararnab/iam v2.3.0 (core module only), bearer
   mode only.** `internal/auth` wires it: argon2id passwords (8–1024 chars;
   `auth.PasswordPolicy` deliberately overrides iam's 12-char default),
   15m HS256 access JWTs + opaque single-use refresh tokens (reuse revokes the
@@ -269,8 +269,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (`VerifySessionOnAccess` off): logout / logout-all / `DELETE
   /me/sessions/{id}` stop refreshes at once, but issued access tokens live
   out their 15 minutes; `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` changes
-  that. httpauth's CSRF/cross-origin checks are disabled on purpose (no
-  cookies; CORS governs browsers). Set `LIBRARYZ_TRUSTED_PROXIES` behind
+  that. Roles and `users.disabled` are reloaded per request
+  (`LoadSubjectOnAccess`, default on). Bearer-only httpauth makes no
+  CSRF/cross-origin checks (iam ≥ v2.3.0); CORS governs browsers. Sign-up
+  passes the name as `SignUpRequest.Profile`; `Users.DeleteSubject` lets
+  iam roll back a failed sign-up; `Sessions` is a `session.Purger`. Set `LIBRARYZ_TRUSTED_PROXIES` behind
   Kong or the per-IP limit sees every client as Kong. Secret rotation:
   `JWT_SECRET_PREVIOUS`. Frontend: `ApiClient` uses Ktor's `Auth` plugin
   (`bearer { loadTokens; refreshTokens }`, `cacheTokens = false` so it

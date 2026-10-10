@@ -95,6 +95,7 @@ func main() {
 		RefreshTokenTTL:        cfg.RefreshTokenTTL,
 		SessionMaxAge:          cfg.SessionMaxAge,
 		VerifySessionOnAccess:  cfg.VerifySessionOnAccess,
+		LoadSubjectOnAccess:    cfg.LoadSubjectOnAccess,
 		LoginLimiterPerAccount: perAccount,
 		LoginLimiterPerIP:      perIP,
 		TrustedProxies:         cfg.TrustedProxies,

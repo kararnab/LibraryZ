@@ -13,7 +13,10 @@ import (
 // session_rotations tables.
 type Sessions struct{ db *gorm.DB }
 
-var _ session.Store = (*Sessions)(nil)
+var (
+	_ session.Store  = (*Sessions)(nil)
+	_ session.Purger = (*Sessions)(nil)
+)
 
 // NewSessions returns the session store.
 func NewSessions(db *gorm.DB) *Sessions { return &Sessions{db: db} }
@@ -154,18 +157,19 @@ func (s *Sessions) DeleteBySubject(ctx context.Context, subjectID, exceptID stri
 	return int(n), err
 }
 
-// PurgeExpired deletes sessions whose absolute expiry is before now, and
+// PurgeExpired implements session.Purger: it deletes sessions whose
+// absolute expiry is at or before now (with their rotated hashes), and
 // returns how many. iam never returns them (the manager checks expiry), so
 // this only bounds table growth. Idle-expired sessions linger until their
 // absolute expiry; they're just as unusable.
 func (s *Sessions) PurgeExpired(ctx context.Context, now time.Time) (int, error) {
 	var n int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		ids := tx.Model(&Session{}).Select("id").Where("expires_at < ?", now.UTC())
+		ids := tx.Model(&Session{}).Select("id").Where("expires_at <= ?", now.UTC())
 		if err := tx.Where("session_id IN (?)", ids).Delete(&SessionRotation{}).Error; err != nil {
 			return err
 		}
-		res := tx.Where("expires_at < ?", now.UTC()).Delete(&Session{})
+		res := tx.Where("expires_at <= ?", now.UTC()).Delete(&Session{})
 		n = res.RowsAffected
 		return res.Error
 	})
