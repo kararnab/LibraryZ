@@ -36,7 +36,7 @@ func TestIsolatedPDFStripsActiveContent(t *testing.T) {
 		t.Fatalf("SanitizeContext: %v", err)
 	}
 	out := mustReadAll(t, rc)
-	if _, err := api.ReadContext(bytes.NewReader(out), pdfConf()); err != nil {
+	if _, err := api.ReadContext(context.Background(), bytes.NewReader(out), pdfConf()); err != nil {
 		t.Fatalf("sanitized PDF unreadable: %v", err)
 	}
 	if pdfCatalogHas(t, out, "OpenAction") {

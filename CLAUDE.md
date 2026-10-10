@@ -161,9 +161,10 @@ auto-disabled; don't try to invoke `:composeApp:linkPodReleaseFrameworkIos*`.
   reintroduce one. **Downloads stream through the backend**
   (`GET /editions/{id}/download` → `store.Get` → `io.Copy`); there are
   **no presigned URLs** — fine at the current scale (public downloads,
-  500 MiB cap). Adding minio-go pulled newer `golang.org/x/*` deps that
-  require **go 1.25** (go.mod directive + the `golang:1.25-alpine`
-  builder).
+  500 MiB cap). Current `golang.org/x/*`, pdfcpu and goose releases
+  require **go 1.26** (the go.mod directive); the Docker builder
+  (`golang:1.27-alpine`) and CI build with Go 1.27. pdfcpu ≥0.16 takes a
+  `context.Context` on `api.ReadContext`/`WriteContext`.
   **Compose runs RustFS, not MinIO** (`rustfs/rustfs`, pinned): MinIO stopped
   publishing images and archived its repo in 2026, so `minio/minio` doesn't
   pull. The client library is still `minio-go` — it's a generic S3 client.

@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://github.com/kararnab/libraryZ/actions/workflows/ci.yml"><img src="https://github.com/kararnab/libraryZ/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/go-1.25-00ADD8?logo=go" alt="Go 1.25">
+  <img src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go" alt="Go 1.26+">
   <img src="https://img.shields.io/badge/kotlin-2.0.21-7F52FF?logo=kotlin" alt="Kotlin 2.0.21">
   <img src="https://img.shields.io/badge/compose--multiplatform-1.7.3-4285F4" alt="Compose Multiplatform 1.7.3">
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
@@ -161,7 +161,7 @@ recommender pipeline, per-platform frontend shims — in
 
 ## Tech stack
 
-**Backend** — Go 1.25 · gorilla/mux · GORM · Postgres 16 (SQLite for tests
+**Backend** — Go 1.26+ · gorilla/mux · GORM · Postgres 16 (SQLite for tests
 via `glebarez/sqlite`) · golang-jwt · bcrypt · minio-go · gonum (for ALS).
 
 **Frontend** — Kotlin 2.0.21 · Compose Multiplatform 1.7.3 · Ktor client ·

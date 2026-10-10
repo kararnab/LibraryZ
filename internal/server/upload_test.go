@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -98,7 +99,7 @@ func buildTestPDF(t *testing.T) []byte {
 		t.Fatalf("create pdf: %v", err)
 	}
 	var buf bytes.Buffer
-	if err := api.WriteContext(ctx, &buf); err != nil {
+	if err := api.WriteContext(context.Background(), ctx, &buf); err != nil {
 		t.Fatalf("write pdf: %v", err)
 	}
 	return buf.Bytes()

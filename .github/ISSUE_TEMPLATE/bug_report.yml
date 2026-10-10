@@ -57,7 +57,7 @@ body:
       description: OS, Go version, JDK version, browser, anything relevant.
       placeholder: |
         OS: Ubuntu 24.04
-        Go: 1.25.0
+        Go: 1.27.1
         JDK: Temurin 21
         Running via: docker compose up
     validations:

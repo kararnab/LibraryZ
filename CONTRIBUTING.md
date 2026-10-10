@@ -23,7 +23,7 @@ By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Backend (Go)
 
-You need Go **1.25+**. No Docker required for tests — they use in-memory
+You need Go **1.26+** (CI and the Docker build use 1.27). No Docker required for tests — they use in-memory
 SQLite via `glebarez/sqlite`.
 
 ```bash
