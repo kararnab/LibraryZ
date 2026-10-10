@@ -109,7 +109,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (123 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (134 each;
 # desktop also has DesktopLinksTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -212,8 +212,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 135 backend + 123 frontend
-  tests** (+1 with `-tags=eval`, +13 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-10: 149 backend + 134 frontend
+  tests** (+1 with `-tags=eval`, +14 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -224,6 +224,18 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (`catalog.Service.CollectGarbage`, `runlock.KeyBlobGC`) deletes blobs no
   live edition references after `LIBRARYZ_BLOB_GC_RETENTION`; it needs
   `storage.Storage.List`.
+- **Upload limits are a per-account quota, not Kong (2026-10-10).**
+  `catalog.UploadQuota` (`internal/catalog/quota.go`) counts the user's
+  recorded editions (`uploaded_by_user_id`, `created_at`, **Unscoped** so
+  takedowns still count) over a rolling window, files and bytes, tiered:
+  `new` (unverified or < 7 days), `standard`, moderators unlimited. Knobs:
+  `LIBRARYZ_UPLOAD_QUOTA_{WINDOW,FILES,BYTES,NEW_FILES,NEW_BYTES,NEW_ACCOUNT_AGE}`.
+  `UploadEdition` checks it **before reading the body**; `AddEdition`
+  re-checks with the stored size inside a transaction that locks the user
+  row (`FOR UPDATE` on Postgres) — keep both. `GET /me/upload-quota?size=N`
+  answers `fits` + `retry_after_seconds` from the same `Admit`, and the
+  Upload sheet preflights with it. Kong's per-IP upload limit (30/hr) is
+  only a flood guard. `server.Deps.UploadQuota` zero value = no quota (tests).
 - **Moderator promotion (v0): there is no admin endpoint.** Moderation is
   the RBAC role `moderator` in `user_roles`; grant it in the DB directly.
   Postgres or sqlite:

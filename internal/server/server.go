@@ -25,6 +25,9 @@ type Deps struct {
 	DB             *gorm.DB
 	Storage        storage.Storage
 	MaxUploadBytes int64
+	// UploadQuota is the per-account upload allowance; the zero value means
+	// none. See catalog.UploadQuota.
+	UploadQuota catalog.UploadQuota
 	// AllowedOrigins is the exact-match CORS allowlist for browser clients.
 	// Empty = dev mode (localhost / 127.0.0.1 origins only). See cors.
 	AllowedOrigins []string
@@ -80,6 +83,7 @@ func New(d Deps) (http.Handler, error) {
 	}
 
 	catSvc := catalog.NewService(d.DB, d.Storage)
+	catSvc.SetUploadQuota(d.UploadQuota)
 	catH := catalog.NewHandler(catSvc, d.MaxUploadBytes)
 
 	contribSvc := contribution.NewService(d.DB)
@@ -123,6 +127,7 @@ func New(d Deps) (http.Handler, error) {
 	authed.HandleFunc("/me/sessions/{id}", authH.RevokeSession).Methods(http.MethodDelete)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)
 	authed.HandleFunc("/works/{id}/editions", catH.UploadEdition).Methods(http.MethodPost)
+	authed.HandleFunc("/me/upload-quota", catH.UploadQuota).Methods(http.MethodGet)
 	// Moderators, or the creator of a still-empty work; checked in the service.
 	authed.HandleFunc("/works/{id}", catH.DeleteWork).Methods(http.MethodDelete)
 	authed.HandleFunc("/works/{id}/contributions", contribH.Submit).Methods(http.MethodPost)
@@ -179,7 +184,7 @@ func cors(next http.Handler, allowed []string, allowPrivateLAN bool) http.Handle
 				"GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers",
 				"Authorization, Content-Type, X-Requested-With")
-			w.Header().Set("Access-Control-Expose-Headers", "Authorization, Content-Disposition, X-Content-SHA256")
+			w.Header().Set("Access-Control-Expose-Headers", "Authorization, Content-Disposition, Retry-After, X-Content-SHA256")
 		}
 		// Preflights are always answered 204 (a disallowed origin simply gets
 		// no Allow-Origin header, so the browser blocks it). Non-OPTIONS

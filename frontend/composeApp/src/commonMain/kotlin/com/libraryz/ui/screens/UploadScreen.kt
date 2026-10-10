@@ -51,6 +51,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.libraryz.data.PickedFile
+import com.libraryz.data.UploadQuota
 import com.libraryz.data.Work
 import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.DuplicateEditionException
@@ -88,7 +90,12 @@ import com.libraryz.ui.components.FormatBadge
 import com.libraryz.ui.components.bylineOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 enum class UploadMode { NewWork, AddEdition }
 
@@ -144,7 +151,11 @@ fun FileProblem.message(): String = when (this) {
 sealed interface UploadFailure {
     /** The same bytes are already an edition; [workId] is where (null if it was taken down). */
     data class Duplicate(val workId: String?, val message: String) : UploadFailure
-    data object RateLimited : UploadFailure
+    /**
+     * Over the upload allowance. [retryAfterSeconds] is when it frees up,
+     * if known; [quota] is the allowance, when the app (not the gateway) said no.
+     */
+    data class RateLimited(val retryAfterSeconds: Long?, val quota: UploadQuota? = null) : UploadFailure
     data object TooLarge : UploadFailure
     data object Unsupported : UploadFailure
     /** The server rejected the file's contents (PDF/EPUB safety check, bad UTF-8, …). */
@@ -159,12 +170,59 @@ sealed interface UploadFailure {
  */
 fun classifyUploadError(e: Throwable, afterSend: Boolean): UploadFailure = when {
     e is DuplicateEditionException -> UploadFailure.Duplicate(e.workId, e.message ?: "This file is already in the library.")
-    e is ApiException && e.status == 429 -> UploadFailure.RateLimited
+    e is ApiException && e.status == 429 -> UploadFailure.RateLimited(e.retryAfterSeconds)
     e is ApiException && e.status == 413 -> UploadFailure.TooLarge
     e is ApiException && e.status == 415 -> UploadFailure.Unsupported
     e is ApiException && e.status == 400 && afterSend -> UploadFailure.FailedCheck(e.userMessage)
     e is ApiException -> UploadFailure.Other(e.userMessage)
     else -> UploadFailure.Other("Can’t reach the library. Check your connection.")
+}
+
+/** "3 h 12 min", "12 min", "under a minute". */
+fun formatWait(seconds: Long): String {
+    val minutes = (seconds + 59) / 60
+    return when {
+        seconds < 60 -> "under a minute"
+        minutes < 60 -> "$minutes min"
+        minutes % 60 == 0L -> "${minutes / 60} h"
+        else -> "${minutes / 60} h ${minutes % 60} min"
+    }
+}
+
+/** "per day", "per hour", "every 12 hours". */
+internal fun perWindow(seconds: Long): String = when {
+    seconds == 86_400L -> "per day"
+    seconds == 3_600L -> "per hour"
+    seconds % 86_400L == 0L -> "every ${seconds / 86_400L} days"
+    seconds % 3_600L == 0L -> "every ${seconds / 3_600L} hours"
+    else -> "every ${formatWait(seconds)}"
+}
+
+/** The line under the file picker; null when there's no limit to show. */
+fun quotaHint(q: UploadQuota): String? {
+    if (q.unlimited) return null
+    val files = if (q.filesLeft == 1) "1 upload" else "${q.filesLeft} uploads"
+    val line = "$files and ${formatBytes(q.bytesLeft)} left of ${q.filesLimit} files · ${formatBytes(q.bytesLimit)} ${perWindow(q.windowSeconds)}."
+    return if (q.isNewAccount) "$line New accounts get less; it goes up once your email is verified and the account is a week old." else line
+}
+
+/**
+ * The upload-limit banner's text. [fileSize] is the chosen file's, if any;
+ * [secondsLeft] counts down to when it fits (null if unknown).
+ */
+fun rateLimitedMessage(f: UploadFailure.RateLimited, fileSize: Long?, secondsLeft: Long?): String {
+    val q = f.quota
+    val per = q?.let { perWindow(it.windowSeconds) }
+    val why = when {
+        q == null -> "There have been too many uploads from your network."
+        q.filesLeft == 0 -> "You can upload ${q.filesLimit} files $per, and you’ve used them all."
+        fileSize != null && fileSize > q.bytesLimit ->
+            return "This file is larger than your whole allowance of ${formatBytes(q.bytesLimit)} $per. Choose a smaller file."
+        fileSize != null -> "This file needs ${formatBytes(fileSize)}, and ${formatBytes(q.bytesLeft)} of your ${formatBytes(q.bytesLimit)} $per is left."
+        else -> "You’ve used your upload allowance."
+    }
+    val wait = if (secondsLeft != null) "Try again in ${formatWait(secondsLeft)}." else "Try again later."
+    return "$why $wait Your details are kept here."
 }
 
 private sealed interface Phase {
@@ -190,6 +248,8 @@ fun UploadSheet(
     onSubmit: suspend (UploadSubmission, onProgress: (Float) -> Unit) -> String,
     onViewBook: (workId: String) -> Unit,
     onUnsupportedFilePicker: () -> Unit,
+    // GET /me/upload-quota for a file of this size (0 = any next file).
+    loadQuota: suspend (size: Long) -> UploadQuota,
 ) {
     var title by remember { mutableStateOf("") }
     var authors by remember { mutableStateOf("") }
@@ -202,10 +262,64 @@ fun UploadSheet(
     var job by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
 
+    var quota by remember { mutableStateOf<UploadQuota?>(null) }
+    // When a RateLimited failure clears, and the seconds until then.
+    var retryAt by remember { mutableStateOf<TimeMark?>(null) }
+    var secondsLeft by remember { mutableStateOf<Long?>(null) }
+
+    fun rateLimited(f: UploadFailure.RateLimited) {
+        failure = f
+        retryAt = f.retryAfterSeconds?.let { TimeSource.Monotonic.markNow() + it.seconds }
+    }
+
+    // Asks the server whether a file of [size] fits now, so a used-up
+    // allowance shows before a long upload rather than after it. A failed
+    // check isn't an error here; the upload itself will say.
+    fun checkQuota(size: Long) {
+        scope.launch {
+            val q = try {
+                loadQuota(size)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                return@launch
+            }
+            quota = q
+            when {
+                !q.unlimited && !q.fits -> rateLimited(UploadFailure.RateLimited(q.retryAfterSeconds, q))
+                // Only the quota's own verdict is lifted here; a gateway
+                // 429 waits out its Retry-After.
+                (failure as? UploadFailure.RateLimited)?.quota != null -> {
+                    failure = null
+                    retryAt = null
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { checkQuota(0) }
+
+    // Counts down to when the allowance frees up, then checks again.
+    LaunchedEffect(retryAt) {
+        val at = retryAt ?: run { secondsLeft = null; return@LaunchedEffect }
+        while (true) {
+            val left = -at.elapsedNow()
+            if (left <= Duration.ZERO) break
+            secondsLeft = left.inWholeSeconds + 1
+            delay(if (left > 90.seconds) 30.seconds else 1.seconds)
+        }
+        secondsLeft = null
+        retryAt = null
+        failure = null
+        checkQuota(picked?.sizeBytes ?: 0)
+    }
+
     val launchPicker = rememberFilePicker {
         picked = it
         format = inferFormatFromName(it.name).takeIf { f -> f in UploadFormats } ?: format
-        failure = null
+        // A limit stays up until the check below says this file fits.
+        if (failure !is UploadFailure.RateLimited) failure = null
+        checkQuota(if (checkUploadFile(it.name, it.sizeBytes) == null) it.sizeBytes else 0)
     }
     val choose = { if (isFilePickerSupported) launchPicker() else onUnsupportedFilePicker() }
     val fileProblem = picked?.let { checkUploadFile(it.name, it.sizeBytes) }
@@ -244,6 +358,12 @@ fun UploadSheet(
             } catch (e: Throwable) {
                 when (val f = classifyUploadError(e, afterSend = phase == Phase.Checking)) {
                     is UploadFailure.FailedCheck -> phase = Phase.Rejected(f.message)
+                    is UploadFailure.RateLimited -> {
+                        rateLimited(f)
+                        phase = Phase.Form
+                        // The app's quota explains itself better than a bare 429.
+                        checkQuota(file.sizeBytes)
+                    }
                     else -> {
                         failure = f
                         phase = Phase.Form
@@ -262,7 +382,9 @@ fun UploadSheet(
     fun reset() {
         picked = null
         failure = null
+        retryAt = null
         phase = Phase.Form
+        checkQuota(0)
         if (mode == UploadMode.NewWork) {
             title = ""; authors = ""; language = ""; year = ""
         }
@@ -287,13 +409,19 @@ fun UploadSheet(
                 picked = picked,
                 fileProblem = fileProblem,
                 failure = failure,
+                quota = quota,
+                secondsLeft = secondsLeft,
                 title = title, onTitle = { title = it },
                 authors = authors, onAuthors = { authors = it },
                 language = language, onLanguage = { language = it },
                 year = year, onYear = { year = it }, yearValid = yearValid,
                 format = format, onFormat = { format = it },
                 onChoose = choose,
-                onRemoveFile = { picked = null; failure = null },
+                onRemoveFile = {
+                    picked = null
+                    if (failure !is UploadFailure.RateLimited) failure = null
+                    checkQuota(0)
+                },
                 onViewBook = onViewBook,
             )
             is Phase.Sending, Phase.Checking -> ProgressView(
@@ -395,6 +523,8 @@ private fun UploadForm(
     picked: PickedFile?,
     fileProblem: FileProblem?,
     failure: UploadFailure?,
+    quota: UploadQuota?,
+    secondsLeft: Long?,
     title: String, onTitle: (String) -> Unit,
     authors: String, onAuthors: (String) -> Unit,
     language: String, onLanguage: (String) -> Unit,
@@ -427,11 +557,11 @@ private fun UploadForm(
 
         when (failure) {
             is UploadFailure.Duplicate -> DuplicateBanner(failure, onViewBook)
-            UploadFailure.RateLimited -> Banner(
+            is UploadFailure.RateLimited -> Banner(
                 BannerTone.Calm,
                 Icons.Rounded.HourglassTop,
                 title = "Upload limit reached",
-                body = "You can upload about 10 files an hour. Your details are kept here; try again later.",
+                body = rateLimitedMessage(failure, picked?.sizeBytes, secondsLeft),
             )
             UploadFailure.TooLarge -> Banner(BannerTone.Error, Icons.Rounded.Error, "This file is too large or complex for the server to process.")
             UploadFailure.Unsupported -> Banner(BannerTone.Error, Icons.Rounded.Error, "The server doesn’t accept this format. Use PDF, EPUB or TXT.")
@@ -458,6 +588,9 @@ private fun UploadForm(
                 } else {
                     Text(FORMATS_HINT, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
                 }
+            }
+            quota?.let(::quotaHint)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
             }
         }
 

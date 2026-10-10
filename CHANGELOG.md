@@ -30,6 +30,17 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   upload limit, failed check). **Suggest an edit** marks each changed field
   with its old value and an undo. The **review queue** shows a word-level
   before/after diff.
+- **Per-account upload quota.** Uploads now count against the account, not
+  the network: by default 20 files / 2 GiB per rolling day, or 5 files /
+  500 MiB while the email is unverified or the account is under a week old,
+  with moderators exempt (`LIBRARYZ_UPLOAD_QUOTA_*`). Only uploads that were
+  recorded count, so duplicates, failed checks and cancelled uploads don't
+  use it up. New `GET /me/upload-quota[?size=N]`; an upload over the quota
+  is refused with `429` and `Retry-After` before its body is read. The
+  Upload screen shows what's left, checks the chosen file before sending
+  it, and counts down to when the limit lifts instead of "try again later".
+  Kong's per-IP upload limit goes from 10 to 30 an hour and is now only a
+  flood guard.
 - **Password reset and email verification, end to end.** New endpoints
   `POST /auth/password-reset`, `/auth/password-reset/complete`,
   `/me/email-verification` and `/auth/email-verification/complete`;

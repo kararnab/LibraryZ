@@ -699,7 +699,7 @@ monolith is **not** the banned internal microservice gateway
     |-----------------------------------------|------------------------|
     | `POST /auth/login` (regex)              | 5/min, 30/hr           |
     | `POST /auth/signup` (regex)             | 3/min, 10/hr           |
-    | `POST /works/{id}/editions` (regex)     | 10/hr                  |
+    | `POST /works/{id}/editions` (regex)     | 30/hr (was 10, see 93) |
     | everything else (service-level fallback)| 60/min                 |
 
     Upload route also sets `request_buffering: false`; download route sets
@@ -714,6 +714,20 @@ monolith is **not** the banned internal microservice gateway
     users gets rate-limited as a group). Reminder: behind a real LB in prod,
     configure Kong's `trusted_ips` + `real_ip_header=X-Forwarded-For` so
     `limit_by: ip` keys on the client, not the LB. ✓
+
+    **Revisited 2026-10-10 for uploads only.** Per-IP turned out to be the
+    wrong unit for the upload limit: it counted rejected attempts
+    (duplicates, failed checks, cancels), capped NAT'd users as a group, used
+    clock-hour windows, and measured requests rather than the bytes and
+    review load that actually need protecting. Uploads now have a
+    per-account quota in the app (`catalog.UploadQuota`): successful
+    editions per user over a rolling window, files **and** bytes, tiered
+    (new/unverified accounts smaller, moderators exempt), checked before the
+    body is read and again at insert under a user-row lock. This is neither
+    (b) nor (c): it's **DB-backed**, so every replica sees the same counts
+    (the objection to (c) was per-instance state). Kong's per-IP upload
+    limit stays as a flood guard, raised to 30/hr. Every other route keeps
+    option (a).
 
 **Slice 6.3 — pgbouncer (connection pooling, DONE 2026-05-28).**
 > **Shipped early** (vs. the original "wait until the connection budget gets
@@ -938,7 +952,8 @@ prod deployment; from then on the baseline is frozen and every schema change
 is a new numbered migration (#16).
 
 **Non-goals (Phase 7):** no new product surface beyond takedown, and no
-change to the storage backend or to Kong's per-IP rate-limit decision (item 93).
+change to the storage backend or to Kong's per-IP rate-limit decision (item 93;
+uploads were since moved to a per-account quota, see the 2026-10-10 note there).
 
 ## Storage: do we need erasure coding?
 

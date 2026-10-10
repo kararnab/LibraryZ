@@ -58,6 +58,15 @@ type Config struct {
 	TrustedProxies    []netip.Prefix
 	trustedProxiesErr error
 	MaxUploadBytes    int64
+	// Per-account upload quota over a rolling UploadQuotaWindow (see
+	// catalog.UploadQuota). "New" accounts are unverified or younger than
+	// UploadQuotaNewAccountAge.
+	UploadQuotaWindow        time.Duration
+	UploadQuotaFiles         int
+	UploadQuotaBytes         int64
+	UploadQuotaNewFiles      int
+	UploadQuotaNewBytes      int64
+	UploadQuotaNewAccountAge time.Duration
 	// AllowedOrigins is the CORS allowlist (exact-match) for browser clients.
 	// Empty means "dev mode": only localhost / 127.0.0.1 origins are allowed.
 	// Set LIBRARYZ_ALLOWED_ORIGINS (comma-separated) in production.
@@ -110,47 +119,53 @@ type Config struct {
 func Load() *Config {
 	proxies, proxiesErr := parsePrefixes(os.Getenv("LIBRARYZ_TRUSTED_PROXIES"))
 	return &Config{
-		TrustedProxies:         proxies,
-		trustedProxiesErr:      proxiesErr,
-		DatabaseURL:            GetDatabaseUrl(),
-		MigrateDatabaseURL:     getMigrateDatabaseURL(),
-		AutoMigrate:            os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
-		ListenAddr:             GetListenAddr(),
-		StorageDir:             GetStorageDir(),
-		JWTSecret:              GetJWTSecret(),
-		JWTPreviousSecret:      GetJWTPreviousSecret(),
-		AccessTokenTTL:         getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTokenTTL:        getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		SessionMaxAge:          getDurationEnv("LIBRARYZ_SESSION_MAX_AGE", 365*24*time.Hour),
-		VerifySessionOnAccess:  os.Getenv("LIBRARYZ_VERIFY_SESSION_ON_ACCESS") == "true",
-		LoadSubjectOnAccess:    os.Getenv("LIBRARYZ_LOAD_SUBJECT_ON_ACCESS") != "false",
-		SessionPurgeInterval:   getDurationEnv("LIBRARYZ_SESSION_PURGE_INTERVAL", time.Hour),
-		RedisAddr:              os.Getenv("LIBRARYZ_REDIS_ADDR"),
-		RedisPassword:          os.Getenv("LIBRARYZ_REDIS_PASSWORD"),
-		MaxUploadBytes:         GetMaxUploadBytes(),
-		AllowedOrigins:         GetAllowedOrigins(),
-		CORSAllowPrivateLAN:    os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
-		S3Endpoint:             os.Getenv("LIBRARYZ_S3_ENDPOINT"),
-		S3AccessKey:            os.Getenv("LIBRARYZ_S3_ACCESS_KEY"),
-		S3SecretKey:            os.Getenv("LIBRARYZ_S3_SECRET_KEY"),
-		S3Bucket:               getEnv("LIBRARYZ_S3_BUCKET", "libraryz"),
-		S3UseSSL:               os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
-		BlobGCInterval:         getDurationEnv("LIBRARYZ_BLOB_GC_INTERVAL", 24*time.Hour),
-		BlobGCRetention:        getDurationEnv("LIBRARYZ_BLOB_GC_RETENTION", 30*24*time.Hour),
-		RecRetrainInterval:     GetRecRetrainInterval(),
-		RecFactors:             GetRecFactors(),
-		RecAlpha:               GetRecAlpha(),
-		ReadHeaderTimeout:      getDurationEnv("LIBRARYZ_READ_HEADER_TIMEOUT", 10*time.Second),
-		ReadTimeout:            getDurationEnv("LIBRARYZ_READ_TIMEOUT", 30*time.Second),
-		WriteTimeout:           getDurationEnv("LIBRARYZ_WRITE_TIMEOUT", 60*time.Second),
-		IdleTimeout:            getDurationEnv("LIBRARYZ_IDLE_TIMEOUT", 120*time.Second),
-		ShutdownTimeout:        getDurationEnv("LIBRARYZ_SHUTDOWN_TIMEOUT", 20*time.Second),
-		PDFSanitizeMemoryMB:    getIntEnv("LIBRARYZ_PDF_SANITIZE_MEMORY_MB", 1024),
-		PDFSanitizeTimeout:     getDurationEnv("LIBRARYZ_PDF_SANITIZE_TIMEOUT", 2*time.Minute),
-		PDFSanitizeConcurrency: getIntEnv("LIBRARYZ_PDF_SANITIZE_CONCURRENCY", 2),
-		DBMaxOpenConns:         getIntEnv("LIBRARYZ_DB_MAX_OPEN_CONNS", 25),
-		DBMaxIdleConns:         getIntEnv("LIBRARYZ_DB_MAX_IDLE_CONNS", 10),
-		DBConnMaxLifetime:      getDurationEnv("LIBRARYZ_DB_CONN_MAX_LIFETIME", time.Hour),
+		TrustedProxies:           proxies,
+		trustedProxiesErr:        proxiesErr,
+		DatabaseURL:              GetDatabaseUrl(),
+		MigrateDatabaseURL:       getMigrateDatabaseURL(),
+		AutoMigrate:              os.Getenv("LIBRARYZ_AUTO_MIGRATE") != "false",
+		ListenAddr:               GetListenAddr(),
+		StorageDir:               GetStorageDir(),
+		JWTSecret:                GetJWTSecret(),
+		JWTPreviousSecret:        GetJWTPreviousSecret(),
+		AccessTokenTTL:           getDurationEnv("LIBRARYZ_ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:          getDurationEnv("LIBRARYZ_REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		SessionMaxAge:            getDurationEnv("LIBRARYZ_SESSION_MAX_AGE", 365*24*time.Hour),
+		VerifySessionOnAccess:    os.Getenv("LIBRARYZ_VERIFY_SESSION_ON_ACCESS") == "true",
+		LoadSubjectOnAccess:      os.Getenv("LIBRARYZ_LOAD_SUBJECT_ON_ACCESS") != "false",
+		SessionPurgeInterval:     getDurationEnv("LIBRARYZ_SESSION_PURGE_INTERVAL", time.Hour),
+		RedisAddr:                os.Getenv("LIBRARYZ_REDIS_ADDR"),
+		RedisPassword:            os.Getenv("LIBRARYZ_REDIS_PASSWORD"),
+		MaxUploadBytes:           GetMaxUploadBytes(),
+		UploadQuotaWindow:        getDurationEnv("LIBRARYZ_UPLOAD_QUOTA_WINDOW", 24*time.Hour),
+		UploadQuotaFiles:         getIntEnv("LIBRARYZ_UPLOAD_QUOTA_FILES", 20),
+		UploadQuotaBytes:         getInt64Env("LIBRARYZ_UPLOAD_QUOTA_BYTES", 2<<30),
+		UploadQuotaNewFiles:      getIntEnv("LIBRARYZ_UPLOAD_QUOTA_NEW_FILES", 5),
+		UploadQuotaNewBytes:      getInt64Env("LIBRARYZ_UPLOAD_QUOTA_NEW_BYTES", 500<<20),
+		UploadQuotaNewAccountAge: getDurationEnv("LIBRARYZ_UPLOAD_QUOTA_NEW_ACCOUNT_AGE", 7*24*time.Hour),
+		AllowedOrigins:           GetAllowedOrigins(),
+		CORSAllowPrivateLAN:      os.Getenv("LIBRARYZ_CORS_ALLOW_PRIVATE_LAN") == "true",
+		S3Endpoint:               os.Getenv("LIBRARYZ_S3_ENDPOINT"),
+		S3AccessKey:              os.Getenv("LIBRARYZ_S3_ACCESS_KEY"),
+		S3SecretKey:              os.Getenv("LIBRARYZ_S3_SECRET_KEY"),
+		S3Bucket:                 getEnv("LIBRARYZ_S3_BUCKET", "libraryz"),
+		S3UseSSL:                 os.Getenv("LIBRARYZ_S3_USE_SSL") == "true",
+		BlobGCInterval:           getDurationEnv("LIBRARYZ_BLOB_GC_INTERVAL", 24*time.Hour),
+		BlobGCRetention:          getDurationEnv("LIBRARYZ_BLOB_GC_RETENTION", 30*24*time.Hour),
+		RecRetrainInterval:       GetRecRetrainInterval(),
+		RecFactors:               GetRecFactors(),
+		RecAlpha:                 GetRecAlpha(),
+		ReadHeaderTimeout:        getDurationEnv("LIBRARYZ_READ_HEADER_TIMEOUT", 10*time.Second),
+		ReadTimeout:              getDurationEnv("LIBRARYZ_READ_TIMEOUT", 30*time.Second),
+		WriteTimeout:             getDurationEnv("LIBRARYZ_WRITE_TIMEOUT", 60*time.Second),
+		IdleTimeout:              getDurationEnv("LIBRARYZ_IDLE_TIMEOUT", 120*time.Second),
+		ShutdownTimeout:          getDurationEnv("LIBRARYZ_SHUTDOWN_TIMEOUT", 20*time.Second),
+		PDFSanitizeMemoryMB:      getIntEnv("LIBRARYZ_PDF_SANITIZE_MEMORY_MB", 1024),
+		PDFSanitizeTimeout:       getDurationEnv("LIBRARYZ_PDF_SANITIZE_TIMEOUT", 2*time.Minute),
+		PDFSanitizeConcurrency:   getIntEnv("LIBRARYZ_PDF_SANITIZE_CONCURRENCY", 2),
+		DBMaxOpenConns:           getIntEnv("LIBRARYZ_DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:           getIntEnv("LIBRARYZ_DB_MAX_IDLE_CONNS", 10),
+		DBConnMaxLifetime:        getDurationEnv("LIBRARYZ_DB_CONN_MAX_LIFETIME", time.Hour),
 	}
 }
 
@@ -169,6 +184,16 @@ func getDurationEnv(key string, def time.Duration) time.Duration {
 func getIntEnv(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// getInt64Env parses a positive int64 from env, falling back to def otherwise.
+func getInt64Env(key string, def int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			return n
 		}
 	}

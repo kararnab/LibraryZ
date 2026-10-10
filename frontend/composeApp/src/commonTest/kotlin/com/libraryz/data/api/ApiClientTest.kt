@@ -257,6 +257,39 @@ class ApiClientTest {
     }
 
     @Test
+    fun uploadOver429CarriesRetryAfter() = runTest {
+        val engine = MockEngine {
+            respond("upload limit reached", HttpStatusCode.TooManyRequests, headersOf(HttpHeaders.RetryAfter, "3600"))
+        }
+        val ex = assertFailsWith<ApiException> {
+            ApiClient(BASE, tokenProvider = { "t" }, engine = engine)
+                .uploadEdition("w1", "txt", null, "a.txt", byteArrayOf(1))
+        }
+        assertEquals(429, ex.status)
+        assertEquals(3600L, ex.retryAfterSeconds)
+    }
+
+    @Test
+    fun uploadQuotaAsksAboutTheFileSize() = runTest {
+        val engine = MockEngine { req ->
+            assertEquals("/me/upload-quota", req.url.encodedPath)
+            assertEquals("1234", req.url.parameters["size"])
+            respond(
+                """{"tier":"new","unlimited":false,"window_seconds":86400,"files_limit":5,"files_used":5,
+                   "bytes_limit":524288000,"bytes_used":1000,"next_free_at":"2026-10-11T09:00:00Z",
+                   "fits":false,"retry_after_seconds":120}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }
+        val q = ApiClient(BASE, tokenProvider = { "t" }, engine = engine).uploadQuota(1234)
+        assertEquals(false, q.fits)
+        assertEquals(120L, q.retryAfterSeconds)
+        assertEquals(0, q.filesLeft)
+        assertTrue(q.isNewAccount)
+    }
+
+    @Test
     fun listWorksOn500ThrowsApiException() = runTest {
         val engine = MockEngine { respondError(HttpStatusCode.InternalServerError, "boom") }
         val api = ApiClient(BASE, engine = engine)

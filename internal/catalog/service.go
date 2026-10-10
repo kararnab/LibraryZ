@@ -37,10 +37,12 @@ func (e *DuplicateEditionError) Error() string {
 type Service struct {
 	db    *gorm.DB
 	store storage.Storage
+	quota UploadQuota
+	now   func() time.Time
 }
 
 func NewService(db *gorm.DB, store storage.Storage) *Service {
-	return &Service{db: db, store: store}
+	return &Service{db: db, store: store, now: time.Now}
 }
 
 // CreateWork inserts w as a new work. The ID is always server-generated and
@@ -90,7 +92,9 @@ func (s *Service) GetEdition(ctx context.Context, id uuid.UUID) (*Edition, error
 // edition. sourceSHA is the sha256 of the bytes as uploaded, before
 // sanitization ("" if unknown). If either the uploaded bytes or the stored
 // bytes match an existing edition on any work, it returns a
-// *DuplicateEditionError carrying that edition and records nothing.
+// *DuplicateEditionError carrying that edition and records nothing. An
+// upload that no longer fits uploadedBy's quota (see UploadQuota) gets a
+// *QuotaExceededError; its blob is left for CollectGarbage.
 func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, sourceSHA string, r io.Reader) (*Edition, error) {
 	if _, err := s.GetWork(ctx, workID); err != nil {
 		return nil, err
@@ -130,9 +134,30 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		SHA256:           obj.SHA256,
 		SourceSHA256:     src,
 		UploadedByUserID: uploadedBy,
-		CreatedAt:        time.Now(),
 	}
-	if err := s.db.WithContext(ctx).Create(&ed).Error; err != nil {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// The quota was checked before the body was read; check again with
+		// the stored size, the user's row locked, so parallel uploads can't
+		// all slip under it.
+		if err := lockUser(tx, uploadedBy); err != nil {
+			return err
+		}
+		now := s.now()
+		st, err := s.quotaStatus(tx, uploadedBy, now)
+		if err != nil {
+			return err
+		}
+		if err := st.Admit(obj.Size); err != nil {
+			return err
+		}
+		ed.CreatedAt = now
+		return tx.Create(&ed).Error
+	})
+	var quotaErr *QuotaExceededError
+	if errors.As(err, &quotaErr) {
+		return nil, err
+	}
+	if err != nil {
 		// A concurrent upload of the same bytes can win the race between the
 		// lookups above and this insert; a unique index then rejects ours.
 		// Re-check instead of parsing dialect-specific errors.

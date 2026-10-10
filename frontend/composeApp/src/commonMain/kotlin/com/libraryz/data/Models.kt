@@ -115,6 +115,29 @@ data class Recommendation(
     val score: Double? = null,
 )
 
+/**
+ * GET /me/upload-quota: the user's upload allowance over a rolling window
+ * ([windowSeconds]). [fits] and [retryAfterSeconds] answer for the `size`
+ * asked about (0 = one more file of any size the bytes allow).
+ */
+@Serializable
+data class UploadQuota(
+    val tier: String,
+    val unlimited: Boolean = false,
+    val windowSeconds: Long = 0,
+    val filesLimit: Int = 0,
+    val filesUsed: Int = 0,
+    val bytesLimit: Long = 0,
+    val bytesUsed: Long = 0,
+    val fits: Boolean = true,
+    val retryAfterSeconds: Long = 0,
+) {
+    val filesLeft: Int get() = (filesLimit - filesUsed).coerceAtLeast(0)
+    val bytesLeft: Long get() = (bytesLimit - bytesUsed).coerceAtLeast(0)
+    /** Unverified or under a week old: the smaller allowance. */
+    val isNewAccount: Boolean get() = tier == "new"
+}
+
 val Edition.prettySize: String get() = formatBytes(sizeBytes)
 
 val Edition.isPdf: Boolean
@@ -134,6 +157,10 @@ fun formatBytes(bytes: Long): String {
         val kb = bytes / 1024.0
         return "${(kb * 10).toLong() / 10.0} KB"
     }
-    val mb = bytes / 1_048_576.0
-    return "${(mb * 10).toLong() / 10.0} MB"
+    if (bytes < 1_073_741_824) {
+        val mb = bytes / 1_048_576.0
+        return "${(mb * 10).toLong() / 10.0} MB"
+    }
+    val gb = bytes / 1_073_741_824.0
+    return "${(gb * 10).toLong() / 10.0} GB"
 }
