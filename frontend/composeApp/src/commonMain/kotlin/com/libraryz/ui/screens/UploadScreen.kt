@@ -82,6 +82,7 @@ import com.libraryz.data.formatBytes
 import com.libraryz.data.isFilePickerSupported
 import com.libraryz.data.rememberFilePicker
 import com.libraryz.theme.LibraryZ
+import com.libraryz.ui.components.AuthorChipsField
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.BannerTone
 import com.libraryz.ui.components.BookCover
@@ -602,10 +603,8 @@ private fun UploadForm(
                     label = { Text("Title *") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
+                AuthorChipsField(
                     value = authors, onValueChange = onAuthors,
-                    label = { Text("Authors") }, singleLine = true,
-                    supportingText = { Text("Separate several authors with semicolons (;)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

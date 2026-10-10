@@ -36,3 +36,6 @@ actual fun createTokenStore(): TokenStore {
     val ctx = AndroidContextHolder.appContext
     return FileTokenStore(File(ctx.filesDir, "libraryz_token"))
 }
+
+actual fun createReaderLayoutStore(): TokenStore =
+    FileTokenStore(File(AndroidContextHolder.appContext.filesDir, "reader_layouts.json"))

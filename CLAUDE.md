@@ -339,7 +339,18 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (second pass). Upload only offers what `sanitize.Validate` accepts
   (PDF/EPUB/TXT, 500 MB); its "safety check" step is the wait between the
   last byte sent and the response, so a 400 then means the content was
-  rejected (`classifyUploadError`). Of the "Future" board, password reset
+  rejected (`classifyUploadError`). **Multiple authors** (`data/Authors.kt`): the stored
+  `;` string is shown per context — lists and the reader bar `authorsShort`
+  (≤ 3 surnames, then "Aho et al."), Book detail "by A, B and C" with each
+  name searching Browse (`authorsFull`; phone: one button → Authors sheet),
+  covers `coverAuthors{M,L,XL}`; Upload and Suggest edit enter them as chips
+  (`AuthorChipsField`). **Two-page reading**: `PageLayout` Auto/Single/Two
+  + "Pair from page 1" saved per edition on the device (`BookLayouts`,
+  `createReaderLayoutStore`); Auto = ≥ 840dp and ≥ 1.2× wider than tall,
+  and for text also two 26 em columns at the current size. `Spreads` pairs
+  like a printed book, landscape pages alone (`PagedReader.landscapePages`),
+  end card in the empty right-hand slot. The text reader paginates only in
+  two pages (`TextSpreadView`); single page still scrolls. Of the "Future" board, password reset
   and email verification are built; notifications aren't.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the
   single source: it generates `com.libraryz.AppVersion` (Settings › About)

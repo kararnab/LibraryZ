@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
+import com.libraryz.data.authorsShort
 import com.libraryz.data.isPreviewable
 import com.libraryz.data.prettySize
 import com.libraryz.theme.LibraryZ
@@ -69,9 +70,9 @@ fun formatName(format: String): String = when (format.uppercase()) {
 fun formatsLabel(editions: List<Edition>): String =
     editions.map { it.format.uppercase() }.distinct().sorted().joinToString(" · ") { formatName(it) }
 
-/** "George Eliot · 1871", skipping whichever part is missing. */
+/** "George Eliot · 1871" or "Aho et al. · 2006", skipping whichever part is missing. */
 fun bylineOf(work: Work): String =
-    listOfNotNull(work.authors?.takeIf { it.isNotBlank() }, work.publicationYear?.toString()).joinToString(" · ")
+    listOfNotNull(authorsShort(work.authors).takeIf { it.isNotEmpty() }, work.publicationYear?.toString()).joinToString(" · ")
 
 /**
  * A catalog row: monogram cover, title, byline and formats, with a
@@ -369,7 +370,7 @@ fun RemoveDialog(
 @Composable
 fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val title = entry.work?.title ?: "Your book"
-    val authors = entry.work?.authors
+    val authors = authorsShort(entry.work?.authors)
     Surface(
         onClick = onClick,
         color = MaterialTheme.colorScheme.primaryContainer,
@@ -381,7 +382,7 @@ fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier
             modifier = Modifier.padding(16.dp).height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            BookCover(title, authors, CoverSize.M)
+            BookCover(title, entry.work?.authors, CoverSize.M)
             Column(Modifier.weight(1f).fillMaxHeight().heightIn(min = CoverSize.M.height)) {
                 Text(
                     "CONTINUE READING",

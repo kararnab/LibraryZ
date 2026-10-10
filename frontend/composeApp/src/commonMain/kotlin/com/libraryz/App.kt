@@ -1,6 +1,8 @@
 package com.libraryz
 
 import androidx.compose.foundation.layout.Arrangement
+import com.libraryz.data.BookLayouts
+import com.libraryz.data.api.createReaderLayoutStore
 import com.libraryz.ui.screens.VerifyEmailBanner
 import com.libraryz.ui.screens.VerifyEmailScreen
 import com.libraryz.ui.screens.ResetPasswordScreen
@@ -297,6 +299,7 @@ internal fun Root(
     // How flowing text is set, shared by the reader and Settings so it
     // carries from one book to the next.
     var readerPrefs by remember { mutableStateOf(ReaderPrefs()) }
+    val readerLayouts = remember { BookLayouts(::createReaderLayoutStore) }
 
     val dismissRec: (String) -> Unit = { workId ->
         scope.launch {
@@ -339,6 +342,11 @@ internal fun Root(
     // Hoisted edition-action handlers so compact + expanded layouts share
     // them. They consult the platform support flags first and snackbar the
     // right "Not yet" message otherwise.
+    // An author link on Book detail: Browse, searching for that name.
+    val searchAuthor: (String) -> Unit = { name ->
+        nav.replace(Screen.Browse)
+        scope.launch { works.search(name) }
+    }
     val readEdition: (Work, Edition) -> Unit = { work, ed ->
         if (canPreview(ed.format)) {
             nav.push(Screen.Preview(ed.id, ed.format, work.id, work.title, work.authors))
@@ -524,6 +532,7 @@ internal fun Root(
                         onRead = { ed -> readEdition(work, ed) },
                         onDownload = { ed -> downloadEdition(work, ed) },
                         onSuggestEdit = { nav.push(Screen.EditWork(s.workId)) },
+                        onAuthorClick = searchAuthor,
                         libraryEnabled = auth.isAuthenticated,
                         libraryEntry = library.entryFor(s.workId),
                         onLibraryUpsert = { req -> libraryUpsert(s.workId, req) },
@@ -713,6 +722,7 @@ internal fun Root(
                         scope.launch { snackbar.showSnackbar("Marked “${s.title}” as read.") }
                     },
                     onClose = { nav.pop() },
+                    layouts = readerLayouts,
                 )
             }
 
@@ -1129,6 +1139,7 @@ private fun ListDetailLayout(
     onRemoveWork: ((Work, String) -> Unit)? = null,
     onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
 ) {
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(selectedWorkId) {
         if (selectedWorkId != null) {
@@ -1172,6 +1183,7 @@ private fun ListDetailLayout(
                     onRead = { ed -> onRead(work, ed) },
                     onDownload = { ed -> onDownload(work, ed) },
                     onSuggestEdit = { nav.push(Screen.EditWork(work.id)) },
+                    onAuthorClick = { name -> nav.replace(Screen.Browse); scope.launch { works.search(name) } },
                     libraryEnabled = auth.isAuthenticated,
                     libraryEntry = library.entryFor(work.id),
                     onLibraryUpsert = { req -> onLibraryUpsert(work.id, req) },

@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.libraryz.data.LibraryStatus
 import com.libraryz.data.UserBook
 import com.libraryz.data.api.LibraryState
+import com.libraryz.data.authorsShort
 import com.libraryz.data.pickReadableEdition
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.BookCover
@@ -218,7 +219,7 @@ private fun LibraryCard(ub: UserBook, onOpenWork: (String) -> Unit, onRead: (Use
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(title, style = LibraryZ.tokens.bookTitle, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val authors = ub.work?.authors
+                val authors = authorsShort(ub.work?.authors)
                 if (!authors.isNullOrBlank()) {
                     Text(
                         authors,

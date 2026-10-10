@@ -18,8 +18,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -35,19 +37,25 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -58,6 +66,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,9 +77,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.key.Key
@@ -81,23 +92,36 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.libraryz.data.BookLayout
+import com.libraryz.data.BookLayouts
+import com.libraryz.data.PageLayout
 import com.libraryz.data.PagedReader
 import com.libraryz.data.Reader
 import com.libraryz.data.ReadingPosition
+import com.libraryz.data.Spreads
 import com.libraryz.data.TEXT_POSITIONS
 import com.libraryz.data.TextReader
 import com.libraryz.data.UserBook
 import com.libraryz.data.api.ApiClient
+import com.libraryz.data.authorsShort
+import com.libraryz.data.chaptersOf
 import com.libraryz.data.openReader
+import com.libraryz.data.pageBreaks
 import com.libraryz.data.pagesLabel
+import com.libraryz.data.pagesLeftLabel
 import com.libraryz.data.resumePage
-import com.libraryz.data.spreadPages
-import com.libraryz.data.turnSpread
 import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.LocalFullscreen
@@ -105,6 +129,8 @@ import com.libraryz.ui.components.StarRating
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -146,6 +172,9 @@ data class ReaderPrefs(
  * scrubber; turning past the last page shows the end card. Text: scroll,
  * PgUp/PgDn/Space/←/→, Home/End; the Aa panel sets size, theme, spacing
  * and width. Esc closes.
+ *
+ * Both readers can show two pages side by side ([PageLayout], saved per
+ * book in [layouts]); see [autoSpread] for when Auto does.
  */
 @Composable
 fun ReaderScreen(
@@ -164,6 +193,7 @@ fun ReaderScreen(
     onRate: (Int) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    layouts: BookLayouts = remember { BookLayouts() },
 ) {
     var bytes by remember(editionId) { mutableStateOf<ByteArray?>(null) }
     var loadError by remember(editionId) { mutableStateOf<String?>(null) }
@@ -218,8 +248,19 @@ fun ReaderScreen(
     LaunchedEffect(reader, chrome, settingsOpen) {
         if (!settingsOpen) runCatching { focus.requestFocus() }
     }
-    // Null follows the window (see autoSpread); the toggle overrides it for this session.
-    var spreadChoice by remember { mutableStateOf<Boolean?>(null) }
+    // Auto / Single / Two pages and the pairing, remembered per book.
+    var bookLayout by remember(editionId) { mutableStateOf(BookLayout()) }
+    LaunchedEffect(editionId) { bookLayout = layouts.get(editionId) }
+    val setLayout: (BookLayout) -> Unit = { l ->
+        bookLayout = l
+        scope.launch { layouts.set(editionId, l) }
+    }
+    // PagedReader isn't thread-safe: rendering and the page-shape scan share this.
+    val readerLock = remember(reader) { Mutex() }
+    // Pages wider than tall stand alone in a spread. Scanned the first time a
+    // spread is shown; until then, pages pair as if all were portrait.
+    var landscape by remember(reader) { mutableStateOf<Set<Int>?>(null) }
+    val textPager = remember { TextPager() }
     val fullscreen = LocalFullscreen.current
     // Full screen is for reading: leaving the book leaves it.
     DisposableEffect(fullscreen) {
@@ -243,15 +284,34 @@ fun ReaderScreen(
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val wide = maxWidth.value >= WIDE_DP
-        val spread = reader is PagedReader && wide &&
-            (spreadChoice ?: autoSpread(maxWidth, maxHeight))
+        // Two pages need at least a medium window; below that the saved
+        // choice is kept but one page shows.
+        val spread = reader != null && wide && when (bookLayout.layout) {
+            PageLayout.Single -> false
+            PageLayout.Two -> true
+            PageLayout.Auto -> autoSpread(maxWidth, maxHeight) &&
+                (reader !is TextReader || twoColumnsFit(maxWidth, prefs.textSize))
+        }
+        val spreads = remember(pageCount, bookLayout.pairFromFirst, landscape) {
+            Spreads(pageCount, coverAlone = !bookLayout.pairFromFirst, alone = landscape.orEmpty())
+        }
+        val r0 = reader
+        if (spread && r0 is PagedReader) {
+            LaunchedEffect(r0) {
+                if (landscape == null) {
+                    landscape = readerLock.withLock { runCatching { r0.landscapePages() }.getOrDefault(emptySet()) }
+                }
+            }
+        }
         // In a spread, the furthest visible page is where the reader is.
         val shownPage = page.coerceAtMost(pageCount - 1)
         val position = when {
             pageCount <= 0 -> null
-            spread -> ReadingPosition(spreadPages(page, pageCount).last(), pageCount)
+            spread && reader is PagedReader ->
+                ReadingPosition(spreads.at(page).filter { it < pageCount }.maxOrNull() ?: (pageCount - 1), pageCount)
             else -> ReadingPosition(shownPage, pageCount)
         }
+        val textSpread = spread && reader is TextReader
 
         ProgressReporter(
             key = reader,
@@ -262,7 +322,7 @@ fun ReaderScreen(
 
         fun turn(delta: Int) {
             if (reader !is PagedReader) return
-            page = if (spread) turnSpread(page, delta, pageCount) else (page + delta).coerceIn(0, pageCount)
+            page = if (spread) spreads.turn(page, delta) else (page + delta).coerceIn(0, pageCount)
         }
 
         Box(
@@ -292,7 +352,15 @@ fun ReaderScreen(
                             Key.MoveEnd -> { page = pageCount - 1; true }
                             else -> false
                         }
-                        is TextReader -> {
+                        is TextReader -> if (textSpread) {
+                            when (e.key) {
+                                Key.PageDown, Key.Spacebar, Key.DirectionRight, Key.DirectionDown -> { textPager.turn(1); true }
+                                Key.PageUp, Key.DirectionLeft, Key.DirectionUp -> { textPager.turn(-1); true }
+                                Key.MoveHome -> { textPager.jump(false); true }
+                                Key.MoveEnd -> { textPager.jump(true); true }
+                                else -> false
+                            }
+                        } else {
                             val screen = textScroll.viewportSize * 0.9f
                             when (e.key) {
                                 Key.PageDown, Key.Spacebar, Key.DirectionRight -> { scope.launch { textScroll.animateScrollBy(screen) }; true }
@@ -317,9 +385,15 @@ fun ReaderScreen(
                     settingsOpen = settingsOpen,
                     onSettingsOpen = { settingsOpen = it },
                     scroll = textScroll,
-                    startPosition = startPage,
+                    // Where to open: the saved spot at first, and the current
+                    // one when switching between one and two pages.
+                    startPosition = page,
                     percent = position?.percent ?: 0,
                     onPosition = { page = it },
+                    spread = textSpread,
+                    layout = bookLayout.layout,
+                    onLayoutChange = { setLayout(bookLayout.copy(layout = it)) },
+                    pager = textPager,
                     chrome = chrome,
                     onToggleChrome = { chrome = !chrome },
                     onClose = onClose,
@@ -334,7 +408,10 @@ fun ReaderScreen(
                     page = page,
                     pageCount = pageCount,
                     spread = spread,
-                    onSpreadChange = { spreadChoice = it },
+                    spreads = spreads,
+                    bookLayout = bookLayout,
+                    onLayoutChange = setLayout,
+                    readerLock = readerLock,
                     chrome = chrome,
                     onToggleChrome = { chrome = !chrome },
                     onSeek = { page = it },
@@ -348,11 +425,24 @@ fun ReaderScreen(
 }
 
 /**
- * Whether a PDF opens as a two-page spread before the reader picks: on an
- * expanded (≥ 840dp), landscape window, where two pages side by side are
- * still readable.
+ * Whether Auto shows two pages: on an expanded (≥ 840dp) window that is
+ * landscape, at least 1.2× wider than tall. Below 840dp each page of a
+ * spread would be smaller than one page alone.
  */
-private fun autoSpread(width: Dp, height: Dp): Boolean = width >= 840.dp && width > height
+internal fun autoSpread(width: Dp, height: Dp): Boolean = width >= 840.dp && width >= height * 1.2f
+
+/**
+ * The text reader's extra test for Auto: two columns of at least 26 em (about
+ * 60 characters a line) fit at [textSize], so large text falls back to one
+ * column by itself.
+ */
+internal fun twoColumnsFit(width: Dp, textSize: Int): Boolean = textColumnWidth(width) >= (26 * textSize).dp
+
+/** One column of a two-page text spread in a [width]-wide window: half, less the page margins. */
+private fun textColumnWidth(width: Dp): Dp = (width - 1.dp) / 2 - TEXT_PAGE_OUTER - TEXT_PAGE_INNER
+
+private val TEXT_PAGE_OUTER = 48.dp
+private val TEXT_PAGE_INNER = 40.dp
 
 /**
  * Reports [position] to [onProgress] a second after it settles, and once
@@ -399,7 +489,10 @@ private fun PagedReaderLayout(
     page: Int,
     pageCount: Int,
     spread: Boolean,
-    onSpreadChange: (Boolean) -> Unit,
+    spreads: Spreads,
+    bookLayout: BookLayout,
+    onLayoutChange: (BookLayout) -> Unit,
+    readerLock: Mutex,
     chrome: Boolean,
     onToggleChrome: () -> Unit,
     onSeek: (Int) -> Unit,
@@ -407,9 +500,16 @@ private fun PagedReaderLayout(
     onClose: () -> Unit,
     end: @Composable () -> Unit,
 ) {
-    val atEndCard = reader != null && page >= pageCount
     val shownPage = page.coerceAtMost((pageCount - 1).coerceAtLeast(0))
-    val shownPages = if (spread) spreadPages(page, pageCount) else listOf(shownPage).filter { pageCount > 0 }
+    // Slots on screen; [pageCount] is the end card.
+    val slots = when {
+        pageCount <= 0 -> emptyList()
+        spread -> spreads.at(page)
+        else -> listOf(page.coerceIn(0, pageCount))
+    }
+    val pages = slots.filter { it < pageCount }
+    val atEndCard = reader != null && pages.isEmpty() && slots.isNotEmpty()
+    val pageText = pagesLabel(slots, pageCount)
     Column(Modifier.fillMaxSize().background(LibraryZ.tokens.readerBackdrop)) {
         if (chrome) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -420,27 +520,32 @@ private fun PagedReaderLayout(
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close reader")
                     }
-                    val pageText = pagesLabel(shownPages, pageCount)
                     if (wide) {
                         Row(
                             modifier = Modifier.weight(1f).padding(start = 4.dp),
                             verticalAlignment = Alignment.Bottom,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (!authors.isNullOrBlank()) {
-                                Text(authors, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                            Text(
+                                title,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            val byline = authorsShort(authors)
+                            if (byline.isNotEmpty()) {
+                                Text(byline, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                             }
                         }
                         Text(pageText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (reader != null) {
-                            IconToggleButton(checked = spread, onCheckedChange = onSpreadChange, modifier = Modifier.padding(start = 8.dp)) {
-                                Icon(
-                                    Icons.Rounded.AutoStories,
-                                    contentDescription = if (spread) "Show one page" else "Show two-page spread",
-                                    tint = if (spread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                            SpreadToggle(
+                                spread = spread,
+                                onChange = { two -> onLayoutChange(bookLayout.copy(layout = if (two) PageLayout.Two else PageLayout.Single)) },
+                                modifier = Modifier.padding(start = 12.dp),
+                            )
+                            LayoutMenu(bookLayout, onLayoutChange)
                         }
                     } else {
                         Column(Modifier.weight(1f)) {
@@ -467,7 +572,17 @@ private fun PagedReaderLayout(
                 )
                 reader == null -> CircularProgressIndicator()
                 atEndCard -> Box(Modifier.padding(16.dp).widthIn(max = 440.dp)) { end() }
-                else -> PageView(reader = reader, pages = shownPages, wide = wide, onTurn = onTurn, onToggleChrome = onToggleChrome)
+                else -> PageView(
+                    reader = reader,
+                    pages = pages,
+                    // The end card takes the empty right-hand slot of the last spread.
+                    endSlot = pageCount in slots,
+                    lock = readerLock,
+                    wide = wide,
+                    onTurn = onTurn,
+                    onToggleChrome = onToggleChrome,
+                    end = end,
+                )
             }
             if (!chrome && reader != null && !atEndCard) {
                 Surface(
@@ -477,7 +592,7 @@ private fun PagedReaderLayout(
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 20.dp),
                 ) {
                     Text(
-                        "${shownPages.joinToString("–") { "${it + 1}" }} / $pageCount",
+                        "${pages.joinToString("–") { "${it + 1}" }} / $pageCount",
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
@@ -494,27 +609,40 @@ private fun PagedReaderLayout(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     IconButton(onClick = { onTurn(-1) }, enabled = page > 0) {
-                        Icon(Icons.Rounded.ChevronLeft, contentDescription = "Previous page")
+                        Icon(Icons.Rounded.ChevronLeft, contentDescription = if (spread) "Previous two pages" else "Previous page")
                     }
                     // Drag freely; jump when released so we don't rasterize
-                    // every page the thumb passes over.
+                    // every page the thumb passes over. In a spread the value
+                    // is the left page and a jump lands on whole spreads.
                     var scrub by remember(pageCount) { mutableStateOf<Float?>(null) }
+                    val sliderPage = (pages.firstOrNull() ?: shownPage).toFloat()
                     Slider(
-                        value = scrub ?: shownPage.toFloat(),
+                        value = scrub ?: sliderPage,
                         onValueChange = { scrub = it },
                         onValueChangeFinished = {
-                            scrub?.let { onSeek(it.roundToInt()) }
+                            scrub?.let { v ->
+                                val target = v.roundToInt()
+                                onSeek(if (spread) spreads.at(target).first() else target)
+                            }
                             scrub = null
                         },
                         valueRange = 0f..(pageCount - 1).coerceAtLeast(1).toFloat(),
                         enabled = pageCount > 1,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).semantics {
+                            stateDescription = pageText
+                        },
                     )
                     scrub?.let {
-                        Text("p. ${it.roundToInt() + 1}", style = MaterialTheme.typography.labelMedium)
+                        val target = it.roundToInt()
+                        val label = if (spread) {
+                            spreads.at(target).filter { p -> p < pageCount }.joinToString("–") { p -> "${p + 1}" }
+                        } else {
+                            "${target + 1}"
+                        }
+                        Text("p. $label", style = MaterialTheme.typography.labelMedium)
                     }
-                    IconButton(onClick = { onTurn(1) }, enabled = page < pageCount) {
-                        Icon(Icons.Rounded.ChevronRight, contentDescription = "Next page")
+                    IconButton(onClick = { onTurn(1) }, enabled = pageCount !in slots) {
+                        Icon(Icons.Rounded.ChevronRight, contentDescription = if (spread) "Next two pages" else "Next page")
                     }
                     if (wide) {
                         Text(
@@ -531,11 +659,75 @@ private fun PagedReaderLayout(
     }
 }
 
+/** Single page / two pages, as a two-button icon control. Picking one sets the book's layout. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SpreadToggle(spread: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    SingleChoiceSegmentedButtonRow(modifier.width(112.dp)) {
+        listOf(
+            Triple(false, Icons.Rounded.Description, "Single page"),
+            Triple(true, Icons.Rounded.AutoStories, "Two pages"),
+        ).forEachIndexed { i, (two, icon, label) ->
+            SegmentedButton(
+                selected = spread == two,
+                onClick = { onChange(two) },
+                shape = SegmentedButtonDefaults.itemShape(i, 2),
+                icon = {},
+                label = { Icon(icon, contentDescription = label, modifier = Modifier.size(20.dp)) },
+            )
+        }
+    }
+}
+
+/** Reader options: Layout (Auto · Single page · Two pages) and the pairing escape hatch. */
+@Composable
+private fun LayoutMenu(bookLayout: BookLayout, onChange: (BookLayout) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Icons.Rounded.MoreVert, contentDescription = "Reader options", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text(
+                "Layout",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+            PageLayout.entries.forEach { l ->
+                DropdownMenuItem(
+                    text = { Text(l.label) },
+                    leadingIcon = { RadioButton(selected = bookLayout.layout == l, onClick = null) },
+                    onClick = { onChange(bookLayout.copy(layout = l)); open = false },
+                )
+            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Pair from page 1") },
+                leadingIcon = { Checkbox(checked = bookLayout.pairFromFirst, onCheckedChange = null) },
+                onClick = { onChange(bookLayout.copy(pairFromFirst = !bookLayout.pairFromFirst)); open = false },
+            )
+        }
+    }
+}
+
 /** A rendered page, or null [image] when the renderer failed on it. */
 private class RenderedPage(val index: Int, val image: ImageBitmap?)
 
+/** A US Letter / A4-ish page shape, until a real page says otherwise. */
+private const val DEFAULT_PAGE_ASPECT = 1.3f
+
 @Composable
-private fun PageView(reader: PagedReader, pages: List<Int>, wide: Boolean, onTurn: (Int) -> Unit, onToggleChrome: () -> Unit) {
+private fun PageView(
+    reader: PagedReader,
+    pages: List<Int>,
+    endSlot: Boolean,
+    lock: Mutex,
+    wide: Boolean,
+    onTurn: (Int) -> Unit,
+    onToggleChrome: () -> Unit,
+    end: @Composable () -> Unit,
+) {
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -562,8 +754,9 @@ private fun PageView(reader: PagedReader, pages: List<Int>, wide: Boolean, onTur
             .padding(if (wide) 28.dp else 16.dp),
         contentAlignment = Alignment.Center,
     ) {
+        val slotCount = pages.size + if (endSlot) 1 else 0
         // A spread's pages share the width.
-        val slot = maxWidth / pages.size.coerceAtLeast(1)
+        val slot = maxWidth / slotCount.coerceAtLeast(1)
         val widthPx = with(LocalDensity.current) { slot.roundToPx().coerceAtMost(1600) }
         // Keep showing the previous pages until the next ones are rasterized,
         // so turning pages doesn't flash a spinner.
@@ -574,7 +767,7 @@ private fun PageView(reader: PagedReader, pages: List<Int>, wide: Boolean, onTur
             // of escaping to the UI thread and taking the app down.
             shown = pages.map { i ->
                 val image = try {
-                    reader.renderPage(i, widthPx)
+                    lock.withLock { reader.renderPage(i, widthPx) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
@@ -586,26 +779,46 @@ private fun PageView(reader: PagedReader, pages: List<Int>, wide: Boolean, onTur
         if (shown.isEmpty()) {
             CircularProgressIndicator()
         } else {
+            // Height over width per slot; the end card takes its neighbour's shape.
+            val aspects = shown.map { p -> p.image?.let { it.height.toFloat() / it.width } ?: DEFAULT_PAGE_ASPECT }
+            val slots = if (endSlot) aspects + (aspects.lastOrNull() ?: DEFAULT_PAGE_ASPECT) else aspects
+            // As tall as fits: the slots' widths at that height fill at most the width.
+            val height = minOf(maxHeight, maxWidth / slots.sumOf { 1.0 / it }.toFloat())
             Row(
                 modifier = Modifier.shadow(8.dp, RoundedCornerShape(2.dp)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                shown.forEach { p ->
+                shown.forEachIndexed { i, p ->
+                    val box = Modifier.size(height / slots[i], height)
                     val image = p.image
                     if (image == null) {
-                        Text(
-                            "Couldn't render page ${p.index + 1}",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.widthIn(max = slot).padding(24.dp),
-                        )
+                        Box(box.background(Color(0xFFFFFEFA)), contentAlignment = Alignment.Center) {
+                            Text(
+                                "Couldn't render page ${p.index + 1}",
+                                color = Color(0xFF1B1C1A),
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(24.dp),
+                            )
+                        }
                     } else {
                         Image(
                             bitmap = image,
                             contentDescription = "Page ${p.index + 1}",
                             contentScale = ContentScale.Fit,
-                            modifier = Modifier.weight(1f, fill = false).background(Color(0xFFFFFEFA)),
+                            modifier = box.background(Color(0xFFFFFEFA)),
                         )
+                    }
+                }
+                if (endSlot) {
+                    Box(
+                        Modifier.size(height / slots.last(), height)
+                            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        // Centred while it fits, scrolling on a short window.
+                        Box(Modifier.fillMaxWidth().heightIn(min = height).padding(8.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.widthIn(max = 440.dp)) { end() }
+                        }
                     }
                 }
             }
@@ -648,94 +861,152 @@ private fun TextReaderLayout(
     onToggleChrome: () -> Unit,
     onClose: () -> Unit,
     end: @Composable () -> Unit,
+    spread: Boolean,
+    layout: PageLayout,
+    onLayoutChange: (PageLayout) -> Unit,
+    pager: TextPager,
 ) {
     val theme = prefs.theme
-    Row(Modifier.fillMaxSize().background(theme.background)) {
-        Column(Modifier.weight(1f).fillMaxHeight()) {
-            if (chrome) Row(
-                modifier = Modifier.fillMaxWidth().statusBarsPadding().height(if (wide) 64.dp else 56.dp)
-                    .padding(horizontal = if (wide) 12.dp else 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onClose) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close reader", tint = theme.muted)
-                }
-                Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.Bottom,
+    val settings = @Composable {
+        ReadingSettings(
+            prefs, onPrefsChange,
+            showWidth = wide,
+            layout = layout.takeIf { wide },
+            onLayoutChange = onLayoutChange,
+            spread = spread,
+        )
+    }
+    Box(Modifier.fillMaxSize().background(theme.background)) {
+        Row(Modifier.fillMaxSize()) {
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                if (chrome) Row(
+                    modifier = Modifier.fillMaxWidth().statusBarsPadding().height(if (wide) 64.dp else 56.dp)
+                        .padding(horizontal = if (wide) 12.dp else 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(title, style = MaterialTheme.typography.labelLarge, color = theme.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (wide && !authors.isNullOrBlank()) {
-                        Text(authors, style = MaterialTheme.typography.bodySmall, color = theme.muted, maxLines = 1)
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close reader", tint = theme.muted)
                     }
-                }
-                IconButton(onClick = { onSettingsOpen(!settingsOpen) }) {
-                    Box(
-                        Modifier.size(40.dp).clip(CircleShape)
-                            .background(if (wide && settingsOpen) theme.rule else Color.Transparent),
-                        contentAlignment = Alignment.Center,
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.Bottom,
                     ) {
-                        Icon(Icons.Rounded.TextFields, contentDescription = "Reading settings", tint = theme.muted)
+                        Text(title, style = MaterialTheme.typography.labelLarge, color = theme.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val byline = authorsShort(authors)
+                        if (wide && byline.isNotEmpty()) {
+                            Text(byline, style = MaterialTheme.typography.bodySmall, color = theme.muted, maxLines = 1)
+                        }
+                    }
+                    IconButton(onClick = { onSettingsOpen(!settingsOpen) }) {
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape)
+                                .background(if (wide && settingsOpen) theme.rule else Color.Transparent),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.TextFields, contentDescription = "Reading settings", tint = theme.muted)
+                        }
+                    }
+                    FullscreenButton(theme.muted)
+                }
+                // Thin full-width progress line.
+                Box(Modifier.fillMaxWidth().height(2.dp).background(theme.rule)) {
+                    Box(Modifier.fillMaxWidth(percent / 100f).fillMaxHeight().background(theme.muted))
+                }
+                if (spread) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        TextSpreadView(
+                            reader = reader,
+                            title = title,
+                            prefs = prefs,
+                            startPosition = startPosition,
+                            percent = percent,
+                            onPosition = onPosition,
+                            pager = pager,
+                            chrome = chrome,
+                            onToggleChrome = onToggleChrome,
+                            end = end,
+                        )
+                    }
+                } else {
+                    // A tap on the text shows or hides the bars (buttons in it, like
+                    // the end card's, take their own taps first).
+                    Box(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) { detectTapGestures { onToggleChrome() } }) {
+                        TextView(
+                            reader = reader,
+                            scroll = scroll,
+                            prefs = prefs,
+                            wide = wide,
+                            startPosition = startPosition,
+                            onPosition = onPosition,
+                            end = end,
+                        )
                     }
                 }
-                FullscreenButton(theme.muted)
+                // Pages carry their own feet in a spread.
+                if (chrome && !spread) Row(
+                    modifier = Modifier.fillMaxWidth().navigationBarsPadding().height(if (wide) 48.dp else 44.dp)
+                        .padding(horizontal = if (wide) 32.dp else 28.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        authorsShort(authors),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (wide) "← → to turn · $percent%" else "$percent%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = theme.muted,
+                    )
+                }
             }
-            // Thin full-width progress line.
-            Box(Modifier.fillMaxWidth().height(2.dp).background(theme.rule)) {
-                Box(Modifier.fillMaxWidth(percent / 100f).fillMaxHeight().background(theme.muted))
-            }
-            // A tap on the text shows or hides the bars (buttons in it, like
-            // the end card's, take their own taps first).
-            Box(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) { detectTapGestures { onToggleChrome() } }) {
-                TextView(
-                    reader = reader,
-                    scroll = scroll,
-                    prefs = prefs,
-                    wide = wide,
-                    startPosition = startPosition,
-                    onPosition = onPosition,
-                    end = end,
-                )
-            }
-            if (chrome) Row(
-                modifier = Modifier.fillMaxWidth().navigationBarsPadding().height(if (wide) 48.dp else 44.dp)
-                    .padding(horizontal = if (wide) 32.dp else 28.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    authors.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    if (wide) "← → to turn · $percent%" else "$percent%",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = theme.muted,
-                )
+            // In two pages the panel floats, so opening it doesn't re-page the book.
+            if (wide && settingsOpen && !spread) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.width(340.dp).fillMaxHeight(),
+                ) {
+                    Column(
+                        Modifier.statusBarsPadding().verticalScroll(rememberScrollState())
+                            .padding(horizontal = 24.dp, vertical = 20.dp),
+                        verticalArrangement = Arrangement.spacedBy(24.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Reading settings", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { onSettingsOpen(false) }) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Close settings")
+                            }
+                        }
+                        settings()
+                    }
+                }
             }
         }
-        if (wide && settingsOpen) {
+        if (wide && settingsOpen && spread) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.width(340.dp).fillMaxHeight(),
+                shape = RoundedCornerShape(16.dp),
+                shadowElevation = 6.dp,
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                    .padding(top = 64.dp, end = 64.dp).width(360.dp),
             ) {
                 Column(
-                    Modifier.statusBarsPadding().padding(horizontal = 24.dp, vertical = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(24.dp),
+                    Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Reading settings", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                        Text("Reading settings", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         IconButton(onClick = { onSettingsOpen(false) }) {
                             Icon(Icons.Rounded.Close, contentDescription = "Close settings")
                         }
                     }
-                    ReadingSettings(prefs, onPrefsChange, showWidth = true)
+                    settings()
                 }
             }
         }
@@ -750,16 +1021,49 @@ private fun TextReaderLayout(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 Text("Reading settings", style = MaterialTheme.typography.titleMedium)
-                ReadingSettings(prefs, onPrefsChange, showWidth = false)
+                settings()
             }
         }
     }
 }
 
-/** Text size slider, theme swatches, line spacing (and column width on wide screens). */
+/**
+ * Layout (wide screens), text size, theme swatches, line spacing, and column
+ * width on wide screens, which only applies to one page and is dimmed in two.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReadingSettings(prefs: ReaderPrefs, onChange: (ReaderPrefs) -> Unit, showWidth: Boolean) {
+private fun ReadingSettings(
+    prefs: ReaderPrefs,
+    onChange: (ReaderPrefs) -> Unit,
+    showWidth: Boolean,
+    layout: PageLayout?,
+    onLayoutChange: (PageLayout) -> Unit,
+    spread: Boolean,
+) {
+    if (layout != null) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Layout", style = MaterialTheme.typography.labelLarge)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                PageLayout.entries.forEachIndexed { i, l ->
+                    SegmentedButton(
+                        selected = layout == l,
+                        onClick = { onLayoutChange(l) },
+                        shape = SegmentedButtonDefaults.itemShape(i, PageLayout.entries.size),
+                        label = { Text(if (l == PageLayout.Single) "Single" else l.label, maxLines = 1) },
+                    )
+                }
+            }
+            if (layout == PageLayout.Auto) {
+                Text(
+                    "Auto shows two pages when two columns of at least 26 em fit at your text size. " +
+                        "Now: ${if (spread) "two pages" else "one page"}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
     TextSizeControl(prefs.textSize, onChange = { onChange(prefs.copy(textSize = it)) })
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Theme", style = MaterialTheme.typography.labelLarge)
@@ -802,17 +1106,29 @@ private fun ReadingSettings(prefs: ReaderPrefs, onChange: (ReaderPrefs) -> Unit,
     }
     if (showWidth) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Column width", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Column width",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (spread) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else Color.Unspecified,
+            )
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 ColumnWidth.entries.forEachIndexed { i, w ->
                     SegmentedButton(
                         selected = prefs.width == w,
+                        enabled = !spread,
                         onClick = { onChange(prefs.copy(width = w)) },
                         shape = SegmentedButtonDefaults.itemShape(i, ColumnWidth.entries.size),
                         label = { Text(w.label, maxLines = 1) },
                         icon = {},
                     )
                 }
+            }
+            if (spread) {
+                Text(
+                    "Column width applies to single-page layout. In two pages, each column is half the window.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -910,6 +1226,232 @@ private fun TextView(
     }
 }
 
+/**
+ * Lets the reader's key handler turn a two-page text spread, which keeps its
+ * pages to itself. [TextSpreadView] fills these in while it's shown.
+ */
+class TextPager {
+    var turn: (Int) -> Unit = {}
+    /** To the first spread, or ([toEnd]) the last. */
+    var jump: (toEnd: Boolean) -> Unit = {}
+}
+
+/**
+ * Flowing text as a printed book's two-page spread: paginated, never
+ * scrolled. Running heads carry the book title (left) and the chapter
+ * (right); the feet, book % and the pages left in the chapter. Tap or click
+ * the outer fifth of either side, swipe, or use the keys (via [pager]) to
+ * turn; the middle shows and hides the bars. Pages are measured for the
+ * current size and font, so they aren't stable page numbers; position stays
+ * the per-mille of [TEXT_POSITIONS] that scrolling uses.
+ */
+@Composable
+private fun TextSpreadView(
+    reader: TextReader,
+    title: String,
+    prefs: ReaderPrefs,
+    startPosition: Int,
+    percent: Int,
+    onPosition: (Int) -> Unit,
+    pager: TextPager,
+    chrome: Boolean,
+    onToggleChrome: () -> Unit,
+    end: @Composable () -> Unit,
+) {
+    val text = reader.text
+    val theme = prefs.theme
+    val last = TEXT_POSITIONS - 1
+    val chapters = remember(reader) { chaptersOf(text) }
+    // Where the reader is, as a character offset: stays put when the pages
+    // are re-measured (text size, spacing, window size). Past the text = the end card.
+    var anchor by remember(reader) {
+        mutableStateOf((startPosition.toFloat() / last * text.length).roundToInt().coerceIn(0, text.length))
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val column = textColumnWidth(maxWidth)
+        // Running head (16 + 20) and foot (14 + 16) around the body; page padding 28 / 20.
+        val bodyHeight = maxHeight - 28.dp - 20.dp - 36.dp - 30.dp
+        val style = TextStyle(
+            fontFamily = LibraryZ.tokens.serif,
+            fontSize = prefs.textSize.sp,
+            lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
+            color = theme.ink,
+            textAlign = TextAlign.Justify,
+        )
+        val measurer = rememberTextMeasurer(cacheSize = 0)
+        val columnPx = with(density) { column.roundToPx() }.coerceAtLeast(1)
+        val bodyPx = with(density) { bodyHeight.toPx() }.coerceAtLeast(1f)
+        // Lay the whole text out once per column width and style, then cut it
+        // into pages of whole lines. Each page then draws only its own text.
+        val layout = remember(text, style, columnPx) {
+            measurer.measure(text, style, constraints = Constraints(maxWidth = columnPx))
+        }
+        val starts = remember(layout, bodyPx) {
+            pageBreaks(
+                lineCount = layout.lineCount,
+                top = layout::getLineTop,
+                bottom = layout::getLineBottom,
+                height = bodyPx,
+                blank = { text.substring(layout.getLineStart(it), layout.getLineEnd(it)).isBlank() },
+            )
+        }
+        val pageCount = starts.size
+        fun startOf(p: Int): Int = if (p >= pageCount) text.length else layout.getLineStart(starts[p])
+        fun endOf(p: Int): Int = if (p + 1 >= pageCount) text.length else startOf(p + 1)
+        fun pageAt(offset: Int): Int {
+            if (pageCount == 0 || offset >= text.length) return pageCount
+            val line = layout.getLineForOffset(offset)
+            val i = starts.binarySearch(line)
+            return if (i >= 0) i else (-i - 2).coerceAtLeast(0)
+        }
+        // Two pages a spread, the end card in the slot after the last page.
+        val spreads = remember(pageCount) { Spreads(pageCount, coverAlone = false) }
+        // Empty text: straight to the end card.
+        val slots = spreads.at(pageAt(anchor)).ifEmpty { listOf(pageCount) }
+        val atEnd = pageCount in slots
+
+        SideEffect {
+            pager.turn = { delta -> anchor = startOf(spreads.turn(pageAt(anchor), delta)) }
+            pager.jump = { toEnd -> anchor = if (toEnd) text.length else 0 }
+        }
+        LaunchedEffect(slots, atEnd) {
+            onPosition(if (atEnd) last else (startOf(slots.first()).toFloat() / text.length.coerceAtLeast(1) * last).roundToInt())
+        }
+
+        Row(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        when {
+                            offset.x < size.width * 0.2f -> pager.turn(-1)
+                            offset.x > size.width * 0.8f -> pager.turn(1)
+                            else -> onToggleChrome()
+                        }
+                    }
+                }
+                .pointerInput(Unit) {
+                    var dragged = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragged = 0f },
+                        onDragEnd = { if (abs(dragged) > SWIPE_THRESHOLD_PX) pager.turn(if (dragged < 0) 1 else -1) },
+                        onHorizontalDrag = { _, dx -> dragged += dx },
+                    )
+                },
+        ) {
+            if (slots == listOf(pageCount)) {
+                // The book ended on a right-hand page: the card follows alone.
+                Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.widthIn(max = 440.dp)) { end() }
+                }
+            } else slots.forEachIndexed { i, p ->
+                if (i == 1) {
+                    // The gutter: a hairline that fades out at the ends.
+                    Box(
+                        Modifier.width(1.dp).fillMaxHeight().background(
+                            Brush.verticalGradient(
+                                0f to theme.background,
+                                0.12f to theme.rule,
+                                0.88f to theme.rule,
+                                1f to theme.background,
+                            ),
+                        ),
+                    )
+                }
+                val left = i == 0
+                Column(
+                    Modifier.weight(1f).fillMaxHeight().padding(
+                        start = if (left) TEXT_PAGE_OUTER else TEXT_PAGE_INNER,
+                        end = if (left) TEXT_PAGE_INNER else TEXT_PAGE_OUTER,
+                        top = 28.dp,
+                        bottom = 20.dp,
+                    ),
+                ) {
+                    if (p == pageCount) {
+                        // The end card in the empty right-hand page.
+                        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            Box(Modifier.fillMaxWidth().heightIn(min = maxHeight - 48.dp), contentAlignment = Alignment.Center) {
+                                Box(Modifier.widthIn(max = 440.dp)) { end() }
+                            }
+                        }
+                    } else {
+                        RunningLine(
+                            start = if (left) title else "",
+                            end = if (left) "" else chapters.lastOrNull { it.offset < endOf(p) }?.title.orEmpty(),
+                            head = true,
+                            color = theme.muted,
+                            modifier = Modifier.height(36.dp),
+                        )
+                        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+                            // Same width as the measured column, so lines break where they did there.
+                            Text(
+                                text.substring(startOf(p), endOf(p)).trimEnd(),
+                                style = style,
+                                modifier = Modifier.requiredWidth(with(density) { columnPx.toDp() }),
+                            )
+                        }
+                        val footEnd = if (left) {
+                            ""
+                        } else {
+                            val next = chapters.firstOrNull { it.offset >= endOf(p) }
+                            pagesLeftLabel((next?.let { pageAt(it.offset) } ?: pageCount) - p - 1, inChapter = chapters.isNotEmpty())
+                        }
+                        RunningLine(
+                            start = if (left) "$percent%" else "",
+                            end = footEnd,
+                            head = false,
+                            color = theme.muted,
+                            modifier = Modifier.height(30.dp),
+                        )
+                    }
+                }
+            }
+        }
+        if (chrome) {
+            listOf(-1 to Alignment.CenterStart, 1 to Alignment.CenterEnd).forEach { (delta, where) ->
+                IconButton(
+                    onClick = { pager.turn(delta) },
+                    enabled = if (delta < 0) slots.first() > 0 else !atEnd,
+                    modifier = Modifier.align(where),
+                ) {
+                    Icon(
+                        if (delta < 0) Icons.Rounded.ChevronLeft else Icons.Rounded.ChevronRight,
+                        contentDescription = if (delta < 0) "Previous pages" else "Next pages",
+                        tint = theme.muted,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A running head (small tracked caps) or foot: [start] and [end] at either side. */
+@Composable
+private fun RunningLine(start: String, end: String, head: Boolean, color: Color, modifier: Modifier = Modifier) {
+    val style = if (head) {
+        MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.14.em)
+    } else {
+        MaterialTheme.typography.bodySmall
+    }
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = if (head) Alignment.Top else Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            if (head) start.uppercase() else start,
+            style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            if (head) end.uppercase() else end,
+            style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+        )
+    }
+}
+
 /* ---------------- End of book ---------------- */
 
 @Composable
@@ -946,7 +1488,7 @@ private fun EndCard(
             }
             Text("You’ve reached the end", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
             Text(
-                listOfNotNull(title, authors?.takeIf { it.isNotBlank() }).joinToString(" · "),
+                listOfNotNull(title, authorsShort(authors).takeIf { it.isNotEmpty() }).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

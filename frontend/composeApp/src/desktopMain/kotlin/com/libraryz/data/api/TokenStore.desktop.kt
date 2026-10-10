@@ -23,3 +23,6 @@ class FileTokenStore(private val file: File) : TokenStore {
 
 actual fun createTokenStore(): TokenStore =
     FileTokenStore(File(System.getProperty("user.home"), ".libraryz/token"))
+
+actual fun createReaderLayoutStore(): TokenStore =
+    FileTokenStore(File(System.getProperty("user.home"), ".libraryz/reader-layouts.json"))

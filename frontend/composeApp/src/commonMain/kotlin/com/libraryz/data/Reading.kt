@@ -69,38 +69,137 @@ fun readActionLabel(entry: UserBook?): String =
         "Start reading"
     }
 
-/**
- * The pages a two-page spread shows for [page], laid out like a printed
- * book: the cover (page 0) stands alone, then 1–2, 3–4, … (1-based, the
- * cover is page 1 and spreads are 2–3, 4–5, …). The last spread may hold a
- * single page.
- */
-fun spreadPages(page: Int, pageCount: Int): List<Int> {
-    if (pageCount <= 0) return emptyList()
-    val p = page.coerceIn(0, pageCount - 1)
-    if (p == 0) return listOf(0)
-    val left = if (p % 2 == 1) p else p - 1
-    return listOfNotNull(left, (left + 1).takeIf { it < pageCount })
+/** How a book's pages are laid out. Chosen per book, on this device. */
+enum class PageLayout(val label: String) {
+    Auto("Auto"),
+    Single("Single page"),
+    Two("Two pages"),
 }
 
 /**
- * Where turning by [delta] (±1) leads in spread mode: the first page of the
- * next or previous spread, or [pageCount] (the end card) past the last one.
+ * A book's pages grouped into two-page spreads. Slot [pageCount] is the end
+ * card, which pairs like a page: it fills the empty right-hand slot when the
+ * book ends on a left-hand page, and stands alone otherwise.
+ *
+ * [coverAlone]: like a printed book, page 1 sits alone on the right, then
+ * 2–3, 4–5 (even pages on the left); false pairs 1–2, 3–4 for offset scans.
+ * [alone] pages (a landscape map in a portrait PDF) are shown by themselves,
+ * and pairing starts again after each.
  */
-fun turnSpread(page: Int, delta: Int, pageCount: Int): Int {
-    if (pageCount <= 0) return 0
-    if (page >= pageCount) return if (delta < 0) spreadPages(pageCount - 1, pageCount).first() else pageCount
-    val shown = spreadPages(page, pageCount)
-    return when {
-        delta > 0 -> shown.last() + 1
-        shown.first() == 0 -> 0
-        else -> spreadPages(shown.first() - 1, pageCount).first()
+class Spreads(
+    val pageCount: Int,
+    coverAlone: Boolean = true,
+    alone: Set<Int> = emptySet(),
+) {
+    /** Each spread's slots, in order. Empty only for an empty book. */
+    val list: List<List<Int>>
+    private val spreadOf: IntArray
+
+    init {
+        val out = ArrayList<List<Int>>()
+        if (pageCount > 0) {
+            val end = pageCount
+            var i = 0
+            if (coverAlone) {
+                out += listOf(0)
+                i = 1
+            }
+            while (i <= end) {
+                val pair = i + 1 <= end && i !in alone && (i + 1) !in alone
+                out += if (pair) listOf(i, i + 1) else listOf(i)
+                i += if (pair) 2 else 1
+            }
+        }
+        list = out
+        spreadOf = IntArray(pageCount + 1)
+        out.forEachIndexed { s, slots -> slots.forEach { spreadOf[it] = s } }
+    }
+
+    /** The spread holding [page] (clamped to the book, the end card included). */
+    fun at(page: Int): List<Int> =
+        if (list.isEmpty()) emptyList() else list[spreadOf[page.coerceIn(0, pageCount)]]
+
+    /** The first slot of the spread [delta] (±1) away from [page]'s, stopping at either end. */
+    fun turn(page: Int, delta: Int): Int {
+        if (list.isEmpty()) return 0
+        val s = (spreadOf[page.coerceIn(0, pageCount)] + delta).coerceIn(0, list.lastIndex)
+        return list[s].first()
     }
 }
 
-/** "Page 7 of 248" or, for a spread, "Pages 12–13 of 248". */
-fun pagesLabel(pages: List<Int>, pageCount: Int): String = when (pages.size) {
-    0 -> ""
-    1 -> "Page ${pages[0] + 1} of $pageCount"
-    else -> "Pages ${pages.first() + 1}–${pages.last() + 1} of $pageCount"
+/**
+ * "Page 7 of 248", "Pages 12–13 of 248" for a spread, or "End of book" once
+ * the end card is showing. [pages] may hold the end card's slot ([pageCount]).
+ */
+fun pagesLabel(pages: List<Int>, pageCount: Int): String {
+    if (pageCount <= 0 || pages.isEmpty()) return ""
+    if (pageCount in pages) return "End of book"
+    return when (pages.size) {
+        1 -> "Page ${pages[0] + 1} of $pageCount"
+        else -> "Pages ${pages.first() + 1}–${pages.last() + 1} of $pageCount"
+    }
+}
+
+/** A chapter heading found in plain text: where its line starts, and the heading. */
+data class Chapter(val offset: Int, val title: String)
+
+private val chapterLine = Regex(
+    "^[ \\t]*((?:chapter|book|part|letter|canto|act)[ \\t]+" +
+        "(?:\\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|" +
+        "fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)" +
+        "\\.?(?:[ \\t]*[.:—–-][^\\n]*)?)[ \\t]*\\r?$",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE),
+)
+
+/**
+ * Chapter headings in plain text ("CHAPTER I.", "Chapter 12: The Storm",
+ * "LETTER 4"), for the text reader's running heads. Only short lines that
+ * start a paragraph count, so a sentence opening with "Part one of…" in
+ * hard-wrapped prose doesn't.
+ */
+fun chaptersOf(text: String): List<Chapter> = chapterLine.findAll(text).mapNotNull { m ->
+    val heading = m.groups[1] ?: return@mapNotNull null
+    val start = m.range.first
+    val afterBlank = start == 0 || text.lastIndexOf('\n', start - 1).let { prev ->
+        prev < 0 || text.substring(maxOf(0, text.lastIndexOf('\n', prev - 1) + 1), prev).isBlank()
+    }
+    if (!afterBlank || heading.value.length > 60) return@mapNotNull null
+    Chapter(start, heading.value.trim().trimEnd('.').replace(Regex("\\s+"), " "))
+}.toList()
+
+/** "6 pages left in chapter", "1 page left in book", "Last page of chapter". */
+fun pagesLeftLabel(left: Int, inChapter: Boolean): String {
+    val where = if (inChapter) "chapter" else "book"
+    return when {
+        left <= 0 -> "Last page of $where"
+        left == 1 -> "1 page left in $where"
+        else -> "$left pages left in $where"
+    }
+}
+
+/**
+ * Splits laid-out lines into pages [height] tall: the first line of each
+ * page. Blank lines aren't left at the top of a page. A line taller than a
+ * page still gets one to itself.
+ */
+fun pageBreaks(
+    lineCount: Int,
+    top: (Int) -> Float,
+    bottom: (Int) -> Float,
+    height: Float,
+    blank: (Int) -> Boolean = { false },
+): List<Int> {
+    val starts = ArrayList<Int>()
+    var line = 0
+    while (line < lineCount) {
+        while (starts.isNotEmpty() && line < lineCount && blank(line)) line++
+        if (line >= lineCount) break
+        starts += line
+        val pageTop = top(line)
+        var next = line + 1
+        while (next < lineCount && bottom(next) - pageTop <= height) next++
+        line = next
+    }
+    if (starts.isEmpty() && lineCount > 0) starts += 0
+    return starts
 }

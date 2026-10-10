@@ -36,6 +36,15 @@ class DesktopPdfReader(bytes: ByteArray) : PagedReader {
             Image.makeFromEncoded(baos.toByteArray()).toComposeImageBitmap()
         }
 
+    override suspend fun landscapePages(): Set<Int> = withContext(Dispatchers.IO) {
+        (0 until pageCount).filterTo(HashSet()) { i ->
+            val page = doc.getPage(i)
+            val box = page.cropBox
+            val turned = page.rotation % 180 != 0
+            if (turned) box.height > box.width else box.width > box.height
+        }
+    }
+
     override fun close() {
         runCatching { doc.close() }
     }

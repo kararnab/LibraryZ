@@ -40,6 +40,8 @@ class DesignHelpersTest {
         assertEquals("PDF · Plain text", formatsLabel(listOf(ed("TXT"), ed("pdf"), ed("PDF"))))
         assertEquals("George Eliot · 1871", bylineOf(Work(id = "w", title = "M", authors = "George Eliot", publicationYear = 1871)))
         assertEquals("1871", bylineOf(Work(id = "w", title = "M", authors = " ", publicationYear = 1871)))
+        val dragon = "Alfred V. Aho; Monica S. Lam; Ravi Sethi; Jeffrey D. Ullman"
+        assertEquals("Aho et al. · 2006", bylineOf(Work(id = "w", title = "C", authors = dragon, publicationYear = 2006)))
     }
 
     @Test
