@@ -212,8 +212,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 149 backend + 154 frontend
-  tests** (+1 with `-tags=eval`, +14 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-10: 150 backend + 154 frontend
+  tests** (+1 with `-tags=eval`, +15 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`

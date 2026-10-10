@@ -535,7 +535,10 @@ paths:
         description), then `created_at DESC`. On sqlite (the test DB) falls
         back to a literal, case-insensitive substring match (`%` and `_` are
         not wildcards) ordered title hits, then subtitle/author hits, then
-        description hits, then `created_at DESC`. Empty `q` returns 400.
+        description hits, then `created_at DESC`. A `q` that is an ISBN-10
+        or ISBN-13 once hyphens and spaces are dropped also matches `isbn`
+        exactly (ignoring hyphens, spaces and case), and those hits come
+        first. Empty `q` returns 400.
       parameters:
         - in: query
           name: q

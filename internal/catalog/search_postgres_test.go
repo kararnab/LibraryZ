@@ -185,3 +185,28 @@ func TestPostgresSearchWebsearchSyntax(t *testing.T) {
 		t.Fatalf("exclusion search: want 2, got %+v", excl)
 	}
 }
+
+func TestPostgresSearchMatchesISBN(t *testing.T) {
+	db := openPostgres(t)
+	svc := catalog.NewService(db, nil)
+	ctx := context.Background()
+
+	for _, w := range []catalog.Work{
+		{ID: uuid.New(), Title: "Refactoring", Authors: "Martin Fowler", ISBN: "978-0-201-48567-7"},
+		{ID: uuid.New(), Title: "Catalog notes", Description: "Not to be confused with 9780201485677."},
+	} {
+		if err := svc.CreateWork(ctx, &w); err != nil {
+			t.Fatalf("create %q: %v", w.Title, err)
+		}
+	}
+
+	for _, q := range []string{"9780201485677", "978-0-201-48567-7"} {
+		got, err := svc.SearchWorks(ctx, q, 50, 0)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		if len(got) == 0 || got[0].Title != "Refactoring" {
+			t.Fatalf("isbn %q: want Refactoring first, got %+v", q, got)
+		}
+	}
+}
