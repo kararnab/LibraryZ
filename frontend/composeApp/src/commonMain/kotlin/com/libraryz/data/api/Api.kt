@@ -571,6 +571,14 @@ class ApiClient(
         }
     }
 
+    /** Authenticated. Undoes [dismissRecommendation]; a no-op if it wasn't dismissed. */
+    suspend fun undismissRecommendation(workId: String) {
+        val resp = client.delete("$baseUrl/me/recommendations/$workId/dismiss")
+        if (!resp.status.isSuccess()) {
+            throw ApiException(resp.status.value, resp.bodyAsText(), "undo dismiss failed")
+        }
+    }
+
     /** Public. Returns the raw edition bytes. */
     suspend fun downloadEdition(id: String): ByteArray = downloadEditionFile(id).bytes
 

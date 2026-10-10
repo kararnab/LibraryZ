@@ -1148,6 +1148,19 @@ func TestRecommendationDismissHidesWork(t *testing.T) {
 	if containsWork(recs2, a1) {
 		t.Fatalf("dismissed work A1 should no longer be recommended; got %+v", recs2)
 	}
+
+	// Undo brings it back; undoing again is a no-op.
+	for i := 0; i < 2; i++ {
+		req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/me/recommendations/"+a1+"/dismiss", nil)
+		req.Header.Set("Authorization", auth)
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("undismiss #%d: err=%v code=%d", i+1, err, statusOf(resp))
+		}
+	}
+	if recs3 := getRecommendations(t, ts.URL, auth); !containsWork(recs3, a1) {
+		t.Fatalf("undismissed work A1 should be recommended again; got %+v", recs3)
+	}
 }
 
 type recItem struct {

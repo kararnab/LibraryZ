@@ -66,8 +66,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -299,8 +301,19 @@ internal fun Root(
     val dismissRec: (String) -> Unit = { workId ->
         scope.launch {
             try {
-                recs.dismiss(workId)
-                snackbar.showSnackbar("Removed from For You")
+                val dismissed = recs.dismiss(workId)
+                val result = snackbar.showSnackbar(
+                    "Removed from For You",
+                    actionLabel = if (dismissed != null) "Undo" else null,
+                    duration = SnackbarDuration.Short,
+                )
+                if (result == SnackbarResult.ActionPerformed && dismissed != null) {
+                    try {
+                        recs.undismiss(dismissed)
+                    } catch (e: Throwable) {
+                        snackbar.showSnackbar("Couldn't undo: ${e.message ?: "unknown"}")
+                    }
+                }
             } catch (e: Throwable) {
                 snackbar.showSnackbar("Couldn't dismiss: ${e.message ?: "unknown"}")
             }

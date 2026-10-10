@@ -58,6 +58,25 @@ func (h *Handler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Undismiss reverses Dismiss (the For You "Undo"). {id} is the work id.
+func (h *Handler) Undismiss(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserID(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	workID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "invalid work id", http.StatusBadRequest)
+		return
+	}
+	if err := h.service.Undismiss(r.Context(), userID, workID); err != nil {
+		httpx.ServerError(w, r, "undismiss recommendation", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func parseIntDefault(s string, def, max int) int {
 	if s == "" {
 		return def

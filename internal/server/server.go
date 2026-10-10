@@ -136,9 +136,10 @@ func New(d Deps) (http.Handler, error) {
 	authed.HandleFunc("/me/library/{id}", libraryH.Delete).Methods(http.MethodDelete)
 
 	// Personal recommendations — per-user; MF model with content/popularity
-	// fallback. Dismiss hides a suggestion from future results.
+	// fallback. Dismiss hides a suggestion from future results; DELETE undoes it.
 	authed.HandleFunc("/me/recommendations", recH.Recommend).Methods(http.MethodGet)
 	authed.HandleFunc("/me/recommendations/{id}/dismiss", recH.Dismiss).Methods(http.MethodPost)
+	authed.HandleFunc("/me/recommendations/{id}/dismiss", recH.Undismiss).Methods(http.MethodDelete)
 
 	// Moderator-gated: RBAC permissions (role "moderator", see auth.New),
 	// checked against the caller's current roles (LoadSubjectOnAccess) or,
