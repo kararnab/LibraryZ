@@ -13,8 +13,13 @@ import com.libraryz.data.Work
 import com.libraryz.data.applyLocally
 import com.libraryz.data.enqueue
 import com.libraryz.data.stampRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.serialization.Serializable
@@ -100,7 +105,7 @@ class LibraryState(
         statusFilter = status
         restore()
         // Send what's waiting first, so the list includes it.
-        runCatching { sync() }
+        catchingNonCancel { sync() }
         try {
             val loaded = api.listLibrary(status = status)
             loaded.firstOrNull()?.let { owner = owner ?: it.userId }
@@ -119,6 +124,7 @@ class LibraryState(
             offline = false
             save()
         } catch (e: Throwable) {
+            e.rethrowIfCancelled()
             val saved = if (isUnreachable(e)) load()?.entries else null
             if (saved == null) {
                 error = api.describe(e)
@@ -166,7 +172,7 @@ class LibraryState(
         if (owner != null && owner != userId) forget()
         owner = userId
         paused = false
-        runCatching { sync() }
+        catchingNonCancel { sync() }
     }
 
     private suspend fun save() {
@@ -249,6 +255,7 @@ class LibraryState(
             ub?.let { observe(it) }
             cache[workId] = withPending(workId, ub)
         } catch (e: Throwable) {
+            e.rethrowIfCancelled()
             // Offline, keep what we know (the saved copy) rather than "not in library".
             if (!isUnreachable(e) || !cache.containsKey(workId)) cache[workId] = null
         }
@@ -315,27 +322,40 @@ class LibraryState(
                     // A removal answers with the entry when the server kept it (changed since elsewhere).
                     if (w.upsert != null) api.upsertLibraryEntry(w.workId, w.upsert) else api.removeFromLibrary(w.workId, w.removedAt)
                 } catch (e: Throwable) {
-                    val ours = lock.withLock {
-                        if (inFlight !== w) return@withLock false // signed out meanwhile
-                        inFlight = null
-                        if (isTransient(e)) queued = listOf(w) + queued
-                        save()
-                        true
+                    // Cancelled mid-send: the change goes back first, like a lost
+                    // connection, and the cancellation carries on up.
+                    val cancelled = e is CancellationException
+                    val ours = withContext(NonCancellable) {
+                        lock.withLock {
+                            if (inFlight !== w) return@withLock false // signed out meanwhile
+                            inFlight = null
+                            if (cancelled || isTransient(e)) queued = listOf(w) + queued
+                            save()
+                            true
+                        }
                     }
+                    e.rethrowIfCancelled()
                     if (!ours || isTransient(e)) return
                     loadEntry(w.workId)
                     mergeLoaded(w.workId)
                     throw e
                 }
-                lock.withLock {
-                    if (inFlight !== w) return // signed out meanwhile
-                    inFlight = null
-                    result?.let { observe(it) }
-                    val ub = withPending(w.workId, result)
-                    cache[w.workId] = ub
-                    if (ub != null) mergeIntoList(ub) else items = items?.filterNot { it.workId == w.workId }
-                    save()
+                // The server has it: record that even if cancelled now, or the
+                // change would stay in flight for good.
+                val ours = withContext(NonCancellable) {
+                    lock.withLock {
+                        if (inFlight !== w) return@withLock false // signed out meanwhile
+                        inFlight = null
+                        result?.let { observe(it) }
+                        val ub = withPending(w.workId, result)
+                        cache[w.workId] = ub
+                        if (ub != null) mergeIntoList(ub) else items = items?.filterNot { it.workId == w.workId }
+                        save()
+                        true
+                    }
                 }
+                if (!ours) return
+                currentCoroutineContext().ensureActive()
             }
         }
     }

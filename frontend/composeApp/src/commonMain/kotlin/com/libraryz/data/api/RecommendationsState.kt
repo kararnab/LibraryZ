@@ -28,6 +28,7 @@ class RecommendationsState(private val api: ApiClient) {
         try {
             items = api.recommendations()
         } catch (e: Throwable) {
+            e.rethrowIfCancelled()
             error = api.describe(e)
         }
     }

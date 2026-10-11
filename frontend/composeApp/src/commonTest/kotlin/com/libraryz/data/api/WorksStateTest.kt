@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -95,6 +96,29 @@ class WorksStateTest {
         assertEquals(1, items.first { it.id == "a" }.editions.size)
         // 'B' is untouched.
         assertEquals("B", items.first { it.id == "b" }.title)
+    }
+
+    @Test
+    fun cancellingRefreshOneStopsItAndLeavesNothingBehind() = runTest {
+        val requested = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val engine = MockEngine {
+            requested.complete(Unit)
+            kotlinx.coroutines.awaitCancellation() // the screen goes away first
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+
+        var carriedOn = false
+        val job = launch {
+            state.refreshOne("a")
+            carriedOn = true
+        }
+        requested.await()
+        job.cancelAndJoin()
+
+        assertTrue(!carriedOn, "a cancelled caller stops instead of seeing a failed fetch")
+        assertNull(state.find("a"))
+        assertNull(state.items)
+        assertNull(state.error)
     }
 
     @Test

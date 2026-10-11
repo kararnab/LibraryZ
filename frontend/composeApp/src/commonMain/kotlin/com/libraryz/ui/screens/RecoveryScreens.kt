@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.api.ApiException
+import com.libraryz.data.api.rethrowIfCancelled
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.MessageSlot
 import com.libraryz.ui.components.BannerTone
@@ -174,6 +175,7 @@ fun ForgotPasswordScreen(
                 api.requestPasswordReset(e)
                 sentTo = e
             } catch (t: Throwable) {
+                t.rethrowIfCancelled()
                 problem = classifyRecoveryError(t)
             } finally {
                 sending = false
@@ -254,6 +256,7 @@ fun ResetPasswordScreen(
                 api.completePasswordReset(token, password)
                 onDone()
             } catch (t: Throwable) {
+                t.rethrowIfCancelled()
                 // A 400 is the password policy talking; the link still works.
                 if (t is ApiException && t.status == 400) policyMessage = t.userMessage
                 else problem = classifyRecoveryError(t)
@@ -345,6 +348,7 @@ fun VerifyEmailScreen(
             onVerified()
             done = true
         } catch (t: Throwable) {
+            t.rethrowIfCancelled()
             state = classifyRecoveryError(t)
         }
     }

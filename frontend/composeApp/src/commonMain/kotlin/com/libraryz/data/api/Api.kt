@@ -291,7 +291,7 @@ class ApiClient(
         private set
 
     /** Asks the server whether it's there (`GET /health`), updating [reachable]. */
-    suspend fun ping(): Boolean = runCatching { client.get("$baseUrl/health").status.isSuccess() }.getOrDefault(false)
+    suspend fun ping(): Boolean = catchingNonCancel { client.get("$baseUrl/health").status.isSuccess() }.getOrDefault(false)
 
     private fun HttpClientConfig<*>.configure() {
         expectSuccess = false

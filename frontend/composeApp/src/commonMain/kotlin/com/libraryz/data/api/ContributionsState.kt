@@ -34,6 +34,7 @@ class ContributionsState(private val api: ApiClient) {
         try {
             items = api.listContributions(status = "pending")
         } catch (e: Throwable) {
+            e.rethrowIfCancelled()
             error = api.describe(e)
         }
     }

@@ -121,8 +121,10 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (230 each;
-# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (the same
+# commonTest suite on each; Gradle's report has the counts). Desktop also
+# runs DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest,
+# SavedBooksJvmTest and the opt-in ScreenshotsTest.
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -210,25 +212,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   **kept on purpose** as the cold-start fallback (user with no trained vector) —
   don't delete it. Knobs: `LIBRARYZ_REC_{RETRAIN_INTERVAL,FACTORS,ALPHA}`.
   Whether MF actually helps is gated by `go test -tags=eval` (above).
-- **Frontend ↔ backend wiring (Android + Desktop): functionally complete
-  as of 2026-05-26 and under test.** Auth (signup / login + persistent
-  JWT), all read endpoints, create work, multipart edition upload,
-  edition download (saved to `~/Downloads` on Desktop,
-  `getExternalFilesDir(DOWNLOADS)/` on Android), PDF preview rendered
-  via PDFBox / Android `PdfRenderer`. **Phase 2 crowdsourcing UI is also
-  in:** EditWorkSheet, ContributionQueueScreen (moderator-gated), Browse
-  search with match highlighting. **Phase 3 personal library:**
-  `internal/library` (`UserBook`), `/me/library` CRUD, WorkDetail shelf
-  controls, My Library screen. **Phase 4/5 discovery:**
-  `internal/recommendation` — **matrix-factorization** model (implicit ALS,
-  gonum), trained in-process and served from precomputed tables, with the
-  Phase 4 content+popularity logic retained as the cold-start fallback;
-  `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
-  "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 169 backend + 230 frontend
-  tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
-  against a Postgres service container). See [PLAN.md](PLAN.md) for the
-  endpoint surface.
+- **App tests are commonTest**, against Ktor `MockEngine` + `FakeTokenStore`,
+  so desktop, Android host and Wasm run the same suite. CI also runs
+  `-tags=postgres` against a Postgres service container. Don't hand-keep test
+  counts here; `go test ./...` and Gradle print them. What's built, phase by
+  phase, is in [PLAN.md](PLAN.md), with the endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
   (`gorm.DeletedAt` + `deleted_by` + `delete_reason`), so GORM queries on
   those models skip removed rows automatically — but **raw
@@ -241,7 +229,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `technical` (a broken file; the same file may come back). The edition
   hash unique indexes are **partial** (`WHERE removal_kind <> 'technical'`,
   sqlite + Postgres) and `findDuplicate` skips technical removals.
-- **Upload limits are a per-account quota, not Kong (2026-10-10).**
+- **Upload limits are a per-account quota, not Kong.**
   `catalog.UploadQuota` (`internal/catalog/quota.go`) counts the user's
   recorded editions (`uploaded_by_user_id`, `created_at`, **Unscoped** so
   takedowns still count) over a rolling window, files and bytes, tiered:
@@ -264,14 +252,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (`LoadSubjectOnAccess`, default on; `LIBRARYZ_LOAD_SUBJECT_ON_ACCESS=false`
   makes routes use the token's roles, ≤15 min stale). Sign-up never
   grants roles, so the request body can't escalate privileges.
-- **Wasm parity (2026-05-26):** file picker, download, **and PDF
-  preview** all real. PDF preview uses pdf.js v3.11.174 (UMD global)
-  loaded from cdnjs in `index.html`; Wasm `PdfBackend` bridges via
-  `@JsFun` + `Promise.await()` + Skia `Image.makeFromEncoded`.
-  iOS picker/download/PDF actuals are **drafted (2026-05-27), compiled on
-  Linux since the Kotlin 2.4 upgrade, but never run** — linking and
-  on-device checks still need a Mac. Wasm gotchas to
-  remember:
+- **Wasm:** file picker, download and PDF preview are all real. PDF preview
+  uses pdf.js v3.11.174 (UMD global) loaded from cdnjs in `index.html`; Wasm
+  `PdfBackend` bridges via `@JsFun` + Skia `Image.makeFromEncoded`.
+  iOS picker/download/PDF actuals compile on Linux but have **never run**:
+  linking and on-device checks need a Mac. Wasm gotchas:
   - `ByteArray` can't be a `@JsFun` parameter type — copy into
     `Int8Array` first.
   - `File.size` is a `JsNumber`, not `Double`. Use `toDouble().toLong()`.
@@ -314,137 +299,82 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   refreshes for one session in parallel. `AuthState` is its `SessionHooks`
   and raises `sessionExpired` when renewal fails, which sends `App` to
   sign-in with a snackbar.
-- **Password reset + email verification (2026-10-10)** run on iam's
-  Recovery: `internal/auth/recovery.go` (handlers), `tokens.go`
-  (`one_time_tokens`, an iam `onetime.Store` that must keep passing
-  `storetest.Tokens`), `emails.go` + `templates/` (branded text + HTML,
-  link **and** code). Mail goes through **github.com/kararnab/onemailer**
-  (shared with CodeAtlas; don't vendor a copy back in), configured by
+- **Password reset + email verification** run on iam's Recovery
+  (`internal/auth/recovery.go`, `tokens.go`, `emails.go` + `templates/`).
+  `tokens.go` is an iam `onetime.Store` and must keep passing
+  `storetest.Tokens`. Mail goes through **github.com/kararnab/onemailer**
+  (don't vendor a copy back in), configured by
   `onemailer.LoadConfig(os.Getenv, "LIBRARYZ_")` →
   `LIBRARYZ_{MAIL_PROVIDER,PUBLIC_URL,MAIL_FROM,MAIL_REPLY_TO,SMTP_*}`;
   `MAIL_PROVIDER=none` (default) answers requests but sends nothing.
-  The per-account cap (2 min cooldown, 5/day, `account_emails`, row-locked
-  on Postgres) is checked **before** a token is issued — keep it that way.
-  **Never log links or tokens** (logs carry kind + user_id). Compose sends
-  everything to Mailpit (http://localhost:8025); `libraryz mail send-test
-  -to …` checks real SMTP settings. Emailed links point at
-  `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**. **App links
-  (2026-10-10):** platforms hand links to `DeepLinkInbox` (commonMain; `Root`
-  collects it, so links work while the app is open). Android: `libraryz://`
-  intent filter + `singleTask` + `onNewIntent`; verified https App Links only
-  when built with `-Plibraryz.appLinkUrl=…` (a generated manifest in
-  `androidApp/build.gradle.kts`), with `assetlinks.json` generated into the
-  web bundle from `-Plibraryz.androidCertSha256=…`. Desktop: `DesktopLinks.kt`
-  — single instance (file lock + loopback socket with an owner-only key
-  file in `~/.libraryz`; `./gradlew run` uses a separate `instance-dev`),
-  macOS `CFBundleURLTypes` + `setOpenURIHandler`, Linux/Windows register
-  `libraryz://` on first launch of an installed (jpackage) app. Web: "Open in
-  the LibraryZ app" on the reset page (`openInApp`). "Have a code?" still
-  works everywhere.
-  The seed marks demo users verified.
-- **Visual system (2026-10-10): "LibraryZ Visual Refresh" from Claude
-  Design** (https://claude.ai/artifact/SvHwbXULQMdr7fr2E8XiEZ). Tokens live in
-  `theme/Theme.kt`: M3 light/dark schemes (seed #2E5E4E), Literata (titles,
-  reading text) + Figtree (UI) bundled as variable TTFs in
+  The per-account cap is checked **before** a token is issued — keep it
+  that way. **Never log links or tokens** (logs carry kind + user_id).
+  Compose mail lands in Mailpit (http://localhost:8025); `libraryz mail
+  send-test -to …` checks real SMTP settings. Emailed links point at
+  `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**.
+- **App links:** every platform hands links to `DeepLinkInbox` (commonMain),
+  which `Root` collects. Android verified https links need
+  `-Plibraryz.appLinkUrl=…` (and `-Plibraryz.androidCertSha256=…` for
+  `assetlinks.json`); Desktop links go through `DesktopLinks.kt` (single
+  instance; `./gradlew run` uses a separate `instance-dev`). Details in
+  PLAN.md Phase 7.6.
+- **Visual spec: the Claude Design canvas** (link at the top). Tokens live
+  in `theme/Theme.kt`: M3 schemes, Literata + Figtree as variable TTFs in
   `composeResources/font/` (OFL texts in `composeResources/files/licenses/`),
-  and `LibraryZ.tokens` for what M3 has no slot for (`bookTitle`, reader
-  backdrop, serif). Works have no cover images: `ui/components/Cover.kt`
-  generates them; `coverIndex` must stay identical to the design's JS hash
-  (tested). Reading themes (`ReadingTheme`) are independent of the app theme;
-  `ReaderPrefs` lives in `App` and is saved on the device (`ReaderPrefsStore`, `createReaderPrefsStore`; enums by name, unknown values fall back per setting).
-  Sign-in, Upload, Suggest edit and the Review queue follow the same canvas
-  (second pass). Upload only offers what `sanitize.Validate` accepts
-  (PDF/EPUB/TXT, 500 MB); its "safety check" step is the wait between the
-  last byte sent and the response, so a 400 then means the content was
-  rejected (`classifyUploadError`). **Multiple authors** (`data/Authors.kt`): the stored
-  `;` string is shown per context — lists and the reader bar `authorsShort`
-  (≤ 3 surnames, then "Aho et al."), Book detail "by A, B and C" with each
-  name searching Browse (`authorsFull`; phone: one button → Authors sheet),
-  covers `coverAuthors{M,L,XL}`; Upload and Suggest edit enter them as chips
-  (`AuthorChipsField`). **Two-page reading**: `PageLayout` Auto/Single/Two
-  + "Pair from page 1" saved per edition on the device (`BookLayouts`,
-  `createReaderLayoutStore`); Auto = ≥ 840dp and ≥ 1.2× wider than tall,
-  and for text also two 26 em columns at the current size. `Spreads` pairs
-  like a printed book, landscape pages alone (`PagedReader.landscapePages`),
-  end card in the empty right-hand slot. The text reader paginates only in
-  two pages (`TextSpreadView`); single page still scrolls. **EPUB reader
-  (2026-10-11)** is pure commonMain, no per-platform code: `data/Zip.kt`
-  (zip + a puff-style DEFLATE decoder; checked against JDK zlib by
-  `InflateJvmTest`), `data/Markup.kt` (lenient XHTML tokenizer), and
-  `data/Epub.kt`, which flattens the spine into one `AnnotatedString`
-  (headings, emphasis, lists, pictures, tables, a subset of the book's CSS) with chapters from the nav
-  doc, else the NCX, else h1–h3, plus any spine document opening with a
-  chapter heading the contents left out (`unlistedChapters`). So EPUB is a `TextReader` like TXT
-  (`TextReader(text: AnnotatedString, chapters, images, tables)`), with the same themes,
-  spreads and per-mille position. **Pictures (2026-10-11):** each `<img>` (and
-  `<svg><image>`, e.g. covers) is one `IMAGE_CHAR` annotated `IMAGE_TAG` = its
-  zip path, also inline content under that key; `BookImage` keeps the size
-  read from the header (`data/ImageSize.kt`: PNG/JPEG/GIF/WebP/BMP, no SVG,
-  which falls back to alt text) and re-reads the bytes when drawn.
-  `ui/components/BookImages.kt` sizes placeholders per column (block: full
-  column width, picture centered, capped to the page / 85% of the screen;
-  ≤ 40 px high: inline, 1 em) and decodes only while on screen. The style
-  needs `LineHeightStyle.Mode.Minimum` when there are pictures: Android's
-  default `Fixed` mode crops a tall placeholder's line to one text line (Skia
-  grows it either way). **Book CSS (2026-10-11):** `data/Css.kt` parses
-  linked sheets, `<style>` and `style=""` (tag/.class/#id/*, descendant and
-  child; pseudo, attribute, sibling and `@media` are dropped).
-  `BookBuilder` honours alignment (center/right; left/justify stay the
-  reader's), text-indent, margin/padding-left (`TextIndent`), explicit 0
-  margins (no blank line), `display: none|block`, colour, background,
-  weight, style, decoration, small caps. Paragraph styles go on
-  **non-overlapping regions**: where one ends the line break is implied, so a
-  region carries its trailing `\n` (expect one `\n` at region edges, two
-  inside). **Tables** (`BookTable`): each row is one `IMAGE_CHAR` with
-  `TABLE_TAG` = "t:r", in a one-line paragraph of its own (`TABLE_ROW`),
-  because Android's `LineHeightStyleSpan` sizes a paragraph's middle lines
-  from its first and would crop rows; `BookText.kt` lays out columns
-  browser-style and rows as a placeholder each. Colours are adapted per
-  reading theme at render (`themed`: greys → ink, hues kept at ≥ 4:1,
-  highlights toned so ink reads at 4.5:1). **Second pass (2026-10-11):**
-  font sizes are absolute factors of the reader's size (`Open.scale`, clamped
-  0.6–2.5, `html`/`body` sizes ignored) emitted as em and turned into sp by
-  `themed` (Android multiplies nested `RelativeSizeSpan`s, Skia doesn't);
-  block background/border → `BookBox`, drawn by `Modifier.bookBoxes` behind
-  the lines (text padded 0.6 em in); `@font-face` fonts load per platform
-  (`data/Fonts.kt` `loadFont`: Skia from memory, Android from a cache file),
-  IDPF/Adobe obfuscation undone (`deobfuscate`, own `sha1`), only sfnt
-  (TTF/OTF) accepted, DRM'd fonts skipped; "Book's fonts" switch
-  (`ReaderPrefs.bookFonts`). SVG pictures: `svgSize` + `rasterizeSvg`
-  (Skia `SVGDOM`; **AndroidSVG on Android**, which Compose resources can't
-  decode SVG on). `DecodedImages` is a ~96 MB LRU; pictures decode a screen
-  ahead and the next spread's are prefetched. An element opened just before
-  a paragraph break styles from after it (`Open.contentStart`). The text reader's Contents sheet
-  (`TextPager.goTo` / `offset`) works for both. Of the "Future" board, password reset
-  and email verification are built; notifications aren't.
-- **Motion (2026-10-11): tokens in `theme/Motion.kt`**, after M3
+  and `LibraryZ.tokens` for what M3 has no slot for. `ui/components/Cover.kt`
+  generates covers; `coverIndex` must stay identical to the design's JS hash
+  (tested). `ReaderPrefs` and per-edition `BookLayouts` are saved on the
+  device (enums by name, unknown values fall back per setting).
+- **Upload** offers only what `sanitize.Validate` accepts (PDF/EPUB/TXT,
+  500 MB). A 400 after the last byte means the content was rejected
+  (`classifyUploadError`). Authors are one `;` string; show them with
+  `data/Authors.kt` (`authorsShort`, `authorsFull`, `coverAuthors*`).
+- **Reader files:** `ui/screens/ReaderScreen.kt` (prefs, the screen),
+  `ReaderPaged.kt` (PDF), `ReaderText.kt` (flowing text, `TextPager`,
+  `TextSpreadView`), `ReaderControls.kt` (settings, contents, end card).
+  EPUB is pure commonMain: `data/Zip.kt`, `Markup.kt`, `Css.kt`, `Epub.kt`
+  (parse), `EpubToc.kt` (contents), `EpubBuilder.kt` (`BookBuilder`). It
+  becomes a `TextReader` like TXT. Text-reader gotchas:
+  - The style needs `LineHeightStyle.Mode.Minimum` when there are pictures:
+    Android's default `Fixed` mode crops a tall placeholder's line (Skia
+    grows it either way).
+  - Pictures are one `IMAGE_CHAR` annotated `IMAGE_TAG` = their zip path.
+    Table rows are one `IMAGE_CHAR` with `TABLE_TAG` = "t:r", each in a
+    one-line paragraph of its own (`TABLE_ROW`): Android's
+    `LineHeightStyleSpan` sizes a paragraph's middle lines from its first
+    and would crop rows.
+  - Paragraph styles go on **non-overlapping regions**; a region carries its
+    trailing `\n` (expect one `\n` at region edges, two inside). An element
+    opened just before a paragraph break styles from after it
+    (`Open.contentStart`).
+  - Font sizes are emitted as em and turned into sp by `themed` (Android
+    multiplies nested `RelativeSizeSpan`s, Skia doesn't). Colours are
+    adapted per reading theme there too.
+  - SVG: Skia `SVGDOM`, but **AndroidSVG on Android** (Compose resources
+    can't decode SVG there). Embedded fonts: only sfnt (TTF/OTF), DRM'd
+    ones skipped.
+  - Don't animate anything that changes the text area's size (bars only
+    fade): it would re-page the whole book every frame.
+- **Motion: tokens in `theme/Motion.kt`**, after M3
   (`SHORT`/`MEDIUM`/`LONG`, emphasized and standard easing,
   `sharedAxisX` / `fadeThrough` / `pageTurn` / `reveal` / `conceal`,
   `itemMotion()` for lazy items, `loadingPulse`, `dissolveFrom`). Use
   these rather than ad-hoc `tween`s. `LocalReduceMotion` comes from each
-  platform's entry point (Android animator scale 0, `prefers-reduced-motion`,
-  iOS Reduce Motion, GNOME `enable-animations` / macOS `reduceMotion`):
-  when on, nothing slides, scales or pulses; fades stay, shortened.
-  Navigation in `Root` is one `AnimatedContent` over the stack's top
-  (`NavEntry`: screen, depth, width class): deeper = forward, shallower =
-  back, same depth = fade through. Screens sharing the bar/rail have one
-  `windowKey`, so the frame stays still and only the pane animates; wide
-  Browse and Book detail share one `ListDetailLayout` (one call site, keep
-  it so). Sheets (Upload, Suggest edit) draw over the entry below them.
-  `rememberSaveableStateHolder` keeps each stacked screen's state (scroll)
-  until it's popped; top-level destinations keep theirs for good. In the
-  text reader don't animate anything that changes the text area's size
-  (bars only fade): it would re-page the whole book every frame.
-- **App icon (2026-10-11): `frontend/branding/generate_icons.py`** draws the
-  rail's "Lz" mark (Literata 600 from the bundled TTF, Theme.kt's
-  primaryContainer tile) into every platform's icon: Android adaptive +
-  monochrome vectors, desktop window PNG + jpackage png/ico/icns
-  (`composeApp/icons/`), web favicons, and `branding/ios-AppIcon-1024.png`
-  (there's no Xcode project yet). Edit the script and re-run it; don't hand-edit
-  the outputs. GNOME 46 ignores X11 window icons, so on Linux `DesktopLinks`
-  copies the icon to `~/.local/share/icons` and names it in a hidden entry with
-  `StartupWMClass=LibraryZ` (the link handler when installed,
-  `libraryz-dev.desktop` for `./gradlew run`).
+  platform's entry point: when on, nothing slides, scales or pulses; fades
+  stay, shortened. Navigation in `Root` (`App.kt`) is one `AnimatedContent`
+  over the stack's top (`NavEntry`, `AppNav.kt`): deeper = forward,
+  shallower = back, same depth = fade through. Screens sharing the bar/rail
+  have one `windowKey`, so the frame stays still and only the pane
+  animates; wide Browse and Book detail share one `ListDetailLayout`
+  (`AppFrames.kt`; one call site, keep it so). Sheets (Upload, Suggest
+  edit) draw over the entry below them. `rememberSaveableStateHolder` keeps
+  each stacked screen's state until it's popped; top-level destinations
+  keep theirs for good.
+- **App icon: `frontend/branding/generate_icons.py`** writes every
+  platform's icon. Edit the script and re-run it; don't hand-edit the
+  outputs. GNOME 46 ignores X11 window icons, so on Linux `DesktopLinks`
+  copies the icon to `~/.local/share/icons` and names it in a hidden entry
+  with `StartupWMClass=LibraryZ`.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the
   single source: it generates `com.libraryz.AppVersion` (Settings › About)
   and is the Android `versionName`. The desktop installer's
@@ -478,20 +408,17 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in
   `commonTest`. Don't go back to `expect class` for it — it makes the
   test surface miserable.
-- **Server address is editable (triple-tap Settings › Server, or
-  "Server: …" on sign-in; `rememberMultiTap(taps = 3)`)**, saved per device (`ServerUrlStore`, `createServerUrlStore`).
-  `parseServerUrl` validates it (http/https, host = localhost / IPv4 /
-  [IPv6] / DNS name, optional port and path; a bare `host:port` gets
-  `http://`); blank or invalid falls back to `DefaultBaseUrl`. Changing it
-  starts the catalogue states afresh; between dev addresses
-  (`isDevServerUrl`: loopback / local network, often one machine) the
-  session carries over, otherwise it signs out first so tokens never reach
-  a server that didn't issue them; `ApiClient.baseUrl` is a `var`. On Android the
-  ACCESS_LOCAL_NETWORK check reads the saved address (`startupServerUrl`),
-  so switching to a LAN IP on Android 17 needs one app restart for the
-  prompt. **Android cleartext**: debug builds allow it everywhere
-  (`androidApp/src/debug/res/xml/network_security_config.xml`); release
-  keeps `src/main`'s list (`10.0.2.2`, `localhost`, `127.0.0.1`,
+- **Server address is editable** (triple-tap Settings › Server, or
+  "Server: …" on sign-in), saved per device (`ServerUrlStore`).
+  `parseServerUrl` validates it; blank or invalid falls back to
+  `DefaultBaseUrl`. Changing it starts the catalogue states afresh. Between
+  dev addresses (`isDevServerUrl`) the session carries over; otherwise it
+  signs out first so tokens never reach a server that didn't issue them.
+  On Android the ACCESS_LOCAL_NETWORK check reads the saved address
+  (`startupServerUrl`), so switching to a LAN IP on Android 17 needs one
+  app restart for the prompt. **Android cleartext**: debug builds allow it
+  everywhere (`androidApp/src/debug/res/xml/network_security_config.xml`);
+  release keeps `src/main`'s list (`10.0.2.2`, `localhost`, `127.0.0.1`,
   `192.168.29.234`).
 - **Every request field has a bound (400 past it).** The rules sit next to
   each model: `catalog.CheckWorkField` / `MaxFieldRunes` (works, edit
@@ -509,6 +436,12 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   failures use `LoadErrorState` (the canvas's Review error board: cloud-off,
   tonal "Try again"). Local failures (saving a download, a book that won't
   open) keep their own message.
+- **Cancellation passes through.** A `catch (e: Throwable)` around
+  suspending work calls `e.rethrowIfCancelled()` first, and `runCatching`
+  around a request is `catchingNonCancel` (both in `data/api/Errors.kt`).
+  Otherwise leaving a screen shows an error, or drops a queued library
+  change. Bookkeeping that must finish (`LibraryState.sync` after an
+  answer) runs in `withContext(NonCancellable)`.
 - **Versions are pinned in `frontend/gradle/libs.versions.toml`** —
   Kotlin 2.4.21, Compose Multiplatform 1.12.1, AGP 9.4.1 (Gradle 9.8.1,
   compileSdk 37). Compose deps use direct coordinates, not the deprecated

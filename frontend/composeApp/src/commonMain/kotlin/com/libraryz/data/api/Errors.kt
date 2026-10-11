@@ -1,6 +1,25 @@
 package com.libraryz.data.api
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.io.IOException
+
+/**
+ * Re-throws [CancellationException]. Call it first in a `catch (e: Throwable)`
+ * around suspending work: a cancelled coroutine must stop, not carry on as if
+ * the request had failed and leave an error message or a dropped change behind.
+ */
+fun Throwable.rethrowIfCancelled() {
+    if (this is CancellationException) throw this
+}
+
+/** [runCatching] that lets cancellation through. Use it around suspending calls. */
+inline fun <T> catchingNonCancel(block: () -> T): Result<T> =
+    try {
+        Result.success(block())
+    } catch (e: Throwable) {
+        e.rethrowIfCancelled()
+        Result.failure(e)
+    }
 
 /**
  * True when [e] means no answer came back from the server: it's down, the
