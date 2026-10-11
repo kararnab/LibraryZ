@@ -612,15 +612,18 @@ class ApiClient(
 
     /**
      * Removes the work from the caller's library, as of [stamp] (null = now).
-     * Not there any more counts as done.
+     * Not there any more counts as done. Returns the entry if the server
+     * kept it (changed elsewhere after [stamp]), else null.
      */
-    suspend fun removeFromLibrary(workId: String, stamp: String? = null) {
+    suspend fun removeFromLibrary(workId: String, stamp: String? = null): UserBook? {
         val resp = client.delete("$baseUrl/me/library/$workId") {
             if (stamp != null) parameter("stamp", stamp)
         }
         if (!resp.status.isSuccess() && resp.status != HttpStatusCode.NotFound) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove from library failed")
         }
+        // 200: kept, because it changed elsewhere after the removal was made.
+        return if (resp.status == HttpStatusCode.OK) resp.body() else null
     }
 
     /** Authenticated. Personalized recommendations (MF model + fallback). */

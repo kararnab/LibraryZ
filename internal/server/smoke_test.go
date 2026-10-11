@@ -350,6 +350,31 @@ func TestCreateWorkIgnoresServerOwnedFields(t *testing.T) {
 	}
 }
 
+// Creating a work holds its fields to the same limits as a suggested edit,
+// so a work can't start out with what no edit could ever give it.
+func TestCreateWorkValidatesFields(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupLogin(t, ts.URL, "creatework-limits@b.com")
+
+	for name, body := range map[string]map[string]any{
+		"long title":       {"title": strings.Repeat("t", 501)},
+		"long authors":     {"title": "T", "authors": strings.Repeat("a", 1001)},
+		"long description": {"title": "T", "description": strings.Repeat("d", 20001)},
+		"far future year":  {"title": "T", "publication_year": 999999},
+		"long isbn":        {"title": "T", "isbn": strings.Repeat("1", 33)},
+	} {
+		if code, _ := postWork(t, ts.URL, auth, body); code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", name, code)
+		}
+	}
+	code, out := postWork(t, ts.URL, auth, map[string]any{
+		"title": strings.Repeat("t", 500), "publication_year": -400, "description": strings.Repeat("d", 20000),
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("at the limits: want 201, got %d %v", code, out)
+	}
+}
+
 // Uploading bytes that already back an edition of a different work is a 409
 // naming the existing edition; the second work gains nothing.
 func TestUploadDuplicateAcrossWorksReturns409(t *testing.T) {
@@ -1014,6 +1039,32 @@ func TestLibraryDeleteThenGet404(t *testing.T) {
 	resp2, _ := http.DefaultClient.Do(req2)
 	if statusOf(resp2) != http.StatusNotFound {
 		t.Fatalf("get after delete: code=%d, want 404", statusOf(resp2))
+	}
+}
+
+// A removal stamped before the entry's newest change keeps the entry, and
+// says so: 200 with the entry, not the 204 of a removal that happened.
+func TestLibraryDeleteOlderThanEntryReturnsIt(t *testing.T) {
+	ts, _ := newTestServer(t)
+	auth := signupAndLogin(t, ts.URL, "lib-keep@x.com", testPassword, "LK")
+	wid := createWork(t, ts.URL, auth, "Dune", "")
+	putLibrary(t, ts.URL, auth, wid, map[string]any{"status": "reading"})
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/me/library/"+wid+"?stamp=0000000000001.0000.olddevice", nil)
+	req.Header.Set("Authorization", auth)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("older delete: err=%v code=%d %s", err, statusOf(resp), readBody(resp))
+	}
+	var kept libraryEntry
+	if err := json.NewDecoder(resp.Body).Decode(&kept); err != nil || kept.WorkID != wid || kept.Status != "reading" {
+		t.Fatalf("kept entry: %+v (%v)", kept, err)
+	}
+
+	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/me/library/"+wid, nil)
+	req2.Header.Set("Authorization", auth)
+	if resp2, _ := http.DefaultClient.Do(req2); statusOf(resp2) != http.StatusOK {
+		t.Fatalf("get after older delete: code=%d, want 200", statusOf(resp2))
 	}
 }
 

@@ -121,7 +121,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (219 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (223 each;
 # desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -225,7 +225,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 159 backend + 219 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 162 backend + 223 frontend
   tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.

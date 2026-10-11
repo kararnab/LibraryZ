@@ -62,7 +62,7 @@ func TestRemovalBeatsOlderChangesButNotNewer(t *testing.T) {
 	wid := seedWork(t, db, "Dune", "Herbert")
 	ctx := context.Background()
 	svc.Upsert(ctx, 1, wid, library.UpsertRequest{Status: strptr("reading"), Stamps: library.Stamps{Status: at(5, "a")}})
-	if err := svc.Delete(ctx, 1, wid, at(20, "a")); err != nil {
+	if _, err := svc.Delete(ctx, 1, wid, at(20, "a")); err != nil {
 		t.Fatal(err)
 	}
 	// An offline change from before the removal doesn't bring it back.
@@ -81,8 +81,8 @@ func TestRemovalBeatsOlderChangesButNotNewer(t *testing.T) {
 		t.Fatalf("re-added entry wrong: %+v", ub)
 	}
 	// A removal stamped before the entry's newest change keeps it.
-	if err := svc.Delete(ctx, 1, wid, at(22, "c")); err != nil {
-		t.Fatal(err)
+	if kept, err := svc.Delete(ctx, 1, wid, at(22, "c")); err != nil || kept == nil || kept.Rating == nil {
+		t.Fatalf("older removal: kept = %+v, err = %v; want the entry back", kept, err)
 	}
 	if _, err := svc.Get(ctx, 1, wid); err != nil {
 		t.Fatalf("older removal deleted a newer entry: %v", err)

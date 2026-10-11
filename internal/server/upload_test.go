@@ -108,6 +108,41 @@ func buildTestPDF(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
+// A file the quota check says fits is accepted, even though the request
+// around it (multipart framing) is a little bigger than the file.
+func TestUploadQuotaCheckAgreesWithUpload(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	deps.UploadQuota = catalog.UploadQuota{
+		Window:        24 * time.Hour,
+		Standard:      catalog.QuotaLimit{Files: 10, Bytes: 1 << 30},
+		NewAccount:    catalog.QuotaLimit{Files: 10, Bytes: 100},
+		NewAccountAge: 7 * 24 * time.Hour,
+	}
+	ts := newServer(t, deps)
+	auth := signupLogin(t, ts.URL, "quota-edge@b.com")
+	_, w := postWork(t, ts.URL, auth, map[string]any{"title": "Quota edge"})
+
+	file := bytes.Repeat([]byte("x"), 100)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/me/upload-quota?size=100", nil)
+	req.Header.Set("Authorization", auth)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st catalog.UploadQuotaResponse
+	_ = json.NewDecoder(resp.Body).Decode(&st)
+	if !st.Fits {
+		t.Fatalf("100 bytes on a 100-byte allowance should fit: %+v", st)
+	}
+	if resp := uploadEdition(t, ts.URL, auth, w["id"].(string), "txt", "en", file); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload that fits: want 201, got %d %s", resp.StatusCode, readBody(resp))
+	}
+	// One byte more no longer fits, and the upload says so.
+	if resp := uploadEdition(t, ts.URL, auth, w["id"].(string), "txt", "en", []byte("y")); resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("over the allowance: want 429, got %d %s", resp.StatusCode, readBody(resp))
+	}
+}
+
 // The per-account quota: GET /me/upload-quota reports it, an upload past it
 // is a 429 with Retry-After, and a moderator isn't limited.
 func TestUploadQuota(t *testing.T) {

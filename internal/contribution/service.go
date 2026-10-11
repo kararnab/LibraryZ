@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/kararnab/libraryZ/internal/catalog"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -45,28 +43,10 @@ var allowedPatchFields = map[string]string{
 	"openlibrary_id":   "open_library_id",
 }
 
-// maxFieldRunes caps each string field. Generous — these exist to stop
-// abuse (megabyte-sized "titles"), not to police content.
-var maxFieldRunes = map[string]int{
-	"title":          500,
-	"subtitle":       500,
-	"authors":        1000,
-	"description":    20000,
-	"language":       64,
-	"isbn":           32,
-	"openlibrary_id": 64,
-}
-
-// Sane bounds for publication_year: allows ancient texts (negative = BCE)
-// and a little room for announced-but-unpublished works.
-const (
-	minPublicationYear = -5000
-	maxYearAhead       = 5
-)
-
 // validatePatch checks a proposed patch against the same contract the
-// works table enforces, so problems surface at submit time instead of as
-// a silent no-op or a 500 when a moderator approves it.
+// works table enforces (catalog.CheckWorkField, which creating a work uses
+// too), so problems surface at submit time instead of as a silent no-op or
+// a 500 when a moderator approves it.
 func validatePatch(patch map[string]any) error {
 	if len(patch) == 0 {
 		return ErrEmptyPatch
@@ -77,52 +57,14 @@ func validatePatch(patch map[string]any) error {
 	}
 	sort.Strings(keys) // deterministic error message for multi-error patches
 	for _, k := range keys {
-		v := patch[k]
 		if _, ok := allowedPatchFields[k]; !ok {
 			return fmt.Errorf("%w: field %q is not editable", ErrInvalidPatch, k)
 		}
-		if k == "publication_year" {
-			year, ok := asInteger(v)
-			if !ok {
-				return fmt.Errorf("%w: publication_year must be an integer", ErrInvalidPatch)
-			}
-			maxYear := time.Now().Year() + maxYearAhead
-			if year < minPublicationYear || year > int64(maxYear) {
-				return fmt.Errorf("%w: publication_year must be between %d and %d", ErrInvalidPatch, minPublicationYear, maxYear)
-			}
-			continue
-		}
-		str, ok := v.(string)
-		if !ok {
-			return fmt.Errorf("%w: %s must be a string", ErrInvalidPatch, k)
-		}
-		if k == "title" && strings.TrimSpace(str) == "" {
-			return fmt.Errorf("%w: title must not be empty", ErrInvalidPatch)
-		}
-		if max := maxFieldRunes[k]; utf8.RuneCountInString(str) > max {
-			return fmt.Errorf("%w: %s must be at most %d characters", ErrInvalidPatch, k, max)
+		if err := catalog.CheckWorkField(k, patch[k]); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidPatch, err)
 		}
 	}
 	return nil
-}
-
-// asInteger accepts a whole number in any of the shapes a patch value can
-// arrive in: float64 from encoding/json, or a Go int from in-process callers.
-func asInteger(v any) (int64, bool) {
-	switch n := v.(type) {
-	case float64:
-		if n != math.Trunc(n) || math.IsInf(n, 0) {
-			return 0, false
-		}
-		return int64(n), true
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	case int32:
-		return int64(n), true
-	}
-	return 0, false
 }
 
 type Service struct {
@@ -219,9 +161,9 @@ func (s *Service) populateContributorNames(ctx context.Context, cs []Contributio
 }
 
 // worksFields mirrors the whitelisted, contribution-editable columns of
-// the works table. Declared locally rather than importing internal/catalog
-// so the contribution package stays decoupled from the catalog model — the
-// column names are the contract (and match allowedPatchFields).
+// the works table. Declared locally rather than reusing catalog.Work so
+// this package stays decoupled from the catalog model — the column names
+// are the contract (and match allowedPatchFields).
 type worksFields struct {
 	ID              string `gorm:"column:id"`
 	Title           string `gorm:"column:title"`
