@@ -368,7 +368,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `InflateJvmTest`), `data/Markup.kt` (lenient XHTML tokenizer), and
   `data/Epub.kt`, which flattens the spine into one `AnnotatedString`
   (headings, emphasis, lists, pictures, tables, a subset of the book's CSS) with chapters from the nav
-  doc, else the NCX, else h1–h3. So EPUB is a `TextReader` like TXT
+  doc, else the NCX, else h1–h3, plus any spine document opening with a
+  chapter heading the contents left out (`unlistedChapters`). So EPUB is a `TextReader` like TXT
   (`TextReader(text: AnnotatedString, chapters, images, tables)`), with the same themes,
   spreads and per-mille position. **Pictures (2026-10-11):** each `<img>` (and
   `<svg><image>`, e.g. covers) is one `IMAGE_CHAR` annotated `IMAGE_TAG` = its

@@ -172,6 +172,16 @@ fun chaptersOf(text: String): List<Chapter> = chapterLine.findAll(text).mapNotNu
     Chapter(start, heading.value.trim().trimEnd('.').replace(Regex("\\s+"), " "))
 }.toList()
 
+/**
+ * [line] as a chapter's title when it reads as a chapter heading on its
+ * own ("CHAPTER II", "Book 3: The Storm"), else null.
+ */
+fun chapterHeading(line: String): String? {
+    if (line.length > 60) return null
+    val heading = chapterLine.matchEntire(line)?.groups?.get(1) ?: return null
+    return heading.value.trim().trimEnd('.').replace(Regex("\\s+"), " ")
+}
+
 /** "6 pages left in chapter", "1 page left in book", "Last page of chapter". */
 fun pagesLeftLabel(left: Int, inChapter: Boolean): String {
     val where = if (inChapter) "chapter" else "book"
