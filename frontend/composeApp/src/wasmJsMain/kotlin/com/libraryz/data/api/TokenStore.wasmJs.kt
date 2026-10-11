@@ -18,3 +18,5 @@ class LocalStorageTokenStore(private val key: String = KEY) : TokenStore {
 actual fun createTokenStore(): TokenStore = LocalStorageTokenStore()
 
 actual fun createReaderLayoutStore(): TokenStore = LocalStorageTokenStore("libraryz_reader_layouts")
+
+actual fun createReaderPrefsStore(): TokenStore = LocalStorageTokenStore("libraryz_reader_prefs")

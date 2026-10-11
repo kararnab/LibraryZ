@@ -65,6 +65,17 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   (<http://localhost:8025>) to catch every message.
 - README screenshots are now generated from the real UI
   (`ScreenshotsTest`, see `docs/screenshots/README.md`).
+- **Reader polish**: reading settings are saved on the device; EPUBs keep
+  their font sizes, boxed notes (borders and backgrounds), embedded fonts
+  (IDPF / Adobe obfuscation undone; a "Book's fonts" switch turns them
+  off) and SVG pictures (AndroidSVG on Android); pictures are decoded
+  ahead of time instead of popping in; the end-of-book card follows the
+  reading theme.
+- **Removal kinds** ([#27](https://github.com/kararnab/LibraryZ/issues/27)):
+  `DELETE /works/{id}` and `/editions/{id}` take `kind: content | technical`
+  (default `content`). A technical removal (a broken file) lets the same
+  file be uploaded again; a content takedown still blocks it. The remove
+  dialog asks which.
 
 ### Changed
 - The web dev server (`wasmJsBrowserDevelopmentRun`) moved to port 8081,

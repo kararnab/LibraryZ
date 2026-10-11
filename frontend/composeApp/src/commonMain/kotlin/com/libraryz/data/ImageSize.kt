@@ -3,7 +3,7 @@ package com.libraryz.data
 /**
  * An encoded image's pixel size, read from its header without decoding it:
  * PNG, JPEG, GIF, WebP and BMP, the raster formats every platform's decoder
- * reads. Null for anything else (SVG included) or a header too short to say.
+ * reads. Null for anything else (SVG: see [svgSize]) or a header too short to say.
  */
 fun imageSize(b: ByteArray): Pair<Int, Int>? {
     fun u8(p: Int) = b[p].toInt() and 0xFF
@@ -48,4 +48,45 @@ private fun jpegSize(b: ByteArray, u8: (Int) -> Int, be16: (Int) -> Int): Pair<I
         }
     }
     return null
+}
+
+/**
+ * An SVG's size in CSS pixels, from its root element: `width` / `height`
+ * (px, pt, pc, mm, cm, in, em), the `viewBox` for whichever is missing or a
+ * percentage, else the browser default of 300 × 150. Null if [b] isn't SVG.
+ */
+fun svgSize(b: ByteArray): Pair<Int, Int>? {
+    val text = b.decodeToString(0, minOf(b.size, 64 * 1024))
+    val at = Regex("<(?:[A-Za-z_][\\w.-]*:)?svg[\\s/>]").find(text)?.range?.first ?: return null
+    val tag = markupTokens(text.substring(at, minOf(text.length, at + 4096))).firstOrNull() as? MarkupToken.Start ?: return null
+    fun length(v: String?): Float? {
+        val m = Regex("^([0-9]*\\.?[0-9]+)(px|pt|pc|mm|cm|in|em)?$").matchEntire(v?.trim()?.lowercase() ?: return null) ?: return null
+        val n = m.groupValues[1].toFloatOrNull() ?: return null
+        return n * when (m.groupValues[2]) {
+            "pt" -> 4f / 3f
+            "pc" -> 16f
+            "mm" -> 96f / 25.4f
+            "cm" -> 96f / 2.54f
+            "in" -> 96f
+            "em" -> 16f
+            else -> 1f
+        }
+    }
+    val box = tag.attrs["viewbox"]?.trim()?.split(Regex("[\\s,]+"))?.mapNotNull { it.toFloatOrNull() }
+        ?.takeIf { it.size == 4 && it[2] > 0f && it[3] > 0f }
+    var w = length(tag.attrs["width"])
+    var h = length(tag.attrs["height"])
+    if (box != null) {
+        if (w == null && h == null) {
+            w = box[2]
+            h = box[3]
+        } else if (w == null) {
+            w = h!! * box[2] / box[3]
+        } else if (h == null) {
+            h = w * box[3] / box[2]
+        }
+    }
+    val width = (w ?: 300f).toInt()
+    val height = (h ?: 150f).toInt()
+    return if (width > 0 && height > 0) width to height else null
 }

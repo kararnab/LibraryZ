@@ -19,3 +19,5 @@ class UserDefaultsTokenStore(private val key: String = KEY) : TokenStore {
 actual fun createTokenStore(): TokenStore = UserDefaultsTokenStore()
 
 actual fun createReaderLayoutStore(): TokenStore = UserDefaultsTokenStore("libraryz_reader_layouts")
+
+actual fun createReaderPrefsStore(): TokenStore = UserDefaultsTokenStore("libraryz_reader_prefs")

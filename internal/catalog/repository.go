@@ -42,14 +42,16 @@ type Edition struct {
 	Language  string    `json:"language,omitempty"`
 	FileKey   string    `gorm:"not null;index" json:"-"`
 	SizeBytes int64     `json:"size_bytes"`
-	SHA256    string    `gorm:"size:64;uniqueIndex" json:"sha256"`
+	// Unique among editions that block their bytes: a technical removal
+	// (see RemovalKind) releases them, so the same file can come back.
+	SHA256 string `gorm:"size:64;uniqueIndex:idx_editions_sha256,where:removal_kind <> 'technical'" json:"sha256"`
 	// SourceSHA256 is the sha256 of the bytes as uploaded, before
 	// sanitization. Sanitizing a PDF re-serializes it with a fresh timestamp
 	// and file ID, so SHA256 (of the stored bytes) differs on every upload of
 	// the same PDF; duplicate detection keys on this instead. Nullable
 	// (the unique index allows many NULLs) for editions recorded without
 	// the original upload's hash.
-	SourceSHA256     *string   `gorm:"size:64;uniqueIndex" json:"-"`
+	SourceSHA256     *string   `gorm:"size:64;uniqueIndex:idx_editions_source_sha256,where:removal_kind <> 'technical'" json:"-"`
 	UploadedByUserID uint      `gorm:"not null;index" json:"uploaded_by"`
 	CreatedAt        time.Time `json:"created_at"`
 	Removal
@@ -66,7 +68,24 @@ type Removal struct {
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 	DeletedBy    *uint          `json:"-"`
 	DeleteReason string         `json:"-"`
+	// RemovalKind says why: RemovalContent ("" on live rows) keeps the
+	// file's hashes, so the same bytes can't be uploaded again;
+	// RemovalTechnical (a broken file) releases them.
+	RemovalKind RemovalKind `gorm:"not null;default:''" json:"-"`
 }
+
+// RemovalKind is why a work or edition was taken down.
+type RemovalKind string
+
+const (
+	// RemovalContent is a takedown of the content itself (rights, spam,
+	// abuse): the same file stays blocked. The default.
+	RemovalContent RemovalKind = "content"
+	// RemovalTechnical removes a file for being broken or unreadable: the
+	// same file may be uploaded again (say, once the bug that broke it is
+	// fixed).
+	RemovalTechnical RemovalKind = "technical"
+)
 
 type Tag struct {
 	ID    uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`

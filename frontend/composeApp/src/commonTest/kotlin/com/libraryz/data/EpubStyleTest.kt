@@ -137,6 +137,92 @@ class EpubStyleTest {
     }
 
     @Test
+    fun sizesTextAgainstTheReadersSize() {
+        val text = book(
+            """<p class="big">Big <span class="half">half</span></p><p>Plain <small>small</small></p><h1>Title</h1>""",
+            css = "body { font-size: 80% } .big { font-size: 1.5em } .half { font-size: 50% } h1 { font-size: 3em }",
+        ).text
+        fun sizeOf(of: String) = text.spanStyles.lastOrNull { text.text.substring(it.start, it.end) == of && it.item.fontSize.isEm }?.item?.fontSize?.value
+        // Factors multiply down the tree, against the reader's size: body's own size is ignored.
+        assertEquals(1.5f, sizeOf("Big half"))
+        assertEquals(0.75f, sizeOf("half"))
+        assertEquals(0.85f, sizeOf("small"))
+        // Clamped to 2.5×, with lines tall enough for it.
+        assertEquals(2.5f, sizeOf("Title"))
+        assertEquals((2.5f * 1.3f).em, text.paragraphAt("Title")?.lineHeight)
+        assertEquals((1.5f * 1.3f).em, text.paragraphAt("Big")?.lineHeight)
+    }
+
+    @Test
+    fun keepsTheBooksBoxes() {
+        val book = book(
+            """<p>Before</p><div class="note"><p>Remember this.</p><p>And this.</p></div><p>After</p>""",
+            css = ".note { border: 1px solid #c62828; background-color: #ffebee; margin-left: 1em }",
+        )
+        val box = book.boxes.single()
+        val text = book.text
+        assertEquals("Remember this.\n\nAnd this.", text.text.substring(box.start, box.end))
+        assertEquals(1f, box.left)
+        assertTrue(box.border)
+        assertEquals(Color(0xFFC62828), box.borderColor)
+        assertEquals(Color(0xFFFFEBEE), box.background)
+        // The box draws the background, so the text doesn't highlight it too; and the text sits inside the edge.
+        assertTrue(text.spanStyles.none { it.item.background != Color.Unspecified })
+        assertEquals(TextIndent(1.6.em, 1.6.em), text.paragraphAt("Remember")?.textIndent)
+    }
+
+    @Test
+    fun readsFontFaces() {
+        val faces = parseFontFaces(
+            """@font-face { font-family: "Book Serif"; src: url('../Fonts/serif.otf') format("opentype"); font-weight: bold; font-style: italic }
+               @font-face { font-family: Local; src: local(Arial) }
+               @font-face { font-family: Data; src: url(data:font/ttf;base64,AA) }""",
+        )
+        val f = faces.single()
+        assertEquals("book serif", f.family)
+        assertEquals("../Fonts/serif.otf", f.src)
+        assertEquals(700, f.weight)
+        assertTrue(f.italic)
+        assertEquals(listOf("book serif", "georgia", "serif"), cssFontFamilies("\"Book Serif\", Georgia, serif"))
+        assertEquals(0.89f, cssFontScale("smaller"))
+        assertEquals(1.25f, cssFontScale("125%"))
+        assertNull(cssFontScale("calc(1em + 2px)"))
+    }
+
+    @Test
+    fun undoesFontObfuscation() {
+        // FIPS 180 test vectors.
+        assertEquals("a9993e364706816aba3e25717850c26c9cd0d89d", sha1("abc".encodeToByteArray()).hex())
+        assertEquals("da39a3ee5e6b4b0d3255bfef95601890afd80709", sha1(ByteArray(0)).hex())
+        assertEquals("84983e441c3bd26ebaae4aa1f95129e5e54670f1", sha1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".encodeToByteArray()).hex())
+        val font = ByteArray(2000) { (it * 7).toByte() }
+        for (scheme in FontObfuscation.entries) {
+            val id = if (scheme == FontObfuscation.Adobe) "urn:uuid:0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0" else " urn:isbn: 978 0 \n"
+            val hidden = font.copyOf()
+            assertTrue(deobfuscate(hidden, scheme, id))
+            assertTrue(!hidden.contentEquals(font))
+            // XOR: the same operation undoes it; only the obfuscated prefix changes.
+            assertTrue(hidden.copyOfRange(1040, 2000).contentEquals(font.copyOfRange(1040, 2000)))
+            deobfuscate(hidden, scheme, id)
+            assertTrue(hidden.contentEquals(font))
+        }
+        assertTrue(!deobfuscate(font.copyOf(), FontObfuscation.Adobe, "not a uuid"))
+        assertTrue(isSfnt(byteArrayOf(0, 1, 0, 0) + ByteArray(8)))
+        assertTrue(!isSfnt("wOFF".encodeToByteArray() + ByteArray(8)))
+    }
+
+    @Test
+    fun readsSvgSizes() {
+        fun size(tag: String) = svgSize("<?xml version='1.0'?><!-- x --><svg xmlns='http://www.w3.org/2000/svg' $tag></svg>".encodeToByteArray())
+        assertEquals(120 to 80, size("width='120' height='80px'"))
+        assertEquals(96 to 48, size("width='1in' viewBox='0 0 200 100'"))
+        assertEquals(200 to 100, size("width='100%' height='100%' viewBox='0,0,200,100'"))
+        assertEquals(300 to 150, size(""))
+        assertEquals(64 to 32, svgSize("<svg:svg xmlns:svg='http://www.w3.org/2000/svg' width='64' height='32'/>".encodeToByteArray()))
+        assertNull(svgSize("<html/>".encodeToByteArray()))
+    }
+
+    @Test
     fun readsTablesAsGrids() {
         val book = book(
             """<p>Before</p>

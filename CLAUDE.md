@@ -109,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (180 each;
-# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (187 each;
+# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -212,8 +212,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 180 frontend
-  tests** (+1 with `-tags=eval`, +16 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-11: 152 backend + 187 frontend
+  tests** (+1 with `-tags=eval`, +17 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -223,7 +223,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (library, contribution, recommendation do). Blob GC
   (`catalog.Service.CollectGarbage`, `runlock.KeyBlobGC`) deletes blobs no
   live edition references after `LIBRARYZ_BLOB_GC_RETENTION`; it needs
-  `storage.Storage.List`.
+  `storage.Storage.List`. **Removal kinds (#27):** `Removal.RemovalKind` is
+  `content` (default; the file's hashes stay blocked → `ErrRemoved`) or
+  `technical` (a broken file; the same file may come back). The edition
+  hash unique indexes are **partial** (`WHERE removal_kind <> 'technical'`,
+  sqlite + Postgres) and `findDuplicate` skips technical removals.
 - **Upload limits are a per-account quota, not Kong (2026-10-10).**
   `catalog.UploadQuota` (`internal/catalog/quota.go`) counts the user's
   recorded editions (`uploaded_by_user_id`, `created_at`, **Unscoped** so
@@ -334,7 +338,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   backdrop, serif). Works have no cover images: `ui/components/Cover.kt`
   generates them; `coverIndex` must stay identical to the design's JS hash
   (tested). Reading themes (`ReadingTheme`) are independent of the app theme;
-  `ReaderPrefs` lives in `App` (session-only, not persisted yet).
+  `ReaderPrefs` lives in `App` and is saved on the device (`ReaderPrefsStore`, `createReaderPrefsStore`; enums by name, unknown values fall back per setting).
   Sign-in, Upload, Suggest edit and the Review queue follow the same canvas
   (second pass). Upload only offers what `sanitize.Validate` accepts
   (PDF/EPUB/TXT, 500 MB); its "safety check" step is the wait between the
@@ -383,7 +387,20 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   from its first and would crop rows; `BookText.kt` lays out columns
   browser-style and rows as a placeholder each. Colours are adapted per
   reading theme at render (`themed`: greys → ink, hues kept at ≥ 4:1,
-  highlights toned so ink reads at 4.5:1). The text reader's Contents sheet
+  highlights toned so ink reads at 4.5:1). **Second pass (2026-10-11):**
+  font sizes are absolute factors of the reader's size (`Open.scale`, clamped
+  0.6–2.5, `html`/`body` sizes ignored) emitted as em and turned into sp by
+  `themed` (Android multiplies nested `RelativeSizeSpan`s, Skia doesn't);
+  block background/border → `BookBox`, drawn by `Modifier.bookBoxes` behind
+  the lines (text padded 0.6 em in); `@font-face` fonts load per platform
+  (`data/Fonts.kt` `loadFont`: Skia from memory, Android from a cache file),
+  IDPF/Adobe obfuscation undone (`deobfuscate`, own `sha1`), only sfnt
+  (TTF/OTF) accepted, DRM'd fonts skipped; "Book's fonts" switch
+  (`ReaderPrefs.bookFonts`). SVG pictures: `svgSize` + `rasterizeSvg`
+  (Skia `SVGDOM`; **AndroidSVG on Android**, which Compose resources can't
+  decode SVG on). `DecodedImages` is a ~96 MB LRU; pictures decode a screen
+  ahead and the next spread's are prefetched. An element opened just before
+  a paragraph break styles from after it (`Open.contentStart`). The text reader's Contents sheet
   (`TextPager.goTo` / `offset`) works for both. Of the "Future" board, password reset
   and email verification are built; notifications aren't.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the

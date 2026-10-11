@@ -90,6 +90,7 @@ import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EditionRow
 import com.libraryz.ui.components.RemoveDialog
 import com.libraryz.ui.components.StarRating
+import com.libraryz.data.api.RemovalRequest
 
 private const val WIDE_DP = 640
 
@@ -111,8 +112,8 @@ fun WorkDetailScreen(
     onLibraryUpsert: (UpsertLibraryRequest) -> Unit = {},
     onLibraryRemove: () -> Unit = {},
     // Moderator takedowns; null hides the affordance (non-moderators).
-    onRemoveWork: ((reason: String) -> Unit)? = null,
-    onRemoveEdition: ((Edition, reason: String) -> Unit)? = null,
+    onRemoveWork: ((RemovalRequest) -> Unit)? = null,
+    onRemoveEdition: ((Edition, RemovalRequest) -> Unit)? = null,
     // In the desktop detail pane the pane supplies the surface.
     containerColor: Color = MaterialTheme.colorScheme.surface,
     modifier: Modifier = Modifier,
@@ -231,9 +232,9 @@ fun WorkDetailScreen(
             title = "Remove this work?",
             body = "“${work.title}” and all ${work.editions.size} of its editions will be hidden from everyone. " +
                 "The files are kept for a while in case this needs to be undone.",
-            onConfirm = { reason ->
+            onConfirm = { removal ->
                 confirmRemoveWork = false
-                onRemoveWork(reason)
+                onRemoveWork(removal)
             },
             onDismiss = { confirmRemoveWork = false },
         )
@@ -242,11 +243,10 @@ fun WorkDetailScreen(
         if (onRemoveEdition != null) {
             RemoveDialog(
                 title = "Remove this edition?",
-                body = "The ${ed.format.uppercase()} edition (${ed.prettySize}) will be hidden from everyone, " +
-                    "and the same file can't be uploaded again.",
-                onConfirm = { reason ->
+                body = "The ${ed.format.uppercase()} edition (${ed.prettySize}) will be hidden from everyone.",
+                onConfirm = { removal ->
                     editionToRemove = null
-                    onRemoveEdition(ed, reason)
+                    onRemoveEdition(ed, removal)
                 },
                 onDismiss = { editionToRemove = null },
             )

@@ -105,11 +105,15 @@ class EpubImagesTest {
            <table class="grid"><tr><th>Word</th><th>Meaning</th></tr>
              <tr><td class="cue">ephemeral</td><td>lasting a very short time, gone almost as soon as it came</td></tr>
              <tr><td class="cue">laconic</td><td>using very few words</td></tr></table>
-           <p>After the table.</p>""",
-        emptyMap(),
+           <p>After the table.</p>
+           <div class="note"><p>A boxed note, as the book's stylesheet draws it.</p></div>
+           <p class="big">Large type</p>
+           <p><img src="../Images/mark.svg" alt="mark"/></p>""",
+        mapOf("mark.svg" to """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20" width="200" height="100"><rect width="40" height="20" fill="#e01010"/></svg>""".encodeToByteArray()),
         css = """.center { text-align: center } .key { color: #1565c0; font-weight: bold } .hl { background-color: #fff176 }
                  .poem { margin-left: 2em } span.l, span.l2 { display: block } span.l2 { margin-left: 2em }
-                 table.grid td, table.grid th { border: 1px solid #999 } td.cue { background: #c8e6c9; color: #2e7d32 }""",
+                 table.grid td, table.grid th { border: 1px solid #999 } td.cue { background: #c8e6c9; color: #2e7d32 }
+                 .note { border: 1px solid #1565c0; background: #e3f2fd } .big { font-size: 1.6em }""",
     )
 
     @Test
@@ -117,11 +121,14 @@ class EpubImagesTest {
         val yellow = { r: Int, g: Int, b: Int -> r > 235 && g > 220 && b in 90..140 }
         val green = { r: Int, g: Int, b: Int -> abs(r - 0xC8) < 8 && abs(g - 0xE6) < 8 && abs(b - 0xC9) < 8 }
         val blue = { r: Int, g: Int, b: Int -> b > 150 && r < 80 && g in 60..140 }
-        val light = render(styled, 600, 900, "styles-light")
+        val light = render(styled, 600, 1400, "styles-light")
         assertTrue(pixels(light, yellow) > 1_000, "highlight")
         assertTrue(pixels(light, green) > 5_000, "cell background")
         assertTrue(pixels(light, blue) > 50, "key term")
-        val dark = render(styled, 600, 900, "styles-dark", ReaderPrefs(theme = ReadingTheme.Dark))
+        assertTrue(pixels(light) { r, g, b -> abs(r - 0xE3) < 6 && abs(g - 0xF2) < 6 && abs(b - 0xFD) < 6 } > 5_000, "note box")
+        // The SVG picture, rasterized: 200 × 100 of red.
+        assertTrue(redPixels(light) in 18_000..21_000, "svg: ${redPixels(light)}")
+        val dark = render(styled, 600, 1400, "styles-dark", ReaderPrefs(theme = ReadingTheme.Dark))
         // On dark the highlight and cell keep their hue but are toned down, so the light ink still reads.
         assertTrue(pixels(dark, yellow) < 50 && pixels(dark, green) < 50, "untoned colours on dark")
         assertTrue(pixels(dark) { r, g, b -> g > r + 20 && g > b + 20 && g in 40..110 } > 5_000, "toned cell background")

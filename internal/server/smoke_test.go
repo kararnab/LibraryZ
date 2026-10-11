@@ -1452,14 +1452,43 @@ func TestModeratorRemovesEdition(t *testing.T) {
 		t.Fatalf("re-upload of removed file: want 409, got %d %s", r.StatusCode, readBody(r))
 	}
 
-	// The audit trail is kept.
+	// The audit trail is kept, and a removal with no kind is a content one.
 	var row struct {
 		DeletedBy    uint
 		DeleteReason string
+		RemovalKind  string
 	}
-	db.Table("editions").Select("deleted_by, delete_reason").Where("id = ?", gone).Take(&row)
-	if row.DeleteReason != "DMCA notice #42" || row.DeletedBy == 0 {
+	db.Table("editions").Select("deleted_by, delete_reason, removal_kind").Where("id = ?", gone).Take(&row)
+	if row.DeleteReason != "DMCA notice #42" || row.DeletedBy == 0 || row.RemovalKind != "content" {
 		t.Fatalf("audit fields not recorded: %+v", row)
+	}
+}
+
+// A file removed as broken (#27) can be uploaded again over HTTP; an
+// unknown kind is a 400, and the kind is recorded.
+func TestModeratorRemovesBrokenEdition(t *testing.T) {
+	ts, db := newTestServer(t)
+	mod := signupAndLogin(t, ts.URL, "takedown3@x.com", testPassword, "Mod")
+	grantModerator(t, db, "takedown3@x.com")
+	workID := createWork(t, ts.URL, mod, "Broken Work", "")
+	content := []byte("bytes the sanitizer once broke\n")
+	gone := editionID(t, uploadEdition(t, ts.URL, mod, workID, "txt", "en", content))
+	url := ts.URL + "/editions/" + gone
+
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "x", "kind": "spite"}); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown kind: want 400, got %d", r.StatusCode)
+	}
+	if r := deleteAuthed(t, url, mod, map[string]string{"reason": "Broken file", "kind": "technical"}); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("remove: want 204, got %d %s", r.StatusCode, readBody(r))
+	}
+	back := editionID(t, uploadEdition(t, ts.URL, mod, workID, "txt", "en", content))
+	if back == gone {
+		t.Fatal("the re-upload should be a new edition")
+	}
+	var kind string
+	db.Table("editions").Unscoped().Select("removal_kind").Where("id = ?", gone).Scan(&kind)
+	if kind != "technical" {
+		t.Fatalf("removal_kind = %q, want technical", kind)
 	}
 }
 

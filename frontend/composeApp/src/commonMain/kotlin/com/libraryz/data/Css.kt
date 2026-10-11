@@ -232,3 +232,59 @@ private val CSS_COLORS = mapOf(
     "ivory" to 0xFFFFF0, "linen" to 0xFAF0E6, "mistyrose" to 0xFFE4E1, "honeydew" to 0xF0FFF0, "azure" to 0xF0FFFF,
     "aliceblue" to 0xF0F8FF, "slategray" to 0x708090, "slategrey" to 0x708090, "lightslategray" to 0x778899,
 )
+
+/** An `@font-face` rule: [family] (lowercased, unquoted) is drawn with the font file at [src], resolved against the sheet. */
+internal class CssFontFace(val family: String, val src: String, val weight: Int, val italic: Boolean)
+
+/** [css]'s `@font-face` rules that name a font file (`src: url(…)`), local fonts and data URLs aside. */
+internal fun parseFontFaces(css: String): List<CssFontFace> {
+    val src = css.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), " ")
+    return Regex("@font-face\\s*\\{([^}]*)\\}", RegexOption.IGNORE_CASE).findAll(src).mapNotNull { m ->
+        val d = parseDeclarations(m.groupValues[1]).associate { it.property to it.value }
+        val family = d["font-family"]?.let(::unquote)?.lowercase() ?: return@mapNotNull null
+        val url = d["src"]?.let { Regex("url\\(\\s*([^)]*?)\\s*\\)").find(it)?.groupValues?.get(1) }?.let(::unquote)
+            ?.takeUnless { it.startsWith("data:") || it.isEmpty() } ?: return@mapNotNull null
+        val weight = when (val w = d["font-weight"]?.trim()?.lowercase()) {
+            null, "normal" -> 400
+            "bold" -> 700
+            else -> w.split(Regex("\\s+")).first().toIntOrNull()?.coerceIn(100, 900) ?: 400
+        }
+        CssFontFace(family, url, weight, italic = d["font-style"]?.trim()?.lowercase().let { it == "italic" || it == "oblique" })
+    }.toList()
+}
+
+/** The families a `font-family` value lists, in order, lowercased and unquoted. */
+internal fun cssFontFamilies(value: String): List<String> =
+    value.split(',').map { unquote(it).lowercase() }.filter { it.isNotEmpty() }
+
+private fun unquote(s: String): String = s.trim().removeSurrounding("\"").removeSurrounding("'").trim()
+
+/**
+ * A CSS `font-size` relative to the parent's, as a factor: em, %, rem, ex,
+ * smaller / larger, the absolute keywords (medium = 1), and px / pt against a
+ * 16 px default. Null for anything else.
+ */
+internal fun cssFontScale(value: String): Float? {
+    val v = value.trim().lowercase()
+    return when (v) {
+        "xx-small" -> 0.6f
+        "x-small" -> 0.75f
+        "small", "smaller" -> 0.89f
+        "medium", "inherit", "initial" -> 1f
+        "large", "larger" -> 1.2f
+        "x-large" -> 1.5f
+        "xx-large" -> 2f
+        "xxx-large" -> 3f
+        else -> {
+            val m = Regex("^([0-9]*\\.?[0-9]+)(em|rem|%|px|pt|ex)$").matchEntire(v) ?: return null
+            val n = m.groupValues[1].toFloatOrNull() ?: return null
+            when (m.groupValues[2]) {
+                "em", "rem" -> n
+                "%" -> n / 100f
+                "px" -> n / 16f
+                "pt" -> n / 12f
+                else -> n / 2f
+            }
+        }
+    }
+}

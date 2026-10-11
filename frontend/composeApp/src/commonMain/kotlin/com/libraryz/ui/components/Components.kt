@@ -59,6 +59,12 @@ import com.libraryz.data.authorsShort
 import com.libraryz.data.isPreviewable
 import com.libraryz.data.prettySize
 import com.libraryz.theme.LibraryZ
+import com.libraryz.data.api.RemovalKind
+import com.libraryz.data.api.RemovalRequest
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.semantics.Role
 
 /** Human name for an edition format. */
 fun formatName(format: String): String = when (format.uppercase()) {
@@ -327,34 +333,56 @@ fun EmptyState(
 
 /**
  * Confirmation for a moderator takedown. A reason is required — it's stored
- * for the audit trail — so Remove stays disabled until one is entered.
+ * for the audit trail — so Remove stays disabled until one is entered. The
+ * moderator also says why: the content (the file stays blocked, the
+ * default) or a broken file (it may be uploaded again).
  */
 @Composable
 fun RemoveDialog(
     title: String,
     body: String,
-    onConfirm: (reason: String) -> Unit,
+    onConfirm: (RemovalRequest) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var reason by remember { mutableStateOf("") }
+    var kind by remember { mutableStateOf(RemovalKind.Content) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(body, style = MaterialTheme.typography.bodyMedium)
+                Column(Modifier.selectableGroup()) {
+                    listOf(
+                        Triple(RemovalKind.Content, "Its content", "Rights, spam or abuse. The same file can't be uploaded again."),
+                        Triple(RemovalKind.Technical, "A broken file", "It won't open or shows wrongly. The same file can be uploaded again."),
+                    ).forEach { (k, label, help) ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = kind == k, onClick = { kind = k }, role = Role.RadioButton)
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = kind == k, onClick = null)
+                            Column(Modifier.padding(start = 12.dp)) {
+                                Text(label, style = MaterialTheme.typography.bodyLarge)
+                                Text(help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = reason,
                     onValueChange = { if (it.length <= 1000) reason = it },
                     label = { Text("Reason") },
-                    placeholder = { Text("e.g. DMCA notice, spam, broken file") },
+                    placeholder = { Text(if (kind == RemovalKind.Content) "e.g. DMCA notice, spam" else "e.g. pages missing, won't open") },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(reason.trim()) },
+                onClick = { onConfirm(RemovalRequest(reason.trim(), kind)) },
                 enabled = reason.isNotBlank(),
             ) { Text("Remove", color = MaterialTheme.colorScheme.error) }
         },

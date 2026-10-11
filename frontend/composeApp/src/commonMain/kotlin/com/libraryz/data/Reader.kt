@@ -3,6 +3,7 @@ package com.libraryz.data
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -48,9 +49,16 @@ class TextReader(
     val images: Map<String, BookImage> = emptyMap(),
     /** The tables in [text]; each row is one [TABLE_TAG] placeholder (see [BookTable]). */
     val tables: List<BookTable> = emptyList(),
+    /** Blocks the book draws a box around, in text order. */
+    val boxes: List<BookBox> = emptyList(),
 ) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
+
+    /** Whether the book sets any of its text in fonts it embeds (monospace is the platform's). */
+    val hasBookFonts: Boolean by lazy {
+        text.spanStyles.any { it.item.fontFamily != null && it.item.fontFamily != FontFamily.Monospace }
+    }
 
     override fun close() = Unit
 }
@@ -69,6 +77,8 @@ class BookImage(
     val height: Int,
     val alt: String,
     val block: Boolean,
+    /** SVG, rasterized at the size it's drawn; else a bitmap format. */
+    val vector: Boolean = false,
     private val load: () -> ByteArray,
 ) {
     fun bytes(): ByteArray = load()
@@ -85,6 +95,13 @@ class BookTable(val rows: List<List<BookCell>>, val bordered: Boolean)
 
 /** One cell: its text (styled like the book's, pictures included), spanning [span] columns. */
 class BookCell(val text: AnnotatedString, val header: Boolean, val span: Int, val background: Color?)
+
+/**
+ * A block the book draws a box around (a CSS background or border): its
+ * lines from [start] until [end] in the text, the box's left edge [left] ems
+ * in from the column's. Its text is padded in from the edge already.
+ */
+class BookBox(val start: Int, val end: Int, val left: Float, val background: Color?, val border: Boolean, val borderColor: Color?)
 
 const val IMAGE_TAG = "libraryz.image"
 const val TABLE_TAG = "libraryz.table"
@@ -114,7 +131,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes) }
         }
         else -> throw UnsupportedFormatException(format)
     }

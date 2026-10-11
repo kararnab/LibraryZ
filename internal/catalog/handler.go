@@ -380,19 +380,21 @@ func (h *Handler) DownloadEdition(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteWork removes a work and all its editions: a moderator takedown, or
-// a creator discarding their own still-empty work. Body: {"reason": "..."}
-// (required).
+// a creator discarding their own still-empty work. Body: {"reason": "...",
+// "kind": "content" | "technical"} (reason required; kind defaults to
+// content).
 func (h *Handler) DeleteWork(w http.ResponseWriter, r *http.Request) {
 	h.remove(w, r, h.service.DeleteWork)
 }
 
-// DeleteEdition is the moderator takedown for one edition.
-// Body: {"reason": "..."} (required).
+// DeleteEdition is the moderator takedown for one edition. Body as for
+// DeleteWork; "technical" (a broken file) lets the same file be uploaded
+// again.
 func (h *Handler) DeleteEdition(w http.ResponseWriter, r *http.Request) {
 	h.remove(w, r, h.service.DeleteEdition)
 }
 
-func (h *Handler) remove(w http.ResponseWriter, r *http.Request, fn func(context.Context, uuid.UUID, uint, string) error) {
+func (h *Handler) remove(w http.ResponseWriter, r *http.Request, fn func(context.Context, uuid.UUID, uint, string, RemovalKind) error) {
 	id, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
@@ -404,14 +406,15 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request, fn func(context
 		return
 	}
 	var body struct {
-		Reason string `json:"reason"`
+		Reason string      `json:"reason"`
+		Kind   RemovalKind `json:"kind"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	switch err := fn(r.Context(), id, userID, body.Reason); {
-	case errors.Is(err, ErrReasonRequired):
+	switch err := fn(r.Context(), id, userID, body.Reason, body.Kind); {
+	case errors.Is(err, ErrReasonRequired), errors.Is(err, ErrBadRemovalKind):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, ErrForbidden):
 		http.Error(w, err.Error(), http.StatusForbidden)

@@ -3,6 +3,7 @@ package com.libraryz
 import androidx.compose.foundation.layout.Arrangement
 import com.libraryz.data.BookLayouts
 import com.libraryz.data.api.createReaderLayoutStore
+import com.libraryz.data.api.createReaderPrefsStore
 import com.libraryz.ui.screens.VerifyEmailBanner
 import com.libraryz.ui.screens.VerifyEmailScreen
 import com.libraryz.ui.screens.ResetPasswordScreen
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.screens.ReaderPrefs
+import com.libraryz.ui.screens.ReaderPrefsStore
 import com.libraryz.ui.screens.BrowseSkeleton
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.outlined.Settings
@@ -125,6 +127,7 @@ import com.libraryz.ui.screens.UploadSubmission
 import com.libraryz.ui.screens.WorkDetailScreen
 import com.libraryz.ui.screens.inferFormatFromName
 import kotlinx.coroutines.launch
+import com.libraryz.data.api.RemovalRequest
 
 val LocalSnackbar = compositionLocalOf<SnackbarHostState> {
     error("No SnackbarHost in scope")
@@ -299,6 +302,12 @@ internal fun Root(
     // How flowing text is set, shared by the reader and Settings so it
     // carries from one book to the next.
     var readerPrefs by remember { mutableStateOf(ReaderPrefs()) }
+    val readerPrefsStore = remember { ReaderPrefsStore(::createReaderPrefsStore) }
+    LaunchedEffect(Unit) { readerPrefsStore.load()?.let { readerPrefs = it } }
+    val setReaderPrefs: (ReaderPrefs) -> Unit = { p ->
+        readerPrefs = p
+        scope.launch { readerPrefsStore.save(p) }
+    }
     val readerLayouts = remember { BookLayouts(::createReaderLayoutStore) }
 
     val dismissRec: (String) -> Unit = { workId ->
@@ -413,11 +422,11 @@ internal fun Root(
 
     // Moderator takedowns, shared by compact + expanded WorkDetail. Null for
     // everyone else, which hides the Remove affordances.
-    val removeWork: ((Work, String) -> Unit)? = if (auth.isModerator) {
-        { work, reason ->
+    val removeWork: ((Work, RemovalRequest) -> Unit)? = if (auth.isModerator) {
+        { work, removal ->
             scope.launch {
                 try {
-                    works.removeWork(work.id, reason)
+                    works.removeWork(work.id, removal)
                     // Leave the now-404 detail screen.
                     if (nav.current.let { it is Screen.WorkDetail && it.workId == work.id }) {
                         if (!nav.pop()) nav.replace(Screen.Browse)
@@ -429,11 +438,11 @@ internal fun Root(
             }
         }
     } else null
-    val removeEdition: ((Work, Edition, String) -> Unit)? = if (auth.isModerator) {
-        { work, ed, reason ->
+    val removeEdition: ((Work, Edition, RemovalRequest) -> Unit)? = if (auth.isModerator) {
+        { work, ed, removal ->
             scope.launch {
                 try {
-                    works.removeEdition(work.id, ed.id, reason)
+                    works.removeEdition(work.id, ed.id, removal)
                     snackbar.showSnackbar("Removed the ${ed.format.uppercase()} edition.")
                 } catch (e: Throwable) {
                     snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
@@ -541,8 +550,8 @@ internal fun Root(
                         libraryEntry = library.entryFor(s.workId),
                         onLibraryUpsert = { req -> libraryUpsert(s.workId, req) },
                         onLibraryRemove = { libraryRemove(s.workId) },
-                        onRemoveWork = removeWork?.let { rm -> { reason -> rm(work, reason) } },
-                        onRemoveEdition = removeEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
+                        onRemoveWork = removeWork?.let { rm -> { removal -> rm(work, removal) } },
+                        onRemoveEdition = removeEdition?.let { rm -> { ed, removal -> rm(work, ed, removal) } },
                     )
                 }
             }
@@ -675,7 +684,7 @@ internal fun Root(
                                     // their own still-empty work. Best effort,
                                     // and it must run even when cancelled.
                                     withContext(NonCancellable) {
-                                        runCatching { api.deleteWork(created.id, "Upload failed; discarding the empty work") }
+                                        runCatching { api.deleteWork(created.id, RemovalRequest("Upload failed; discarding the empty work")) }
                                     }
                                     throw e
                                 } finally {
@@ -714,7 +723,7 @@ internal fun Root(
                     finished = entry?.status == LibraryStatus.Read,
                     rating = entry?.rating,
                     prefs = readerPrefs,
-                    onPrefsChange = { readerPrefs = it },
+                    onPrefsChange = setReaderPrefs,
                     onRate = { stars -> libraryUpsert(s.workId, UpsertLibraryRequest(rating = stars)) },
                     // Progress saves in the background; a failed save just
                     // means the next one carries it.
@@ -858,7 +867,7 @@ internal fun Root(
                         user = auth.user,
                         serverUrl = DefaultBaseUrl,
                         prefs = readerPrefs,
-                        onPrefsChange = { readerPrefs = it },
+                        onPrefsChange = setReaderPrefs,
                         onSignOut = logout,
                         onSignOutEverywhere = logoutEverywhere,
                         onBack = null,
@@ -1142,8 +1151,8 @@ private fun ListDetailLayout(
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
-    onRemoveWork: ((Work, String) -> Unit)? = null,
-    onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
+    onRemoveWork: ((Work, RemovalRequest) -> Unit)? = null,
+    onRemoveEdition: ((Work, Edition, RemovalRequest) -> Unit)? = null,
     onAuthorClick: (String) -> Unit,
 ) {
     LaunchedEffect(selectedWorkId) {
@@ -1193,8 +1202,8 @@ private fun ListDetailLayout(
                     libraryEntry = library.entryFor(work.id),
                     onLibraryUpsert = { req -> onLibraryUpsert(work.id, req) },
                     onLibraryRemove = { onLibraryRemove(work.id) },
-                    onRemoveWork = onRemoveWork?.let { rm -> { reason -> rm(work, reason) } },
-                    onRemoveEdition = onRemoveEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
+                    onRemoveWork = onRemoveWork?.let { rm -> { removal -> rm(work, removal) } },
+                    onRemoveEdition = onRemoveEdition?.let { rm -> { ed, removal -> rm(work, ed, removal) } },
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 )
             }
