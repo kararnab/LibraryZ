@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * A minimal zip with every entry stored (no compression), so a test can
  * spell out an EPUB's files. CRCs are left 0: the reader doesn't check them.
  */
-private fun storedZip(vararg files: Pair<String, Any>): ByteArray {
+internal fun storedZip(vararg files: Pair<String, Any>): ByteArray {
     val out = ArrayList<Byte>()
     val central = ArrayList<Byte>()
     fun MutableList<Byte>.u16(v: Int) { add(v.toByte()); add((v shr 8).toByte()) }
@@ -38,16 +38,16 @@ private fun storedZip(vararg files: Pair<String, Any>): ByteArray {
     return out.toByteArray()
 }
 
-private val CONTAINER = "META-INF/container.xml" to
+internal val CONTAINER = "META-INF/container.xml" to
     """<container><rootfiles><rootfile full-path="book/content.opf"/></rootfiles></container>"""
 
-private fun epub(opf: String, vararg docs: Pair<String, Any>): ByteArray =
+internal fun epub(opf: String, vararg docs: Pair<String, Any>): ByteArray =
     storedZip("mimetype" to "application/epub+zip", CONTAINER, "book/content.opf" to opf, *docs)
 
-private fun opf(manifest: String, spine: String, toc: String = "") =
+internal fun opf(manifest: String, spine: String, toc: String = "") =
     """<package><manifest>$manifest</manifest><spine $toc>$spine</spine></package>"""
 
-private fun item(id: String, href: String, type: String = "application/xhtml+xml", props: String = "") =
+internal fun item(id: String, href: String, type: String = "application/xhtml+xml", props: String = "") =
     """<item id="$id" href="$href" media-type="$type" properties="$props"/>"""
 
 class EpubTest {
@@ -56,8 +56,8 @@ class EpubTest {
     fun readsADeflatedEpubWithANavDocument() {
         val book = parseEpub(FIXTURE)
         val text = book.text.text
-        assertTrue(text.startsWith("One\n\nIt was a dark and stormy night; the rain fell in torrents."), text.take(80))
-        assertTrue(text.endsWith("Intro.\n\nTwo\n\nThe end."), text.takeLast(40))
+        assertTrue(text.startsWith("One\nIt was a dark and stormy night; the rain fell in torrents."), text.take(80))
+        assertTrue(text.endsWith("Intro.\nTwo\nThe end."), text.takeLast(40))
         // The head's title and style aren't text.
         assertTrue("Ignored" !in text && "color" !in text)
         // The toc nav, not the landmarks one; hrefs percent-decoded and fragments resolved.
@@ -74,7 +74,7 @@ class EpubTest {
         val italic = text.spanStyles.single { it.item.fontStyle == FontStyle.Italic }
         assertEquals(end to end + 3, italic.start to italic.end)
         val centered = text.paragraphStyles.filter { (it.item as ParagraphStyle).textAlign == TextAlign.Center }
-        assertEquals(listOf("One", "Two"), centered.map { text.text.substring(it.start, it.end) })
+        assertEquals(listOf("One", "Two"), centered.map { text.text.substring(it.start, it.end).trimEnd() })
     }
 
     @Test
@@ -121,8 +121,9 @@ class EpubTest {
             <p>Unclosed <em>em<p>Next</body>"""
         val book = parseEpub(epub(opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""), "book/a.xhtml" to body))
         assertEquals(
-            "Hello, world!\n\nNested\n\nLine one\nline two\n\nLeading break\n\n3. three\n\n4. four\n\n• dot\n\n*   *   *\n\n" +
-                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n\n*   *   *\n\nafter\n\n• \n\n    • inner\n\n" +
+            // A centered heading or rule is a paragraph region of its own: its end breaks the line, so one \n makes the blank line.
+            "Hello, world!\n\nNested\n\nLine one\nline two\nLeading break\n3. three\n\n4. four\n\n• dot\n*   *   *\n" +
+                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n*   *   *\nafter\n\n• \n\n    • inner\n\n" +
                     "Unclosed em\n\nNext",
             book.text.text,
         )
@@ -163,7 +164,7 @@ class EpubTest {
             ),
         )
         val p = IMAGE_CHAR
-        assertEquals("$p\n\n$p\n\nBefore $p after.\n\n$p\n\nA map\n\nGone: [missing] .", book.text.text)
+        assertEquals("$p\n$p\nBefore $p after.\n\n$p\nA map\nGone: [missing] .", book.text.text)
         val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length)
         assertEquals(listOf("cover", "one", "star", "map").map { "book/Images/$it.png" }, marks.map { it.item })
         assertEquals(marks.map { it.start }, Regex(p).findAll(book.text.text).map { it.range.first }.toList())

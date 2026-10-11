@@ -1255,8 +1255,16 @@ private fun TextView(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val gutter = if (wide) 40.dp else 28.dp
-        // Pictures fit the column and most of the screen's height.
-        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f)
+        val style = LocalTextStyle.current.merge(
+            TextStyle(
+                fontFamily = LibraryZ.tokens.serif,
+                fontSize = prefs.textSize.sp,
+                lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
+                color = prefs.theme.ink,
+            ),
+        )
+        // Pictures and tables fit the column, pictures most of the screen's height.
+        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme)
         Box(
             modifier = Modifier.fillMaxSize().verticalScroll(scroll),
             contentAlignment = Alignment.TopCenter,
@@ -1272,11 +1280,7 @@ private fun TextView(
             ) {
                 Text(
                     text = sized.text,
-                    fontFamily = LibraryZ.tokens.serif,
-                    fontSize = prefs.textSize.sp,
-                    lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
-                    color = prefs.theme.ink,
-                    style = LocalTextStyle.current.merge(TextStyle(lineHeightStyle = sized.lineHeightStyle)),
+                    style = style.merge(TextStyle(lineHeightStyle = sized.lineHeightStyle)),
                     inlineContent = sized.inlineContent,
                     onTextLayout = { textLayout = it },
                 )
@@ -1340,17 +1344,17 @@ private fun TextSpreadView(
         // Running head (16 + 20) and foot (14 + 16) around the body; page padding 28 / 20.
         val pageHeight = maxHeight
         val bodyHeight = maxHeight - 28.dp - 20.dp - 36.dp - 30.dp
-        // A picture fits a page, a little under so rounding can't push it over.
-        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp)
-        val text = sized.text
-        val style = TextStyle(
+        val baseStyle = TextStyle(
             fontFamily = LibraryZ.tokens.serif,
             fontSize = prefs.textSize.sp,
             lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
             color = theme.ink,
             textAlign = TextAlign.Justify,
-            lineHeightStyle = sized.lineHeightStyle,
         )
+        // A picture or table row fits a page, a little under so rounding can't push it over.
+        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme)
+        val text = sized.text
+        val style = baseStyle.copy(lineHeightStyle = sized.lineHeightStyle)
         val measurer = rememberTextMeasurer(cacheSize = 0)
         val columnPx = with(density) { column.roundToPx() }.coerceAtLeast(1)
         val bodyPx = with(density) { bodyHeight.toPx() }.coerceAtLeast(1f)

@@ -4,6 +4,7 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
 import com.libraryz.data.api.ApiClient
 import com.libraryz.theme.LibraryZTheme
+import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.screens.ReaderPrefs
 import com.libraryz.ui.screens.ReaderScreen
 import io.ktor.client.engine.mock.MockEngine
@@ -18,6 +19,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.imageio.ImageIO
 import kotlin.test.Test
+import kotlin.math.abs
 import kotlin.test.assertTrue
 
 /**
@@ -33,7 +35,7 @@ class EpubImagesTest {
         return ByteArrayOutputStream().also { ImageIO.write(image, "png", it) }.toByteArray()
     }
 
-    private fun epub(body: String, images: Map<String, ByteArray>): ByteArray = ByteArrayOutputStream().also { out ->
+    private fun epub(body: String, images: Map<String, ByteArray>, css: String = ""): ByteArray = ByteArrayOutputStream().also { out ->
         ZipOutputStream(out).use { zip ->
             fun put(name: String, bytes: ByteArray) {
                 zip.putNextEntry(ZipEntry(name))
@@ -46,20 +48,20 @@ class EpubImagesTest {
                 "OEBPS/content.opf",
                 """<package><manifest><item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>""".encodeToByteArray(),
             )
-            put("OEBPS/Text/a.xhtml", "<html><body>$body</body></html>".encodeToByteArray())
+            put("OEBPS/Text/a.xhtml", "<html><head><style>$css</style></head><body>$body</body></html>".encodeToByteArray())
             images.forEach { (name, bytes) -> put("OEBPS/Images/$name", bytes) }
         }
     }.toByteArray()
 
     /** Opens [book] in a [width]×[height] reader and returns the settled frame. */
-    private fun render(book: ByteArray, width: Int, height: Int, name: String): Image {
+    private fun render(book: ByteArray, width: Int, height: Int, name: String, prefs: ReaderPrefs = ReaderPrefs()): Image {
         val api = ApiClient("http://test", engine = MockEngine { respond(book, HttpStatusCode.OK) })
         val scene = ImageComposeScene(width, height, Density(1f)) {
             LibraryZTheme {
                 ReaderScreen(
                     api = api, editionId = "e1", format = "EPUB", title = "T", authors = null,
                     resumeFrom = null, finished = false, rating = null,
-                    prefs = ReaderPrefs(), onPrefsChange = {},
+                    prefs = prefs, onPrefsChange = {},
                     onProgress = {}, onMarkRead = {}, onRate = {}, onClose = {},
                 )
             }
@@ -81,14 +83,49 @@ class EpubImagesTest {
     }
 
     /** Pixels that are clearly the test's red. */
-    private fun redPixels(frame: Image): Int {
+    private fun redPixels(frame: Image): Int =
+        pixels(frame) { r, g, b -> r > 200 && g < 60 && b < 60 }
+
+    private fun pixels(frame: Image, test: (r: Int, g: Int, b: Int) -> Boolean): Int {
         val bitmap = org.jetbrains.skia.Bitmap.makeFromImage(frame)
         var n = 0
         for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
             val c = bitmap.getColor(x, y)
-            if ((c shr 16 and 0xFF) > 200 && (c shr 8 and 0xFF) < 60 && (c and 0xFF) < 60) n++
+            if (test(c shr 16 and 0xFF, c shr 8 and 0xFF, c and 0xFF)) n++
         }
         return n
+    }
+
+    /** A page of the book's own styling: alignment, a poem, colours, a highlight and a table. */
+    private val styled = epub(
+        """<h2>Styles</h2>
+           <p class="center">A centered line.</p>
+           <p>Plain text with a <span class="key">key term</span> and a <span class="hl">highlighted phrase</span>.</p>
+           <div class="poem"><span class="l">The first line of verse</span><span class="l2">an indented second</span></div>
+           <table class="grid"><tr><th>Word</th><th>Meaning</th></tr>
+             <tr><td class="cue">ephemeral</td><td>lasting a very short time, gone almost as soon as it came</td></tr>
+             <tr><td class="cue">laconic</td><td>using very few words</td></tr></table>
+           <p>After the table.</p>""",
+        emptyMap(),
+        css = """.center { text-align: center } .key { color: #1565c0; font-weight: bold } .hl { background-color: #fff176 }
+                 .poem { margin-left: 2em } span.l, span.l2 { display: block } span.l2 { margin-left: 2em }
+                 table.grid td, table.grid th { border: 1px solid #999 } td.cue { background: #c8e6c9; color: #2e7d32 }""",
+    )
+
+    @Test
+    fun drawsTheBooksStylesInEachTheme() {
+        val yellow = { r: Int, g: Int, b: Int -> r > 235 && g > 220 && b in 90..140 }
+        val green = { r: Int, g: Int, b: Int -> abs(r - 0xC8) < 8 && abs(g - 0xE6) < 8 && abs(b - 0xC9) < 8 }
+        val blue = { r: Int, g: Int, b: Int -> b > 150 && r < 80 && g in 60..140 }
+        val light = render(styled, 600, 900, "styles-light")
+        assertTrue(pixels(light, yellow) > 1_000, "highlight")
+        assertTrue(pixels(light, green) > 5_000, "cell background")
+        assertTrue(pixels(light, blue) > 50, "key term")
+        val dark = render(styled, 600, 900, "styles-dark", ReaderPrefs(theme = ReadingTheme.Dark))
+        // On dark the highlight and cell keep their hue but are toned down, so the light ink still reads.
+        assertTrue(pixels(dark, yellow) < 50 && pixels(dark, green) < 50, "untoned colours on dark")
+        assertTrue(pixels(dark) { r, g, b -> g > r + 20 && g > b + 20 && g in 40..110 } > 5_000, "toned cell background")
+        render(styled, 1280, 800, "styles-spread")
     }
 
     private val red = png(300, 200, 0xE01010)
