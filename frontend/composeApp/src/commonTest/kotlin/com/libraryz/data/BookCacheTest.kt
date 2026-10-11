@@ -115,3 +115,19 @@ class BookCacheTest {
         assertEquals(2, downloads)
     }
 }
+
+class SavedWorksTest {
+    @Test
+    fun groupsByWorkNewestFirstAndPrefersTheFullWork() {
+        val books = mapOf(
+            "e1" to SavedBook("h1", 10, "PDF", "w1", "Old book", lastOpened = 1),
+            "e2" to SavedBook("h2", 20, "EPUB", "w2", "New book", "A. Author", lastOpened = 5),
+            "e3" to SavedBook("h3", 30, "TXT", "w1", "Old book", lastOpened = 2),
+        )
+        val full = Work("w2", "New book (full)", editions = listOf(Edition("e2", "w2", "EPUB", sizeBytes = 20, sha256 = "h2")))
+        val works = savedWorks(books) { if (it == "w2") full else null }
+        assertEquals(listOf("w2", "w1"), works.map { it.id })
+        assertEquals(full, works[0])
+        assertEquals(setOf("e1", "e3"), works[1].editions.map { it.id }.toSet())
+    }
+}

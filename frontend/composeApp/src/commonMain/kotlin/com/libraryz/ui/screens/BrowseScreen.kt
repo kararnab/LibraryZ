@@ -94,6 +94,8 @@ fun BrowseScreen(
     // row open in the desktop detail pane.
     libraryWorkIds: Set<String> = emptySet(),
     selectedWorkId: String? = null,
+    // The heading over the list ("On this device" when offline).
+    listLabel: String = "Catalog",
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -193,7 +195,7 @@ fun BrowseScreen(
                     if (searching) {
                         "${works.size}${if (endReached) "" else "+"} result${if (works.size == 1 && endReached) "" else "s"}"
                     } else {
-                        "Catalog"
+                        listLabel
                     },
                     modifier = Modifier.padding(top = 4.dp),
                 )

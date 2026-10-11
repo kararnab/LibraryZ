@@ -270,3 +270,18 @@ class BookCache(
         private val json = Json { ignoreUnknownKeys = true }
     }
 }
+
+/**
+ * The works of the books saved on the device, most recently opened first:
+ * [known] where the app has the full work (the saved library), else one
+ * built from what was saved with each book.
+ */
+fun savedWorks(books: Map<String, SavedBook>, known: (String) -> Work?): List<Work> =
+    books.entries.groupBy { it.value.workId }.map { (workId, saved) ->
+        val first = saved.maxBy { it.value.lastOpened }.value
+        val work = known(workId) ?: Work(id = workId, title = first.title, authors = first.authors)
+        val lastOpened = first.lastOpened
+        lastOpened to if (work.editions.isNotEmpty()) work else work.copy(
+            editions = saved.map { (id, b) -> Edition(id = id, workId = workId, format = b.format, sizeBytes = b.size, sha256 = b.sha256) },
+        )
+    }.sortedByDescending { it.first }.map { it.second }

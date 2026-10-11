@@ -33,3 +33,6 @@ expect fun createReaderPrefsStore(): TokenStore
 
 /** And one for the server address chosen in Settings ([ServerUrlStore]). */
 expect fun createServerUrlStore(): TokenStore
+
+/** And one for the saved copy of the user's library ([LibraryState]), cleared at sign-out. */
+expect fun createLibraryStore(): TokenStore

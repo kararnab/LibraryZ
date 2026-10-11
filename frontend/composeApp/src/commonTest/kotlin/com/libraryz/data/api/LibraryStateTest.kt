@@ -175,3 +175,61 @@ class LibraryStateTest {
         assertEquals("new", state.continueReading?.workId)
     }
 }
+
+class LibraryOfflineTest {
+
+    private class Memory(var value: String? = null) : TokenStore {
+        override suspend fun load() = value
+        override suspend fun save(token: String) { value = token }
+        override suspend fun clear() { value = null }
+    }
+
+    private fun state(disk: Memory, online: () -> Boolean, server: String = BASE) = LibraryState(
+        ApiClient(
+            BASE, tokenProvider = { "t" },
+            engine = MockEngine {
+                if (!online()) throw kotlinx.io.IOException("connection refused")
+                val (s, body, h) = jsonBody("[${entryJson("w1", "reading")},${entryJson("w2", "want")}]")
+                respond(body, s, h)
+            },
+        ),
+        storeFactory = { disk },
+        server = server,
+    )
+
+    @Test
+    fun unreachableShowsTheSavedCopy() = runTest {
+        val disk = Memory()
+        state(disk, online = { true }).refresh()
+
+        // A later start with no server: the saved library, not an error.
+        val offline = state(disk, online = { false })
+        offline.refresh()
+        assertNull(offline.error)
+        assertTrue(offline.offline)
+        assertEquals(setOf("w1", "w2"), offline.items!!.map { it.workId }.toSet())
+        assertEquals("reading", offline.entryFor("w1")?.status)
+        // A status tab filters the saved copy.
+        offline.refresh("want")
+        assertEquals(listOf("w2"), offline.items!!.map { it.workId })
+        // Looking one up offline keeps what's saved.
+        offline.loadEntry("w1")
+        assertEquals("reading", offline.entryFor("w1")?.status)
+    }
+
+    @Test
+    fun otherServerOrSignOutLeavesNothing() = runTest {
+        val disk = Memory()
+        state(disk, online = { true }).refresh()
+
+        val elsewhere = state(disk, online = { false }, server = "http://other")
+        elsewhere.refresh()
+        assertNotNull(elsewhere.error)
+        assertTrue(!elsewhere.offline)
+
+        state(disk, online = { true }).forget()
+        val after = state(disk, online = { false })
+        after.refresh()
+        assertNotNull(after.error)
+    }
+}

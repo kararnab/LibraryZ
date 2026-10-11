@@ -121,7 +121,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (206 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (209 each;
 # desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -444,8 +444,10 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   never changes, so don't add a freshness check in front of them. Books are
   kept only after their bytes hash to the server's `X-Content-SHA256`; that
   check runs off the open path. Android + Desktop only (`createBookFiles` is
-  null on Wasm/iOS). Planned next: library snapshot (8.2), per-field LWW
-  writes with hybrid logical clocks (8.3), offline UI (8.4).
+  null on Wasm/iOS). `LibraryState` keeps a saved copy of the library
+  (`createLibraryStore`, cleared at sign-out) and shows it when the server is
+  unreachable; offline Browse lists the books on the device. Planned next:
+  per-field LWW writes with hybrid logical clocks (8.3), offline UI (8.4).
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

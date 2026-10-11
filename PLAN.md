@@ -1002,11 +1002,15 @@ the ones pinned with "Keep offline" on Book detail. Download exports the
 saved copy without the server. Device-scoped like reader layouts: books are
 public and stay across sign-out.
 
-**Slice 8.2 — the library on the device.** A saved copy of `/me/library`
-(with each entry's work and editions) and the last Browse / For You pages,
-one JSON file per user via the `TokenStore` pattern (hundreds of rows: no
-database; Room has no Wasm). `LibraryState` shows it at once, then
-refreshes. The sync also deletes saved books of editions removed for
+**Slice 8.2 — the library on the device (core DONE 2026-10-11, in the 8.1
+PR).** `LibraryState` saves every entry it sees (with its work and editions)
+via `createLibraryStore` (one JSON file, tagged with the server, cleared at
+sign-out); when the server can't be reached (`isUnreachable`) `refresh`
+shows that copy with an Offline banner instead of an error, so My Library,
+Continue reading and resume positions work offline. Browse, unable to load
+the catalog, lists the books on the device (`savedWorks`) under "On this
+device"; `WorksState.find` falls back to them and the saved library's works,
+so Book detail opens offline. Still to do: the last Browse / For You pages. The sync also deletes saved books of editions removed for
 **content** (not technical removals), never while one is open. Book detail
 says "A newer edition is available" when the work gains one; it never
 switches editions by itself (page positions differ).

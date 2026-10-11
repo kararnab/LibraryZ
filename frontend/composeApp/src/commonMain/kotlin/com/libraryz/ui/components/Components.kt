@@ -684,3 +684,16 @@ fun Banner(
         }
     }
 }
+
+/** The server can't be reached and the screen shows what's on the device: [body] says what. */
+@Composable
+fun OfflineBanner(body: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Banner(
+        BannerTone.Plain,
+        Icons.Outlined.CloudOff,
+        title = "Offline",
+        body = body,
+        modifier = modifier,
+        action = { TextButton(onClick = onRetry) { Text("Try again") } },
+    )
+}

@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.libraryz.data.LibraryStatus
 import com.libraryz.data.UserBook
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * Holds the user's personal library. Same tri-state shape as [WorksState] /
@@ -19,9 +21,25 @@ import com.libraryz.data.UserBook
  * asks for one work's entry without needing the whole list loaded, and
  * [upsert]/[remove] keep both the cache and (when present) the list in sync so
  * the My Library screen doesn't need a full refresh after an edit.
+ *
+ * Offline: every entry seen is also saved on the device ([store], for the
+ * server at [server]). When the server can't be reached, [refresh] shows
+ * that copy instead of an error and sets [offline]; resume positions and
+ * "Continue reading" come from it too. [forget] drops it at sign-out.
  */
 @Stable
-class LibraryState(private val api: ApiClient) {
+class LibraryState(
+    private val api: ApiClient,
+    storeFactory: () -> TokenStore = { NoStore },
+    private val server: String = "",
+) {
+    // Opened on first use, so building the app doesn't touch platform storage.
+    private val store: TokenStore by lazy { runCatching(storeFactory).getOrElse { NoStore } }
+
+    /** True while [items] is the device's saved copy because the server can't be reached. */
+    var offline: Boolean by mutableStateOf(false)
+        private set
+
     var items: List<UserBook>? by mutableStateOf(null)
         private set
 
@@ -43,12 +61,43 @@ class LibraryState(private val api: ApiClient) {
         statusFilter = status
         try {
             val loaded = api.listLibrary(status = status)
+            if (status == null) {
+                // The full list: anything cached but absent was removed elsewhere.
+                cache.keys.filter { k -> loaded.none { it.workId == k } }.forEach { cache[it] = null }
+            }
             items = loaded
             loaded.forEach { cache[it.workId] = it }
+            offline = false
+            save()
         } catch (e: Throwable) {
-            error = api.describe(e)
+            val saved = if (isUnreachable(e)) load() else null
+            if (saved == null) {
+                error = api.describe(e)
+            } else {
+                saved.forEach { if (cache[it.workId] == null) cache[it.workId] = it }
+                items = saved.filter { status == null || it.status == status }
+                    .sortedByDescending { it.updatedAt.orEmpty() }
+                offline = true
+            }
         }
     }
+
+    /** Drops the saved copy and what's in memory (sign-out). */
+    suspend fun forget() {
+        cache.clear()
+        items = null
+        offline = false
+        runCatching { store.clear() }
+    }
+
+    private suspend fun save() {
+        val entries = cache.values.filterNotNull()
+        runCatching { store.save(json.encodeToString(Snapshot.serializer(), Snapshot(server, entries))) }
+    }
+
+    private suspend fun load(): List<UserBook>? = runCatching {
+        store.load()?.let { json.decodeFromString(Snapshot.serializer(), it) }
+    }.getOrNull()?.takeIf { it.server == server }?.entries
 
     /** Cached entry for a work, or null if absent / not-in-library. */
     fun entryFor(workId: String): UserBook? = cache[workId]
@@ -74,13 +123,19 @@ class LibraryState(private val api: ApiClient) {
     fun isLoaded(workId: String): Boolean = cache.containsKey(workId)
 
     suspend fun loadEntry(workId: String) {
-        cache[workId] = runCatching { api.getLibraryEntry(workId) }.getOrNull()
+        try {
+            cache[workId] = api.getLibraryEntry(workId)
+        } catch (e: Throwable) {
+            // Offline, keep what we know (the saved copy) rather than "not in library".
+            if (!isUnreachable(e) || !cache.containsKey(workId)) cache[workId] = null
+        }
     }
 
     suspend fun upsert(workId: String, req: UpsertLibraryRequest): UserBook {
         val updated = api.upsertLibraryEntry(workId, req)
         cache[workId] = updated
         mergeIntoList(updated)
+        save()
         return updated
     }
 
@@ -88,6 +143,7 @@ class LibraryState(private val api: ApiClient) {
         api.removeFromLibrary(workId)
         cache[workId] = null
         items = items?.filterNot { it.workId == workId }
+        save()
     }
 
     private fun mergeIntoList(entry: UserBook) {
@@ -106,4 +162,15 @@ class LibraryState(private val api: ApiClient) {
             current
         }
     }
+}
+
+@Serializable
+private class Snapshot(val server: String, val entries: List<UserBook>)
+
+private val json = Json { ignoreUnknownKeys = true }
+
+private object NoStore : TokenStore {
+    override suspend fun load(): String? = null
+    override suspend fun save(token: String) = Unit
+    override suspend fun clear() = Unit
 }

@@ -173,7 +173,13 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         items = items?.map { w -> if (w.id == workId) drop(w) else w }
     }
 
-    fun find(id: String): Work? = items?.firstOrNull { it.id == id } ?: opened[id]
+    fun find(id: String): Work? = items?.firstOrNull { it.id == id } ?: opened[id] ?: localWorks().firstOrNull { it.id == id }
+
+    /**
+     * Works known without the server (the saved library, books on the
+     * device), where [find] looks last, so Book detail opens offline.
+     */
+    var localWorks: () -> List<Work> = { emptyList() }
 }
 
 const val DEFAULT_PAGE_SIZE = 50

@@ -5,6 +5,7 @@ import com.libraryz.data.BookCache
 import com.libraryz.data.BookInfo
 import com.libraryz.data.BookLayouts
 import com.libraryz.data.createBookFiles
+import com.libraryz.data.savedWorks
 import com.libraryz.data.api.describe
 import com.libraryz.data.api.createReaderLayoutStore
 import com.libraryz.data.api.createReaderPrefsStore
@@ -36,6 +37,7 @@ import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.theme.Motion
 import com.libraryz.ui.components.LoadErrorState
+import com.libraryz.ui.components.OfflineBanner
 import com.libraryz.ui.components.LoadPhase
 import com.libraryz.ui.components.PhaseCrossfade
 import androidx.compose.animation.AnimatedContent
@@ -118,6 +120,7 @@ import com.libraryz.data.api.LibraryState
 import com.libraryz.data.api.RecommendationsState
 import com.libraryz.data.api.UpsertLibraryRequest
 import com.libraryz.data.api.WorksState
+import com.libraryz.data.api.createLibraryStore
 import com.libraryz.data.api.createTokenStore
 import com.libraryz.data.canPreview
 import com.libraryz.data.isDownloadSupported
@@ -179,7 +182,7 @@ fun App() {
         // Another server is another catalogue: start these afresh.
         val works = remember(serverUrl) { WorksState(api) }
         val contributions = remember(serverUrl) { ContributionsState(api) }
-        val library = remember(serverUrl) { LibraryState(api) }
+        val library = remember(serverUrl) { LibraryState(api, ::createLibraryStore, serverUrl) }
         val recs = remember(serverUrl) { RecommendationsState(api) }
 
         LaunchedEffect(Unit) {
@@ -345,6 +348,7 @@ internal fun Root(
     val logout: () -> Unit = {
         scope.launch {
             auth.refreshToken?.let { rt -> runCatching { api.logout(rt) } }
+            library.forget()
             auth.clear()
         }
     }
@@ -353,6 +357,7 @@ internal fun Root(
         scope.launch {
             try {
                 api.logoutAll()
+                library.forget()
                 auth.clear()
             } catch (e: Throwable) {
                 snackbar.showSnackbar("Couldn’t sign out everywhere. ${api.describe(e)}")
@@ -373,6 +378,14 @@ internal fun Root(
     // Books kept on this device: the reader opens these without the server.
     val books = remember { BookCache(::createBookFiles) }
     LaunchedEffect(books) { books.load() }
+    // Offline, Browse lists the books on this device, and Book detail finds
+    // them (and the saved library's works) without the server.
+    val onDevice = savedWorks(books.books) { id -> library.entryFor(id)?.work }
+    remember(works, library, books) {
+        works.localWorks = {
+            savedWorks(books.books) { id -> library.entryFor(id)?.work } + library.items.orEmpty().mapNotNull { it.work }
+        }
+    }
     val removeFromDevice: (Work, Edition) -> Unit = { work, ed ->
         scope.launch {
             books.remove(ed.id)
@@ -617,6 +630,7 @@ internal fun Root(
                 compact = true,
                 header = stackHeaders(verifyBanner, continueReadingHeader(library, readFromLibrary)),
                 libraryWorkIds = library.workIds,
+                onDevice = onDevice,
             )
 
             s is Screen.WorkDetail -> {
@@ -967,14 +981,17 @@ private fun DataDrivenBrowse(
     header: (@Composable () -> Unit)? = null,
     libraryWorkIds: Set<String> = emptySet(),
     selectedWorkId: String? = null,
+    // Books saved on the device: what Browse lists when the catalog can't load.
+    onDevice: List<com.libraryz.data.Work> = emptyList(),
 ) {
     val scope = rememberCoroutineScope()
     val list = works.items
     val err = works.error
 
+    val offline = err != null && list == null && onDevice.isNotEmpty()
     val phase = when {
         works.loading -> LoadPhase.Loading
-        err != null && list == null -> LoadPhase.Error
+        err != null && list == null && !offline -> LoadPhase.Error
         else -> LoadPhase.Content
     }
     PhaseCrossfade(phase) { p ->
@@ -990,7 +1007,23 @@ private fun DataDrivenBrowse(
                 onRetry = { scope.launch { works.refresh() } },
             )
         }
-        else -> BrowseScreen(
+        else -> if (offline) BrowseScreen(
+            works = onDevice,
+            onWorkClick = onWorkClick,
+            onUploadClick = onUploadClick,
+            header = stackHeaders({
+                OfflineBanner(
+                    "Can’t reach the library. These books are on this device and open without it.",
+                    onRetry = { scope.launch { works.refresh() } },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }, header),
+            onRefresh = { scope.launch { works.refresh() } },
+            compact = compact,
+            libraryWorkIds = libraryWorkIds,
+            selectedWorkId = selectedWorkId,
+            listLabel = "On this device",
+        ) else BrowseScreen(
             works = list ?: emptyList(),
             onWorkClick = onWorkClick,
             onUploadClick = onUploadClick,
@@ -1257,6 +1290,7 @@ private fun ListDetailLayout(
                 compact = false,
                 header = stackHeaders(extraHeader, continueReadingHeader(library, onReadFromLibrary)),
                 libraryWorkIds = library.workIds,
+                onDevice = savedWorks(books.books) { id -> library.entryFor(id)?.work },
                 selectedWorkId = selectedWorkId,
             )
         }
