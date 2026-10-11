@@ -109,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (168 each;
-# desktop also has DesktopLinksTest, InflateJvmTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (171 each;
+# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -212,7 +212,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 168 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 171 frontend
   tests** (+1 with `-tags=eval`, +16 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -355,10 +355,21 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (zip + a puff-style DEFLATE decoder; checked against JDK zlib by
   `InflateJvmTest`), `data/Markup.kt` (lenient XHTML tokenizer), and
   `data/Epub.kt`, which flattens the spine into one `AnnotatedString`
-  (headings, emphasis, lists; no CSS or images yet) with chapters from the nav
+  (headings, emphasis, lists, pictures; no CSS yet) with chapters from the nav
   doc, else the NCX, else h1–h3. So EPUB is a `TextReader` like TXT
-  (`TextReader(text: AnnotatedString, chapters)`), with the same themes,
-  spreads and per-mille position. The text reader's Contents sheet
+  (`TextReader(text: AnnotatedString, chapters, images)`), with the same themes,
+  spreads and per-mille position. **Pictures (2026-10-11):** each `<img>` (and
+  `<svg><image>`, e.g. covers) is one `IMAGE_CHAR` annotated `IMAGE_TAG` = its
+  zip path, also inline content under that key; `BookImage` keeps the size
+  read from the header (`data/ImageSize.kt`: PNG/JPEG/GIF/WebP/BMP, no SVG,
+  which falls back to alt text) and re-reads the bytes when drawn.
+  `ui/components/BookImages.kt` sizes placeholders per column (block: full
+  column width, picture centered, capped to the page / 85% of the screen;
+  ≤ 40 px high: inline, 1 em) and decodes only while on screen. The style
+  needs `LineHeightStyle.Mode.Minimum` when there are pictures: Android's
+  default `Fixed` mode crops a tall placeholder's line to one text line (Skia
+  grows it either way). Don't add `ParagraphStyle`s around pictures: each
+  split adds a blank line. The text reader's Contents sheet
   (`TextPager.goTo` / `offset`) works for both. Of the "Future" board, password reset
   and email verification are built; notifications aren't.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the

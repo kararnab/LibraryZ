@@ -40,12 +40,39 @@ interface PagedReader : Reader {
  * with Compose `Text` — no rasterization, no per-platform actual, scales and
  * reflows for free. [chapters] are offsets into [text], in order.
  */
-class TextReader(val text: AnnotatedString, val chapters: List<Chapter>) : Reader {
+class TextReader(
+    val text: AnnotatedString,
+    val chapters: List<Chapter>,
+    /** The pictures in [text], by the key of their [IMAGE_TAG] annotation. */
+    val images: Map<String, BookImage> = emptyMap(),
+) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
 
     override fun close() = Unit
 }
+
+/**
+ * A picture in a [TextReader]'s text. Each occurrence is one [IMAGE_CHAR]
+ * annotated with [IMAGE_TAG] = its key, and also marked as inline content
+ * under the same key, so `Text` can draw it in a placeholder the screen sizes
+ * from [width] × [height] (pixels). A [block] image is a paragraph of its
+ * own, scaled to the column; an inline one sits in the line, one em high.
+ * [bytes] reads the encoded file again each time, so only the pictures on
+ * screen are ever decoded.
+ */
+class BookImage(
+    val width: Int,
+    val height: Int,
+    val alt: String,
+    val block: Boolean,
+    private val load: () -> ByteArray,
+) {
+    fun bytes(): ByteArray = load()
+}
+
+const val IMAGE_TAG = "libraryz.image"
+const val IMAGE_CHAR = "\uFFFC"
 
 class UnsupportedFormatException(format: String) :
     RuntimeException("No preview reader for format \"$format\" on this build")
@@ -71,7 +98,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images) }
         }
         else -> throw UnsupportedFormatException(format)
     }

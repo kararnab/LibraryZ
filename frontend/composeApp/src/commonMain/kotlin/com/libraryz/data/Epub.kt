@@ -1,5 +1,6 @@
 package com.libraryz.data
 
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
@@ -11,16 +12,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.em
 
-/** An EPUB's reading text and table of contents, ready for [TextReader]. */
-class EpubBook(val text: AnnotatedString, val chapters: List<Chapter>)
+/** An EPUB's reading text, table of contents and pictures, ready for [TextReader]. */
+class EpubBook(val text: AnnotatedString, val chapters: List<Chapter>, val images: Map<String, BookImage>)
 
 class EpubException(message: String) : RuntimeException(message)
 
 /**
  * Reads an EPUB (2 or 3) as reflowable text: the spine's XHTML documents in
- * order, one after another, keeping headings, emphasis, lists and paragraph
- * breaks and dropping the book's CSS, images and layout. The reader's own
- * typography and themes then apply, as they do to TXT.
+ * order, one after another, keeping headings, emphasis, lists, paragraph
+ * breaks and pictures and dropping the book's CSS and layout. The reader's
+ * own typography and themes then apply, as they do to TXT. Pictures are
+ * [BookImage]s, read from the archive again when they're drawn.
  *
  * Chapters come from the EPUB 3 nav document, else the EPUB 2 NCX, else the
  * book's h1–h3 headings, each resolved to a character offset in [EpubBook.text].
@@ -59,7 +61,17 @@ fun parseEpub(bytes: ByteArray): EpubBook {
             }
         }
 
-        val book = BookBuilder()
+        val images = HashMap<String, BookImage?>()
+        val book = BookBuilder { path, alt ->
+            images.getOrPut(path) {
+                val entry = zip.find(path) ?: return@getOrPut null
+                val size = runCatching { imageSize(zip.read(entry)) }.getOrNull() ?: return@getOrPut null
+                val (w, h) = size
+                // Small enough to be a glyph or an ornament in the line, not a figure.
+                val block = h > INLINE_IMAGE_MAX_HEIGHT || w > INLINE_IMAGE_MAX_HEIGHT * 4
+                BookImage(w, h, alt.collapseWhitespace(), block) { zip.read(entry) }
+            }
+        }
         for (id in spine) {
             val item = items[id] ?: continue
             if (!item.isDocument) continue
@@ -67,17 +79,20 @@ fun parseEpub(bytes: ByteArray): EpubBook {
             book.addDocument(item.path, xhtml)
         }
         val text = book.build()
-        if (text.text.isBlank()) throw EpubException("This EPUB has no text to show (it may be all images).")
+        if (text.text.isBlank()) throw EpubException("This EPUB has nothing this reader can show.")
 
         val toc = tableOfContents(zip, items, ncxId)
             .mapNotNull { e -> book.offsetOf(e.path, e.fragment)?.let { Chapter(it, e.title, e.depth) } }
             .distinct()
             .sortedBy { it.offset }
-        return EpubBook(text, toc.ifEmpty { book.headings })
+        return EpubBook(text, toc.ifEmpty { book.headings }, images.filterValues { it != null }.mapValues { it.value!! })
     } catch (e: ZipException) {
         throw EpubException("This EPUB is damaged (${e.message}).")
     }
 }
+
+/** Pictures up to this many pixels high (and four times as wide) sit in the line of text. */
+private const val INLINE_IMAGE_MAX_HEIGHT = 40
 
 private class ManifestItem(val path: String, val type: String, val properties: List<String>) {
     val isDocument: Boolean
@@ -153,10 +168,11 @@ private fun tocEntry(label: String, href: String, dir: String, depth: Int) = Toc
 /**
  * Turns XHTML into one [AnnotatedString]: blocks separated by a blank line
  * (as TXT paragraphs are), whitespace collapsed as a browser would, inline
- * styles kept as spans. Remembers where every document and `id` landed so
- * the table of contents can point into the text.
+ * styles kept as spans, pictures as [IMAGE_CHAR]s (see [BookImage]) when
+ * [imageAt] can read them, else their alt text. Remembers where every
+ * document and `id` landed so the table of contents can point into the text.
  */
-private class BookBuilder {
+private class BookBuilder(private val imageAt: (path: String, alt: String) -> BookImage?) {
     private val out = AnnotatedString.Builder()
     private val anchors = HashMap<String, Int>()
     private val pendingAnchors = ArrayList<String>()
@@ -173,6 +189,8 @@ private class BookBuilder {
     // An li's marker was just written: its first inner block shouldn't break the line.
     private var holdBreak = false
     private var skipDepth = 0
+    // Inside an <svg>, which is skipped but for its <image>s (e.g. a cover page).
+    private var svgDepth = 0
     private var preDepth = 0
     private var lastWritten: Char? = null
 
@@ -197,6 +215,7 @@ private class BookBuilder {
         }
         while (stack.isNotEmpty()) closeTop()
         skipDepth = 0
+        svgDepth = 0
         preDepth = 0
         lists.clear()
         resolveAnchors()
@@ -207,12 +226,23 @@ private class BookBuilder {
     private fun open(path: String, t: MarkupToken.Start) {
         val name = t.name
         if (name in SKIPPED) {
-            if (!t.selfClosing) skipDepth++
+            if (!t.selfClosing) {
+                skipDepth++
+                if (name == "svg") svgDepth++
+            }
+            return
+        }
+        if (name == "image" && svgDepth > 0) {
+            image(path, t.attrs["xlink:href"] ?: t.attrs["href"], t.attrs["alt"])
             return
         }
         if (skipDepth > 0) return
         t.attrs["id"]?.let { pendingAnchors += "$path#$it" }
         when (name) {
+            "img" -> {
+                image(path, t.attrs["src"], t.attrs["alt"])
+                return
+            }
             "br" -> {
                 if (headingOpen) headingText.append(' ')
                 if (!breakPending && !blockEmpty) {
@@ -276,6 +306,7 @@ private class BookBuilder {
     private fun close(name: String) {
         if (name in SKIPPED) {
             if (skipDepth > 0) skipDepth--
+            if (name == "svg" && svgDepth > 0) svgDepth--
             return
         }
         if (skipDepth > 0 || name in VOID) return
@@ -345,6 +376,39 @@ private class BookBuilder {
         }
     }
 
+    /** [src] relative to the document at [doc]: the picture, else its alt text in its place. */
+    private fun image(doc: String, src: String?, alt: String?) {
+        val key = src?.takeUnless { it.startsWith("data:") }?.let { resolvePath(dirOf(doc), it.substringBefore('#')) }
+        val image = key?.let { imageAt(it, alt.orEmpty()) }
+        if (image == null) {
+            alt?.let(::text)
+            return
+        }
+        if (headingOpen) alt?.let { headingText.append(it) }
+        if (image.block) {
+            // Its own paragraph, unless it starts one already (a heading's, an li's after its marker).
+            holdBreak = false
+            if (!blockEmpty) block()
+            if (breakPending) startBlock()
+        } else {
+            if (breakPending) startBlock()
+            resolveAnchors()
+            if (spacePending && !atBlockStart) write(" ")
+            spacePending = false
+        }
+        out.pushStringAnnotation(IMAGE_TAG, key)
+        out.appendInlineContent(key, IMAGE_CHAR)
+        out.pop()
+        lastWritten = IMAGE_CHAR.last()
+        if (image.block) {
+            block()
+        } else {
+            atBlockStart = false
+            blockEmpty = false
+            holdBreak = false
+        }
+    }
+
     private fun block() {
         if (holdBreak) return
         breakPending = true
@@ -403,6 +467,7 @@ private class BookBuilder {
             "sup" to listOf(SpanStyle(baselineShift = BaselineShift.Superscript, fontSize = 0.75.em)),
             "sub" to listOf(SpanStyle(baselineShift = BaselineShift.Subscript, fontSize = 0.75.em)),
             "small" to listOf(SpanStyle(fontSize = 0.85.em)),
+            "figcaption" to listOf(SpanStyle(fontSize = 0.85.em), CENTERED),
             "code" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
             "tt" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
             "kbd" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
