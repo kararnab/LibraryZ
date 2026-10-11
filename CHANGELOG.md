@@ -12,7 +12,40 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-11
+
+The first tagged release: the public-launch baseline. Everything from the
+rebuild onward, summarized; [PLAN.md](PLAN.md) has the detail.
+
 ### Added
+- **EPUB reader** ([#38](https://github.com/kararnab/LibraryZ/pull/38),
+  [#39](https://github.com/kararnab/LibraryZ/pull/39),
+  [#40](https://github.com/kararnab/LibraryZ/pull/40),
+  [#41](https://github.com/kararnab/LibraryZ/pull/41)). EPUBs open in the app
+  on every platform, from shared code (its own zip and DEFLATE reader), as
+  reflowing text with the reading themes, two-page spreads and a Contents
+  sheet. They keep their pictures (SVG included), alignment, indents and
+  poetry, colour-coded text and highlights (made readable on each reading
+  theme), tables, font sizes, boxed notes and embedded fonts (IDPF / Adobe
+  obfuscation undone; a "Book's fonts" switch turns them off).
+- **Two-page reading and full screen**
+  ([#29](https://github.com/kararnab/LibraryZ/pull/29),
+  [#34](https://github.com/kararnab/LibraryZ/pull/34)): PDFs and text as a
+  printed book's spread on wide screens (Auto / Single / Two pages, saved per
+  book, with "Pair from page 1" for scans), running heads and pages left in
+  the chapter; full-screen reading (F11 / Esc on desktop).
+- **Multiple authors** ([#34](https://github.com/kararnab/LibraryZ/pull/34)):
+  shown per context ("Aho et al." in lists, "by A, B and C" on a book, each
+  name searching Browse), and entered as chips in Upload and Suggest edit.
+- **Reading settings are saved** on the device (theme, text size, spacing,
+  width), and pictures are decoded ahead of time instead of popping in.
+- **Undo for a dismissed recommendation**
+  ([#31](https://github.com/kararnab/LibraryZ/pull/31)): new
+  `DELETE /me/recommendations/{id}/dismiss`, and an Undo on For You.
+- **Search by ISBN and word prefix**
+  ([#35](https://github.com/kararnab/LibraryZ/pull/35)): an ISBN-10/13 (any
+  hyphens or spaces) finds its book first, and Postgres search matches as
+  you type mid-word.
 - **Visual refresh of the client** from the "LibraryZ Visual Refresh"
   design: a library-green Material 3 theme in light and dark, Literata +
   Figtree (bundled, OFL), and generated cloth covers for every book.
@@ -65,68 +98,6 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   (<http://localhost:8025>) to catch every message.
 - README screenshots are now generated from the real UI
   (`ScreenshotsTest`, see `docs/screenshots/README.md`).
-- **Reader polish**: reading settings are saved on the device; EPUBs keep
-  their font sizes, boxed notes (borders and backgrounds), embedded fonts
-  (IDPF / Adobe obfuscation undone; a "Book's fonts" switch turns them
-  off) and SVG pictures (AndroidSVG on Android); pictures are decoded
-  ahead of time instead of popping in; the end-of-book card follows the
-  reading theme.
-- **Removal kinds** ([#27](https://github.com/kararnab/LibraryZ/issues/27)):
-  `DELETE /works/{id}` and `/editions/{id}` take `kind: content | technical`
-  (default `content`). A technical removal (a broken file) lets the same
-  file be uploaded again; a content takedown still blocks it. The remove
-  dialog asks which.
-
-### Changed
-- The web dev server (`wasmJsBrowserDevelopmentRun`) moved to port 8081,
-  where emailed links point in development; 8080 is Kong.
-- The upload screen only offers the formats the server accepts (PDF, EPUB,
-  TXT); AZW3, DJVU and CBZ were listed before but always rejected.
-
-### Security
-- **Recovery emails are capped per account**: one per 2 minutes and five
-  per day, checked before a token is issued (a row lock makes concurrent
-  requests send one email). Kong rate-limits the new routes per IP. A reset
-  request answers `202` whether or not the address has an account. Reset
-  tokens last 1 hour, verification tokens 48 hours, and both are single-use;
-  server logs never contain links or tokens.
-- **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0**
-  ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the
-  hand-written JWT/refresh code. Passwords are hashed with argon2id (bcrypt
-  hashes are upgraded on login) and must be 8–1024 characters (the old 8-character minimum, now with a
-  maximum instead of bcrypt's silent 72-byte truncation).
-  Failed logins are throttled per account (5 per 15 minutes) and per IP
-  (100), with a growing back-off; the counters live in Redis
-  (`LIBRARYZ_REDIS_ADDR`) so every replica shares them. Unknown accounts and
-  wrong passwords take the same time and get the same answer. Behind Kong,
-  set `LIBRARYZ_TRUSTED_PROXIES` so the per-IP limit sees real client IPs.
-- **PDF sanitization runs in a memory-capped child process.** pdfcpu
-  inflates compressed object streams in full while parsing, so a ~300 KiB
-  PDF could drive the server to gigabytes of heap and an OOM kill. PDFs are
-  now sanitized by re-running the binary in child mode under a hard memory
-  cap (Linux `RLIMIT_AS`), a timeout and a concurrency limit, with a minimal
-  environment. Over-budget files get `413`. New knobs:
-  `LIBRARYZ_PDF_SANITIZE_{MEMORY_MB,TIMEOUT,CONCURRENCY}`. As a side effect,
-  the server no longer buffers each sanitized PDF in memory (it used to
-  hold about 2× the file size).
-- **EPUB script scanning gaps closed.** Chapters were parsed through a 16 MiB
-  `LimitReader` (1 MiB for the OPF manifest), so a `<script>` placed after
-  that point was never seen. Oversized entries are now rejected instead.
-  `.svg` entries, which can carry scripts, were not scanned at all; they now
-  get the same check as (X)HTML.
-- **Short-lived access tokens with refresh and revocation**
-  ([#15](https://github.com/kararnab/LibraryZ/issues/15)). Access JWTs now
-  live 15 minutes and carry a `kid` (zero-downtime secret rotation via
-  `JWT_SECRET_PREVIOUS`) and a per-user token version checked on every
-  request. Login returns a single-use, rotating refresh token; replaying a
-  spent one revokes the whole session. New `POST /auth/refresh`,
-  `/auth/logout`, `/auth/logout-all`.
-- **Stricter auth header and JWT parsing**
-  ([#8](https://github.com/kararnab/LibraryZ/issues/8)): the scheme must be
-  `Bearer` (any case) as the first token, `exp` is required, and the
-  algorithm is pinned to HS256.
-
-### Added
 - **Moderator takedowns** ([#13](https://github.com/kararnab/LibraryZ/issues/13)):
   `DELETE /works/{id}` and `DELETE /editions/{id}` with a required reason.
   They're soft deletes (who/when/why kept), and the item disappears from
@@ -134,7 +105,10 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   purges orphaned blobs and, after `LIBRARYZ_BLOB_GC_RETENTION` (30d),
   removed files. Creators can also remove their own still-empty work, which
   the upload flow now does when a new work's first upload is rejected.
-  Moderator "Remove" actions in WorkDetail.
+  Moderator "Remove" actions in WorkDetail. A removal says why
+  ([#27](https://github.com/kararnab/LibraryZ/issues/27)): `kind: content`
+  (the default) keeps the file blocked, `technical` (a broken file) lets the
+  same file be uploaded again.
 - **`GET /ready`** readiness probe (DB + storage, `503` when degraded),
   wired into the compose healthcheck and Kong upstream health checks
   ([#11](https://github.com/kararnab/LibraryZ/issues/11)). `/health` stays
@@ -146,24 +120,25 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   Pre-production, the baseline is still edited in place.
 - **Browse and search pagination** with infinite scroll
   ([#7](https://github.com/kararnab/LibraryZ/issues/7)).
-- **`TextReader`** (commonMain) — renders `.txt` editions natively with
-  Compose `Text`. No per-platform actual needed; UTF-8 decoded once via
-  `bytes.decodeToString()`; reflows for free at any viewport width.
-- **`Reader` sealed interface** in `data/Reader.kt` — `PagedReader` (PDF
-  today, DJVU/CBZ later) and `TextReader` (TXT today, MD later) sit
-  under it. Format dispatch is a single `when` in `openReader`.
+- **`TextReader`** (commonMain) renders TXT and EPUB editions natively
+  with Compose `Text`: no per-platform code, reflows at any width.
+- **`Reader` sealed interface** in `data/Reader.kt`: `PagedReader` (PDF)
+  and `TextReader` (TXT, EPUB) sit under it. Format dispatch is a single
+  `when` in `openReader`.
 - **`scripts/seed.sh`** — Kong-aware, idempotent seed script. Creates two
   demo users (reader + moderator), 10 works from the design bundle, 8
   shelf entries, 3 pending contributions. Per-format idempotency means a
-  re-run only uploads missing editions, preserving Kong's 10/hour upload
-  bucket.
+  re-run only uploads missing editions, which also spares Kong's upload
+  flood guard.
 - **`scripts/seed-pdf.py`** — pure-Python minimal PDF generator (~70 LOC,
   no deps) used by the seed for valid placeholder PDFs that PDFBox /
   PdfRenderer / pdf.js can actually render.
 - **Open-source launch docs**: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `ARCHITECTURE.md`, `SECURITY.md`, this file.
-- **GitHub Actions CI** — Go vet + build + race-tested unit suite, and a
-  Compose Multiplatform compile sweep (Desktop + Wasm + Android).
+- **GitHub Actions CI**: Go vet, build and the race-tested suite with a
+  coverage report; the Postgres-tagged suite against a Postgres service
+  container; and a Compose Multiplatform compile sweep (Desktop, Web,
+  Android, iOS klibs) plus every `commonTest` target.
 - **Issue + PR templates** under `.github/`.
 - **README rewrite** for public-facing pitch: hook + screenshots grid +
   side-by-side positioning vs Calibre-Web / Kavita / Audiobookshelf,
@@ -238,8 +213,76 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   `Components.kt`) gate on `canPreview(format)`/`Edition.isPreviewable`**
   instead of the old `Edition.isPdf` check, so any format the build can
   render gets a Preview button.
+- The web dev server (`wasmJsBrowserDevelopmentRun`) moved to port 8081,
+  where emailed links point in development; 8080 is Kong.
+- The upload screen only offers the formats the server accepts (PDF, EPUB,
+  TXT); AZW3, DJVU and CBZ were listed before but always rejected.
+- **The Linux desktop app follows the system's dark mode**
+  ([#33](https://github.com/kararnab/LibraryZ/pull/33)) through the
+  freedesktop settings portal; Compose only reads it on macOS and Windows.
+
+### Security
+- **Recovery emails are capped per account**: one per 2 minutes and five
+  per day, checked before a token is issued (a row lock makes concurrent
+  requests send one email). Kong rate-limits the new routes per IP. A reset
+  request answers `202` whether or not the address has an account. Reset
+  tokens last 1 hour, verification tokens 48 hours, and both are single-use;
+  server logs never contain links or tokens.
+- **Auth now runs on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0**
+  ([#21](https://github.com/kararnab/LibraryZ/issues/21)), replacing the
+  hand-written JWT/refresh code. Passwords are hashed with argon2id (bcrypt
+  hashes are upgraded on login) and must be 8–1024 characters (the old 8-character minimum, now with a
+  maximum instead of bcrypt's silent 72-byte truncation).
+  Failed logins are throttled per account (5 per 15 minutes) and per IP
+  (100), with a growing back-off; the counters live in Redis
+  (`LIBRARYZ_REDIS_ADDR`) so every replica shares them. Unknown accounts and
+  wrong passwords take the same time and get the same answer. Behind Kong,
+  set `LIBRARYZ_TRUSTED_PROXIES` so the per-IP limit sees real client IPs.
+- **PDF sanitization runs in a memory-capped child process.** pdfcpu
+  inflates compressed object streams in full while parsing, so a ~300 KiB
+  PDF could drive the server to gigabytes of heap and an OOM kill. PDFs are
+  now sanitized by re-running the binary in child mode under a hard memory
+  cap (Linux `RLIMIT_AS`), a timeout and a concurrency limit, with a minimal
+  environment. Over-budget files get `413`. New knobs:
+  `LIBRARYZ_PDF_SANITIZE_{MEMORY_MB,TIMEOUT,CONCURRENCY}`. As a side effect,
+  the server no longer buffers each sanitized PDF in memory (it used to
+  hold about 2× the file size).
+- **EPUB script scanning gaps closed.** Chapters were parsed through a 16 MiB
+  `LimitReader` (1 MiB for the OPF manifest), so a `<script>` placed after
+  that point was never seen. Oversized entries are now rejected instead.
+  `.svg` entries, which can carry scripts, were not scanned at all; they now
+  get the same check as (X)HTML.
+- **Short-lived access tokens with refresh and revocation**
+  ([#15](https://github.com/kararnab/LibraryZ/issues/15), now on iam, see
+  above): 15-minute access JWTs and single-use, rotating refresh tokens;
+  replaying a spent one revokes the whole session. `POST /auth/refresh`,
+  `/auth/logout`, `/auth/logout-all`; secret rotation via
+  `JWT_SECRET_PREVIOUS`.
+- **Stricter auth header and JWT parsing**
+  ([#8](https://github.com/kararnab/LibraryZ/issues/8)): bearer tokens only,
+  `exp` required, and the algorithm pinned to HS256.
+- **PDF active content in object streams is stripped**
+  ([#26](https://github.com/kararnab/LibraryZ/pull/26)). pdfcpu loads objects
+  in compressed object streams lazily and the sanitizer never decoded them,
+  so a JavaScript action stored in one survived sanitization (most modern
+  PDFs keep most objects there).
 
 ### Fixed
+- PDFs that use object streams were stored corrupted (fonts and other
+  objects dropped), and the desktop reader crashed on a page it couldn't
+  render; it now says "Couldn't render page N" and keeps turning pages
+  ([#26](https://github.com/kararnab/LibraryZ/pull/26)).
+- Browse search jumped between results and nothing while typing, and an
+  author link on wide screens could leave the old list in place
+  ([#35](https://github.com/kararnab/LibraryZ/pull/35)).
+- On desktop, full screen entered from a maximized window couldn't be left
+  ([#37](https://github.com/kararnab/LibraryZ/pull/37)).
+- The Linux desktop window showed as "com-libraryz-MainKt" in the dock and
+  Alt-Tab ([#30](https://github.com/kararnab/LibraryZ/pull/30)).
+- Android drew everything in Roboto: the bundled fonts never reached the APK
+  ([#39](https://github.com/kararnab/LibraryZ/pull/39)).
+- Upload and Suggest edit said to separate authors with commas; they're
+  semicolon-separated ([#29](https://github.com/kararnab/LibraryZ/pull/29)).
 - Two moderators approving/rejecting the same contribution at once could
   apply the patch twice or race approve against reject. The state change is
   now a single conditional update ([#4](https://github.com/kararnab/LibraryZ/issues/4)).
@@ -268,6 +311,8 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   `ok`); corrected API surface (contribution body shape, search route,
   missing endpoints); softened comparison table; called out Kong as the
   edge gateway in `docker compose up`.
+- `README.md` rewritten again with screenshots generated from the real UI
+  ([#36](https://github.com/kararnab/LibraryZ/pull/36)).
 
 ### Internal
 - Seed PDF flow uses real (tiny, ~700 B) valid PDFs instead of plain-text
@@ -278,8 +323,8 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 
 ## How releases will work
 
-The first tagged release will be `v0.1.0` — a soft cut of `main` once the
-launch dust settles, marking the public-launch baseline. From there:
+The first tagged release is `v0.1.0`, a soft cut of `main` marking the
+public-launch baseline. From there:
 
 - **MAJOR** for breaking API or schema changes (Phase 6+ may bring some).
 - **MINOR** for new features that don't break compatibility.
@@ -288,3 +333,6 @@ launch dust settles, marking the public-launch baseline. From there:
 Move items out of `[Unreleased]` and into a dated `[x.y.z]` section when
 cutting a release. Add a corresponding annotated git tag (`git tag -a
 vX.Y.Z -m "..."` then `git push --tags`).
+
+[Unreleased]: https://github.com/kararnab/LibraryZ/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kararnab/LibraryZ/releases/tag/v0.1.0
