@@ -774,7 +774,7 @@ the audit stay parked until there's a cluster), no autoscaling policy, no
 service mesh, no read replicas (single primary is fine at this scale), no
 Redis use beyond Kong's rate-limit store.
 
-### Phase 7 — correctness, safety, and v0.1.0 readiness (PLANNED 2026-10-04)
+### Phase 7 — correctness, safety, and v0.1.0 readiness (DONE 2026-10-11)
 
 Came out of an audit of the code after Phase 6. Most of the items are bugs
 found during the audit and confirmed with throwaway tests. The rest close
@@ -884,7 +884,9 @@ without details. Baseline: `752c7b0`, `go vet` + `go test ./...` green.
      migrations and runlock; CI reports coverage (not gated) and runs the
      `-tags=postgres` suite against a Postgres service container. ✓
 114. Tag **`v0.1.0`** once 7.1–7.3 are merged (CHANGELOG `[Unreleased]` →
-     dated section).
+     dated section). ✓ 2026-10-11: CHANGELOG cut to `[0.1.0]`, tagged on
+     the release PR's merge commit. The pre-alpha data policy below still
+     applies; it ends with the first production deployment, not the tag.
 
 **Slice 7.5 — adopt [kararnab/iam](https://github.com/kararnab/iam) for auth**
 ([#21](https://github.com/kararnab/LibraryZ/issues/21); supersedes the custom

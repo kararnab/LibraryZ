@@ -156,8 +156,9 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `internal/migrations/baseline` — not the live models — so editing a
   model never silently changes history. Adding a model field means adding
   a migration; `TestLiveModelsMatchMigratedSchema` fails otherwise.
-  **Pre-v0.1.0 there's no data to preserve, so the baseline is still edited
-  in place**; after v0.1.0 it's frozen and changes go in new versions.
+  **Until the first production deployment there's no data to preserve, so
+  the baseline is still edited in place** (tagging `v0.1.0` didn't change
+  that); after that deployment it's frozen and changes go in new versions.
   `migrations.Up` takes a Postgres session advisory lock, so it must use a
   **direct** connection (`LIBRARYZ_MIGRATE_DATABASE_URL`, compose points it
   at `postgres:5432`, not pgbouncer). Runs on startup unless
