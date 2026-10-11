@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.BookmarkAdded
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
@@ -71,7 +72,7 @@ fun ForYouScreen(
     onWantToRead: (String) -> Unit,
     // True when the work is already in the library (the button then shows "Saved").
     isInLibrary: (String) -> Boolean,
-    onOpenLibrary: () -> Unit,
+    onUpload: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -127,16 +128,20 @@ fun ForYouScreen(
                             onRetry = { scope.launch { state.refresh() } },
                         )
                     }
+                    // The server fills short lists with popular books, even for a
+                    // reader with no ratings: empty means every book in the
+                    // catalogue is in the library or dismissed.
                     LoadPhase.Empty -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         EmptyState(
-                            title = "Nothing to suggest yet",
-                            body = "Rate a few books you’ve read and we’ll suggest what to read next.",
+                            title = "You’re all caught up",
+                            body = "Every book in the catalogue is already in your library or dismissed. " +
+                                "New books will show up here as they’re added.",
                             icon = Icons.Outlined.AutoAwesome,
                             action = {
-                                FilledTonalButton(onClick = onOpenLibrary) {
-                                    Icon(Icons.Rounded.Star, contentDescription = null, modifier = Modifier.size(18.dp))
+                                FilledTonalButton(onClick = onUpload) {
+                                    Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Rate books in My Library")
+                                    Text("Upload a book")
                                 }
                             },
                         )
