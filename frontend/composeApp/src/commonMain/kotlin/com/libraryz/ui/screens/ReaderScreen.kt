@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.runtime.key
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Fullscreen
@@ -116,6 +117,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
+import com.libraryz.data.BookCache
+import com.libraryz.data.BookInfo
 import com.libraryz.data.BookLayout
 import com.libraryz.data.BookLayouts
 import com.libraryz.data.Chapter
@@ -217,11 +220,18 @@ data class ReaderPrefs(
  *
  * Both readers can show two pages side by side ([PageLayout], saved per
  * book in [layouts]); see [autoSpread] for when Auto does.
+ *
+ * A book saved in [books] opens from the device without asking the server;
+ * otherwise it's downloaded and then kept there in the background.
+ *
+ * When another device has read further ([elsewhere]), the book opens where
+ * this device left off and offers "Go there" rather than moving silently.
  */
 @Composable
 fun ReaderScreen(
     api: ApiClient,
     editionId: String,
+    workId: String,
     format: String,
     title: String,
     authors: String?,
@@ -236,6 +246,10 @@ fun ReaderScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     layouts: BookLayouts = remember { BookLayouts() },
+    books: BookCache = remember { BookCache() },
+    // Newer progress from another device: [resumeFrom] is this device's own
+    // spot, and the reader offers to go here instead of jumping.
+    elsewhere: UserBook? = null,
 ) {
     var bytes by remember(editionId) { mutableStateOf<ByteArray?>(null) }
     var loadError by remember(editionId) { mutableStateOf<String?>(null) }
@@ -245,7 +259,9 @@ fun ReaderScreen(
 
     LaunchedEffect(editionId, attempt) {
         try {
-            bytes = api.downloadEdition(editionId)
+            bytes = books.openOrDownload(editionId, BookInfo(format, workId, title, authors)) {
+                api.downloadEditionFile(editionId)
+            }
         } catch (e: Throwable) {
             loadError = api.describe(e)
             downloadFailed = true
@@ -282,6 +298,10 @@ fun ReaderScreen(
     val startPage = remember(reader) { resumePage(resumeEntry, pageCount) }
     // Paged: 0..pageCount, where pageCount is the end card after the last page.
     var page by remember(reader) { mutableStateOf(startPage) }
+    // "Go there" re-opens the view at the new spot (the text view only reads
+    // its start position when it opens).
+    var jump by remember(reader) { mutableStateOf(0) }
+    var offerElsewhere by remember(editionId) { mutableStateOf(elsewhere != null) }
     val textScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
@@ -424,6 +444,7 @@ fun ReaderScreen(
                     }
                 },
         ) {
+            key(jump) {
             when (val r = reader) {
                 is TextReader -> TextReaderLayout(
                     reader = r,
@@ -471,6 +492,47 @@ fun ReaderScreen(
                     end = end,
                 )
             }
+            }
+            val there = elsewhere
+            if (offerElsewhere && there != null && reader != null && pageCount > 0) {
+                ElsewhereOffer(
+                    label = elsewhereLabel(there, reader is PagedReader, pageCount),
+                    onGo = {
+                        page = resumePage(there, pageCount)
+                        jump++
+                        offerElsewhere = false
+                    },
+                    onDismiss = { offerElsewhere = false },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 96.dp),
+                )
+            }
+        }
+    }
+}
+
+/** "p. 212" for a paged book saved against the same page count, else "68%". */
+internal fun elsewhereLabel(entry: UserBook, paged: Boolean, pageCount: Int): String =
+    if (paged && entry.totalPages == pageCount && entry.currentPage > 0) "on p. ${entry.currentPage}"
+    else "at ${entry.progressPercent}%"
+
+/** "You're on p. 212 on another device — Go there", for a while after opening. */
+@Composable
+private fun ElsewhereOffer(label: String, onGo: () -> Unit, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    LaunchedEffect(Unit) {
+        delay(12_000)
+        onDismiss()
+    }
+    Surface(
+        modifier = modifier.widthIn(max = 480.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.inverseSurface,
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        shadowElevation = 6.dp,
+    ) {
+        Row(Modifier.padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("You’re $label on another device", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f, fill = false))
+            TextButton(onClick = onGo) { Text("Go there", color = MaterialTheme.colorScheme.inversePrimary) }
+            IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, contentDescription = "Stay here") }
         }
     }
 }

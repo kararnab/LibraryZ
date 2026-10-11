@@ -24,11 +24,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import com.libraryz.ui.components.Banner
+import com.libraryz.ui.components.BannerTone
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SyncProblem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -74,6 +78,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
+import com.libraryz.data.SavedBook
 import com.libraryz.data.LibraryStatus
 import com.libraryz.data.TEXT_POSITIONS
 import com.libraryz.data.UserBook
@@ -104,6 +109,11 @@ fun WorkDetailScreen(
     onAddEdition: () -> Unit,
     onRead: (Edition) -> Unit,
     onDownload: (Edition) -> Unit,
+    // Books kept on this device, by edition id; [onKeepOffline] null hides the pin.
+    savedBooks: Map<String, SavedBook> = emptyMap(),
+    keeping: Set<String> = emptySet(),
+    onKeepOffline: ((Edition, Boolean) -> Unit)? = null,
+    onRemoveFromDevice: ((Edition) -> Unit)? = null,
     onSuggestEdit: (() -> Unit)? = null,
     // Opens Browse searching for one author; null leaves the names as plain text.
     onAuthorClick: ((String) -> Unit)? = null,
@@ -222,6 +232,11 @@ fun WorkDetailScreen(
                             onDownload = { onDownload(ed) },
                             onRead = { onRead(ed) },
                             onRemove = onRemoveEdition?.let { { editionToRemove = ed } },
+                            saved = ed.id in savedBooks,
+                            pinned = savedBooks[ed.id]?.pinned == true,
+                            keeping = ed.id in keeping,
+                            onKeepOffline = onKeepOffline?.let { k -> { keep -> k(ed, keep) } },
+                            onRemoveFromDevice = onRemoveFromDevice?.let { r -> { r(ed) } },
                         )
                     }
                 }
@@ -565,6 +580,17 @@ private fun LibraryCard(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             val note = entry?.notes?.takeIf { it.isNotBlank() }
+            val other = entry?.notesOther?.takeIf { it.isNotBlank() }
+            if (other != null && !editingNote) {
+                NotesConflict(
+                    other = other,
+                    onKeepThis = { onUpsert(UpsertLibraryRequest(resolveNotes = true)) },
+                    onUseOther = { onUpsert(UpsertLibraryRequest(notes = other, resolveNotes = true)) },
+                    onKeepBoth = {
+                        onUpsert(UpsertLibraryRequest(notes = listOfNotNull(note, other).joinToString("\n\n"), resolveNotes = true))
+                    },
+                )
+            }
             when {
                 editingNote -> NoteEditor(
                     initial = note.orEmpty(),
@@ -638,6 +664,28 @@ private fun NoteEditor(initial: String, onCancel: () -> Unit, onSave: (String) -
             TextButton(onClick = onCancel) { Text("Cancel") }
             Spacer(Modifier.width(8.dp))
             FilledTonalButton(onClick = { onSave(text.trim()) }) { Text("Save note") }
+        }
+    }
+}
+
+/**
+ * The notes were changed on another device while this one was offline (or
+ * the other way round): the newer text is shown as the note, [other] is the
+ * one that lost. The reader chooses; nothing is dropped until then.
+ */
+@Composable
+private fun NotesConflict(other: String, onKeepThis: () -> Unit, onUseOther: () -> Unit, onKeepBoth: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Banner(
+            BannerTone.Info,
+            Icons.Rounded.SyncProblem,
+            title = "Notes were also changed on another device",
+            body = "The other version: “$other”",
+        )
+        FlowRow(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = onKeepThis) { Text("Keep this") }
+            TextButton(onClick = onUseOther) { Text("Use other") }
+            TextButton(onClick = onKeepBoth) { Text("Keep both") }
         }
     }
 }

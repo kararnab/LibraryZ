@@ -1046,6 +1046,14 @@ paths:
         Setting status to `reading` stamps `started_at`; `read` stamps
         `finished_at` and forces `progress_percent` to 100 unless a percent is
         sent in the same request.
+
+        **Offline merge.** Fields come in groups (status; progress =
+        `current_page` + `total_pages` + `progress_percent`; rating; shelf;
+        notes), each optionally stamped in `stamps` with when the change was
+        made. A group is written only if its stamp is newer than the stored
+        one, so queued writes from several devices merge per group in any
+        order and can be replayed safely. 404 also means the work was removed
+        from the library after every change in this request was made.
       security:
         - bearerAuth: []
       requestBody:
@@ -1083,6 +1091,15 @@ paths:
           label: cURL
           source: |
             curl -s -X DELETE "$BASE/me/library/$WORK_ID" -H "Authorization: Bearer $TOKEN"
+      description: |
+        Removes the entry as of `stamp` (default now) and remembers when, so
+        changes stamped earlier can't bring it back. If the entry has a change
+        stamped after `stamp`, it's kept (204 all the same).
+      parameters:
+        - name: stamp
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Stamp" }
       responses:
         "204":
           description: Removed
@@ -1531,6 +1548,32 @@ components:
         progress_percent: { type: integer, minimum: 0, maximum: 100 }
         rating:           { type: [integer, "null"], minimum: 1, maximum: 5 }
         notes:            { type: string }
+        stamps:
+          type: object
+          description: When each group was changed; a missing stamp means now.
+          properties:
+            status:   { $ref: "#/components/schemas/Stamp" }
+            progress: { $ref: "#/components/schemas/Stamp" }
+            rating:   { $ref: "#/components/schemas/Stamp" }
+            shelf:    { $ref: "#/components/schemas/Stamp" }
+            notes:    { $ref: "#/components/schemas/Stamp" }
+        notes_base:
+          type: string
+          description: >
+            The `notes_stamp` the edit started from. If the notes changed
+            elsewhere since, the losing text is kept in `notes_other`.
+        resolve_notes:
+          type: boolean
+          description: Clears `notes_other` (the reader chose).
+
+    Stamp:
+      type: string
+      pattern: '^\d{13}\.\d{4}\.[A-Za-z0-9_-]{1,32}$'
+      description: >
+        Hybrid logical clock: unix ms (13 digits), a counter (4 digits) and
+        a device id. String order is clock order. Stamps more than 5 minutes
+        ahead of the server are treated as now.
+      example: "1760180000000.0000.desktop-3f2a"
 
     UserBook:
       type: object
@@ -1550,6 +1593,16 @@ components:
         finished_at:      { type: [string, "null"], format: date-time }
         created_at:       { type: string, format: date-time }
         updated_at:       { type: string, format: date-time }
+        status_stamp:     { $ref: "#/components/schemas/Stamp" }
+        progress_stamp:   { $ref: "#/components/schemas/Stamp" }
+        rating_stamp:     { $ref: "#/components/schemas/Stamp" }
+        shelf_stamp:      { $ref: "#/components/schemas/Stamp" }
+        notes_stamp:      { $ref: "#/components/schemas/Stamp" }
+        notes_other:
+          type: string
+          description: >
+            The other text when the notes were changed on two devices without
+            either seeing the other's change. Cleared with `resolve_notes`.
         work:
           allOf:
             - $ref: "#/components/schemas/Work"

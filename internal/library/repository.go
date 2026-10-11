@@ -45,6 +45,18 @@ type UserBook struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 
+	// When each group of fields was last written, as hybrid-logical-clock
+	// stamps (see Stamp). A write to a group applies only if its stamp is
+	// newer, so changes made offline merge per group in any order.
+	StatusStamp   string `gorm:"size:64" json:"status_stamp,omitempty"`
+	ProgressStamp string `gorm:"size:64" json:"progress_stamp,omitempty"`
+	RatingStamp   string `gorm:"size:64" json:"rating_stamp,omitempty"`
+	ShelfStamp    string `gorm:"size:64" json:"shelf_stamp,omitempty"`
+	NotesStamp    string `gorm:"size:64" json:"notes_stamp,omitempty"`
+	// NotesOther is the other text when two devices changed the notes
+	// without seeing each other's change; the app asks which to keep.
+	NotesOther string `json:"notes_other,omitempty"`
+
 	// Work is enriched on read (gorm:"-") so the My Library list renders the
 	// title/authors/editions without a second round-trip. Unlike the
 	// contribution package — which kept itself decoupled from catalog — the
@@ -52,3 +64,14 @@ type UserBook struct {
 	// dependency is acyclic: catalog never imports library.
 	Work *catalog.Work `gorm:"-" json:"work,omitempty"`
 }
+
+// Removal remembers when a user took a work out of their library (the
+// entry row itself is deleted), so a change stamped before it, sent later
+// from an offline device, can't bring the entry back.
+type Removal struct {
+	UserID uint      `gorm:"primaryKey"`
+	WorkID uuid.UUID `gorm:"type:uuid;primaryKey"`
+	Stamp  string    `gorm:"size:64;not null"`
+}
+
+func (Removal) TableName() string { return "library_removals" }

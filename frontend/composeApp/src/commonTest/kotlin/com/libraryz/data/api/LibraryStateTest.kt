@@ -175,3 +175,203 @@ class LibraryStateTest {
         assertEquals("new", state.continueReading?.workId)
     }
 }
+
+class LibraryOfflineTest {
+
+    private class Memory(var value: String? = null) : TokenStore {
+        override suspend fun load() = value
+        override suspend fun save(token: String) { value = token }
+        override suspend fun clear() { value = null }
+    }
+
+    private fun state(disk: Memory, online: () -> Boolean, server: String = BASE) = LibraryState(
+        ApiClient(
+            BASE, tokenProvider = { "t" },
+            engine = MockEngine {
+                if (!online()) throw kotlinx.io.IOException("connection refused")
+                val (s, body, h) = jsonBody("[${entryJson("w1", "reading")},${entryJson("w2", "want")}]")
+                respond(body, s, h)
+            },
+        ),
+        storeFactory = { disk },
+        server = server,
+    )
+
+    @Test
+    fun unreachableShowsTheSavedCopy() = runTest {
+        val disk = Memory()
+        state(disk, online = { true }).refresh()
+
+        // A later start with no server: the saved library, not an error.
+        val offline = state(disk, online = { false })
+        offline.refresh()
+        assertNull(offline.error)
+        assertTrue(offline.offline)
+        assertEquals(setOf("w1", "w2"), offline.items!!.map { it.workId }.toSet())
+        assertEquals("reading", offline.entryFor("w1")?.status)
+        // A status tab filters the saved copy.
+        offline.refresh("want")
+        assertEquals(listOf("w2"), offline.items!!.map { it.workId })
+        // Looking one up offline keeps what's saved.
+        offline.loadEntry("w1")
+        assertEquals("reading", offline.entryFor("w1")?.status)
+    }
+
+    @Test
+    fun otherServerOrSignOutLeavesNothing() = runTest {
+        val disk = Memory()
+        state(disk, online = { true }).refresh()
+
+        val elsewhere = state(disk, online = { false }, server = "http://other")
+        elsewhere.refresh()
+        assertNotNull(elsewhere.error)
+        assertTrue(!elsewhere.offline)
+
+        state(disk, online = { true }).forget()
+        val after = state(disk, online = { false })
+        after.refresh()
+        assertNotNull(after.error)
+    }
+}
+
+class LibraryQueueTest {
+
+    private class Memory(var value: String? = null) : TokenStore {
+        override suspend fun load() = value
+        override suspend fun save(token: String) { value = token }
+        override suspend fun clear() { value = null }
+    }
+
+    private class Server {
+        var online = true
+        val puts = mutableListOf<String>()
+        val deletes = mutableListOf<String>()
+        var stored = entryJson("w1", "want")
+        val engine = MockEngine { req ->
+            if (!online) throw kotlinx.io.IOException("connection refused")
+            when (req.method) {
+                HttpMethod.Put -> {
+                    val body = (req.body as io.ktor.http.content.TextContent).text
+                    puts += body
+                    stored = entryJson("w1", "reading").replace("\"status\":\"reading\"", "\"status\":\"reading\",\"current_page\":42")
+                    val (s, b, h) = jsonBody(stored)
+                    respond(b, s, h)
+                }
+                HttpMethod.Delete -> {
+                    deletes += req.url.parameters["stamp"].orEmpty()
+                    respond("", HttpStatusCode.NoContent)
+                }
+                else -> {
+                    val (s, b, h) = jsonBody("[$stored]")
+                    respond(b, s, h)
+                }
+            }
+        }
+    }
+
+    private fun state(disk: Memory, server: Server) =
+        LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = server.engine), storeFactory = { disk }, server = BASE)
+
+    @Test
+    fun changesMadeOfflineApplyAtOnceAndAreSentLater() = runTest {
+        val disk = Memory()
+        val server = Server()
+        state(disk, server).refresh()
+
+        // Offline: the change shows at once and waits, even across a restart.
+        server.online = false
+        val offline = state(disk, server)
+        offline.refresh()
+        val ub = offline.upsert("w1", UpsertLibraryRequest(currentPage = 42, status = "reading"))
+        assertEquals(42, ub.currentPage)
+        assertEquals("reading", offline.entryFor("w1")?.status)
+        assertEquals(1, offline.pending.size)
+        assertTrue(server.puts.isEmpty())
+
+        val later = state(disk, server)
+        later.refresh()
+        assertEquals(42, later.entryFor("w1")?.currentPage)
+        assertEquals(1, later.pending.size)
+
+        // Back online: sent once, with stamps, and the queue empties.
+        server.online = true
+        later.refresh()
+        assertEquals(1, server.puts.size)
+        assertTrue("\"stamps\"" in server.puts[0] && "\"progress\"" in server.puts[0], server.puts[0])
+        assertTrue(later.pending.isEmpty())
+        assertEquals(42, later.entryFor("w1")?.currentPage)
+    }
+
+    @Test
+    fun anotherUsersQueueIsDropped() = runTest {
+        val disk = Memory()
+        val server = Server()
+        val a = state(disk, server)
+        a.signedInAs(1)
+        server.online = false
+        a.remove("w1")
+        assertEquals(1, a.pending.size)
+
+        // Session expired; someone else signs in on this device.
+        server.online = true
+        val b = state(disk, server)
+        b.signingIn()
+        b.refresh()
+        assertTrue(server.deletes.isEmpty(), "held until we know who signed in")
+        b.signedInAs(2)
+        assertTrue(server.deletes.isEmpty())
+        assertTrue(b.pending.isEmpty())
+    }
+
+    @Test
+    fun theSameUsersQueueIsSentAfterSigningIn() = runTest {
+        val disk = Memory()
+        val server = Server()
+        val a = state(disk, server)
+        a.signedInAs(1)
+        server.online = false
+        a.remove("w1")
+
+        server.online = true
+        val again = state(disk, server)
+        again.signingIn()
+        again.signedInAs(1)
+        assertEquals(1, server.deletes.size)
+        assertTrue(server.deletes[0].endsWith(".0000." + server.deletes[0].substringAfterLast('.')))
+        assertTrue(again.pending.isEmpty())
+    }
+
+    @Test
+    fun newerProgressFromAnotherDeviceIsOfferedNotJumpedTo() = runTest {
+        val disk = Memory()
+        var page = 0
+        var stamp = ""
+        val engine = MockEngine { req ->
+            if (req.method == HttpMethod.Put) {
+                val body = (req.body as io.ktor.http.content.TextContent).text
+                page = Regex("\"current_page\":(\\d+)").find(body)!!.groupValues[1].toInt()
+                stamp = Regex("\"progress\":\"([^\"]+)\"").find(body)!!.groupValues[1]
+            }
+            val e = entryJson("w1", "reading").replace(
+                "\"status\":\"reading\"",
+                "\"status\":\"reading\",\"current_page\":$page,\"total_pages\":300,\"progress_stamp\":\"$stamp\"",
+            )
+            val (s, b, h) = jsonBody(if (req.method == HttpMethod.Put) e else "[$e]")
+            respond(b, s, h)
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+        state.upsert("w1", UpsertLibraryRequest(currentPage = 40, totalPages = 300))
+        // Our own progress: nothing to offer.
+        assertNull(state.resumePoint("w1").second)
+
+        // Another device reads on to p. 212.
+        page = 212
+        stamp = "9999999999999.0000.phone"
+        state.refresh()
+        val (resume, elsewhere) = state.resumePoint("w1")
+        assertEquals(40, resume?.currentPage)
+        assertEquals(212, elsewhere?.currentPage)
+    }
+}
+

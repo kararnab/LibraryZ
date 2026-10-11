@@ -18,9 +18,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DevicesOther
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +39,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,7 +51,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.libraryz.AppVersion
+import com.libraryz.data.BookCache
 import com.libraryz.data.User
+import com.libraryz.data.formatBytes
+import kotlinx.coroutines.launch
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.SectionLabel
 import com.libraryz.ui.components.ServerAddressDialog
@@ -57,7 +64,8 @@ import com.libraryz.ui.components.rememberMultiTap
  * Account + app settings: who you're signed in as, reader text size,
  * signing out (this device or everywhere), and which server the app talks
  * to. The one home for account actions, so they aren't scattered across
- * per-screen overflow menus.
+ * per-screen overflow menus. Where the platform keeps books, also how much
+ * room [books] may take.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,11 +77,15 @@ fun SettingsScreen(
     onPrefsChange: (ReaderPrefs) -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
+    books: BookCache,
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     var confirmEverywhere by remember { mutableStateOf(false) }
     var editServer by remember { mutableStateOf(false) }
+    var pickLimit by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -113,6 +125,27 @@ fun SettingsScreen(
                     )
                 }
 
+                if (books.enabled) {
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                    SectionLabel("Books on this device")
+                    val count = books.books.size
+                    SettingsRow(
+                        icon = Icons.Rounded.OfflinePin,
+                        title = "Space for books",
+                        subtitle = "${if (count == 1) "1 book" else "$count books"} · ${formatBytes(books.usedBytes)} of ${limitLabel(books.limitBytes)}. " +
+                            "Books you open are kept here; the least recently read go first, except those you keep offline.",
+                        onClick = { pickLimit = true },
+                    )
+                    if (count > 0) {
+                        SettingsRow(
+                            icon = Icons.Rounded.DeleteSweep,
+                            title = "Remove books from this device",
+                            subtitle = "They download again when you open them",
+                            onClick = { confirmClear = true },
+                        )
+                    }
+                }
+
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 SectionLabel("Sessions")
                 SettingsRow(
@@ -143,6 +176,47 @@ fun SettingsScreen(
             signedIn = user != null,
             onSave = { editServer = false; onServerUrlChange(it) },
             onDismiss = { editServer = false },
+        )
+    }
+
+    if (pickLimit) {
+        AlertDialog(
+            onDismissRequest = { pickLimit = false },
+            title = { Text("Space for books") },
+            text = {
+                Column {
+                    BookCache.LIMITS.forEach { limit ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
+                                pickLimit = false
+                                scope.launch { books.setLimit(limit) }
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = books.limitBytes == limit, onClick = null)
+                            Text(limitLabel(limit), modifier = Modifier.padding(start = 12.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { pickLimit = false }) { Text("Done") } },
+        )
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Remove books from this device?") },
+            text = { Text("Books you keep offline are removed too. Your library and reading progress are kept.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    scope.launch { books.clear() }
+                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            },
         )
     }
 
@@ -249,4 +323,11 @@ private fun AccountCard(user: User?, modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+private fun limitLabel(bytes: Long): String = when {
+    bytes == BookCache.NO_LIMIT -> "No limit"
+    bytes % (1024 * BookCache.MB) == 0L -> "${bytes / (1024 * BookCache.MB)} GB"
+    bytes % BookCache.MB == 0L -> "${bytes / BookCache.MB} MB"
+    else -> formatBytes(bytes)
 }

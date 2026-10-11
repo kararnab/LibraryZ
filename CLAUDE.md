@@ -121,8 +121,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (187 each;
-# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (219 each;
+# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -225,8 +225,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 153 backend + 187 frontend
-  tests** (+1 with `-tags=eval`, +17 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-11: 159 backend + 219 frontend
+  tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -439,6 +439,26 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   single source: it generates `com.libraryz.AppVersion` (Settings › About)
   and is the Android `versionName`. The desktop installer's
   `packageVersion` stays separate (jpackage requires MAJOR ≥ 1).
+- **Offline (Phase 8, PLAN.md).** Saved books (`data/BookCache.kt`, 8.1)
+  open from disk **without any request**, online or not: an edition's file
+  never changes, so don't add a freshness check in front of them. Books are
+  kept only after their bytes hash to the server's `X-Content-SHA256`; that
+  check runs off the open path. Android + Desktop only (`createBookFiles` is
+  null on Wasm/iOS). `LibraryState` keeps a saved copy of the library
+  (`createLibraryStore`, cleared at sign-out) and shows it when the server is
+  unreachable; offline Browse lists the books on the device. **Library
+  writes are stamped and queued (8.3):** every `LibraryState.upsert` /
+  `remove` applies on the device at once, waits in a saved queue, and is
+  sent by `sync`; the server merges per field group (status / progress /
+  rating / shelf / notes), newest hybrid-logical-clock stamp wins
+  (`internal/library/stamp.go`, `data/Hlc.kt`). Keep `applyLocally`
+  (LibraryMerge.kt) in step with `mergeInto` (service.go): the app shows
+  what the server will store. Removals are remembered in
+  `library_removals`, not by soft-deleting `user_books`. **Offline UI
+  (8.4):** `ApiClient.reachable` follows every request (any answer = online)
+  and drives the app-wide `OfflineStrip`; screens that only work online are
+  listed in `needsConnection` (nav/Nav.kt) and `Navigator.guard` keeps them
+  from opening offline. Add a new online-only screen there.
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

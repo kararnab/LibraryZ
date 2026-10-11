@@ -81,7 +81,7 @@ class ReaderKeyboardTest {
             CompositionLocalProvider(LocalFullscreen provides fullscreen) {
                 LibraryZTheme {
                     ReaderScreen(
-                        api = api, editionId = "e1", format = "PDF", title = "T", authors = null,
+                        api = api, editionId = "e1", workId = "w1", format = "PDF", title = "T", authors = null,
                         resumeFrom = null, finished = false, rating = null,
                         prefs = ReaderPrefs(), onPrefsChange = {},
                         onProgress = { reported = it },

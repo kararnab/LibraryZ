@@ -53,3 +53,6 @@ actual fun createServerUrlStore(): TokenStore = FileTokenStore(serverUrlFile())
  */
 fun startupServerUrl(): String =
     runCatching { serverUrlFile().takeIf { it.exists() }?.readText() }.getOrNull()?.let(::parseServerUrl) ?: DefaultBaseUrl
+
+actual fun createLibraryStore(): TokenStore =
+    FileTokenStore(File(AndroidContextHolder.appContext.filesDir, "library.json"))
