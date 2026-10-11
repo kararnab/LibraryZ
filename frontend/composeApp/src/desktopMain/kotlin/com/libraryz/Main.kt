@@ -6,6 +6,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.awt.ComposeWindow
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -17,18 +19,23 @@ import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.theme.LocalSystemDarkTheme
 import com.libraryz.ui.Fullscreen
 import com.libraryz.ui.LocalFullscreen
+import java.awt.Taskbar
 import java.awt.Toolkit
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 fun main(args: Array<String>) {
     // Another copy is running and took the link (or the launch): done.
     if (!DesktopLinks.start(args)) return
-    setLinuxWindowClass("LibraryZ")
+    setLinuxWindowClass(LinuxWindowClass)
     LinuxColorScheme.start()
+    val icon = appIcon()?.let { BitmapPainter(it.toComposeImageBitmap()) }
     application {
         val state = rememberWindowState(size = DpSize(1280.dp, 800.dp))
         Window(
             onCloseRequest = ::exitApplication,
             title = "LibraryZ",
+            icon = icon,
             state = state,
         ) {
             // A link or a second launch brings the window forward.
@@ -48,6 +55,22 @@ fun main(args: Array<String>) {
             ) { App() }
         }
     }
+}
+
+/**
+ * The "Lz" mark (branding/generate_icons.py). The window's icon is what Linux
+ * docks and Windows' taskbar show; macOS's dock reads [Taskbar] instead, and
+ * installed apps use the packaging icon (build.gradle.kts).
+ */
+private fun appIcon(): BufferedImage? {
+    val image = object {}.javaClass.getResourceAsStream("/libraryz-icon.png")
+        ?.use(ImageIO::read) ?: return null
+    runCatching {
+        if (Taskbar.isTaskbarSupported() && Taskbar.getTaskbar().isSupported(Taskbar.Feature.ICON_IMAGE)) {
+            Taskbar.getTaskbar().iconImage = image
+        }
+    }
+    return image
 }
 
 /**

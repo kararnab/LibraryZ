@@ -435,6 +435,16 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   until it's popped; top-level destinations keep theirs for good. In the
   text reader don't animate anything that changes the text area's size
   (bars only fade): it would re-page the whole book every frame.
+- **App icon (2026-10-11): `frontend/branding/generate_icons.py`** draws the
+  rail's "Lz" mark (Literata 600 from the bundled TTF, Theme.kt's
+  primaryContainer tile) into every platform's icon: Android adaptive +
+  monochrome vectors, desktop window PNG + jpackage png/ico/icns
+  (`composeApp/icons/`), web favicons, and `branding/ios-AppIcon-1024.png`
+  (there's no Xcode project yet). Edit the script and re-run it; don't hand-edit
+  the outputs. GNOME 46 ignores X11 window icons, so on Linux `DesktopLinks`
+  copies the icon to `~/.local/share/icons` and names it in a hidden entry with
+  `StartupWMClass=LibraryZ` (the link handler when installed,
+  `libraryz-dev.desktop` for `./gradlew run`).
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the
   single source: it generates `com.libraryz.AppVersion` (Settings › About)
   and is the Android `versionName`. The desktop installer's

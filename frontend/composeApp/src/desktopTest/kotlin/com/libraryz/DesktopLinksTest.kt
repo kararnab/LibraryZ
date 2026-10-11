@@ -74,4 +74,14 @@ class DesktopLinksTest {
         assertTrue("MimeType=x-scheme-handler/libraryz;\n" in entry)
         assertTrue("NoDisplay=true\n" in entry)
     }
+
+    @Test
+    fun linuxEntryNamesTheWindowAndIcon() {
+        val entry = linuxEntry(listOf("/usr/bin/java", "-cp", "a b:100%"), "/home/u/lz.png", links = false)
+        assertTrue("Exec=\"/usr/bin/java\" \"-cp\" \"a b:100%%\"\n" in entry, entry)
+        assertTrue("StartupWMClass=$LinuxWindowClass\n" in entry)
+        assertTrue("Icon=/home/u/lz.png\n" in entry)
+        assertTrue("MimeType" !in entry)
+        assertTrue("StartupWMClass=" in linuxHandlerEntry("/opt/libraryz/bin/LibraryZ"))
+    }
 }

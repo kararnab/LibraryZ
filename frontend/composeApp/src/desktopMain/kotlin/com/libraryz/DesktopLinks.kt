@@ -50,6 +50,8 @@ internal object DesktopLinks {
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.APP_OPEN_URI)) {
             Desktop.getDesktop().setOpenURIHandler { receive(it.uri.toString()) }
         }
+        // Before the window opens: GNOME picks the window's entry (and icon) then.
+        if (isLinux) registerLinuxIcon(devCommand = if (appPath == null) currentCommand() else null)
         appPath?.let { path -> thread(isDaemon = true, name = "libraryz-scheme") { registerScheme(path) } }
         return true
     }
@@ -166,9 +168,13 @@ private fun registerScheme(appPath: String) {
     }
 }
 
-private fun registerLinux(appPath: String) {
-    val dataHome = System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() }
+private val isLinux = System.getProperty("os.name").orEmpty().startsWith("Linux")
+
+private val dataHome: String
+    get() = System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() }
         ?: File(System.getProperty("user.home"), ".local/share").path
+
+private fun registerLinux(appPath: String) {
     val apps = File(dataHome, "applications")
     val entry = File(apps, LinuxHandlerFile)
     val content = linuxHandlerEntry(appPath)
@@ -180,21 +186,71 @@ private fun registerLinux(appPath: String) {
 }
 
 internal const val LinuxHandlerFile = "libraryz-url-handler.desktop"
+internal const val LinuxDevFile = "libraryz-dev.desktop"
+
+/** The window's X11 WM_CLASS (Main.kt), which desktop entries match on. */
+internal const val LinuxWindowClass = "LibraryZ"
 
 /** A hidden desktop entry that opens libraryz:// links with [appPath]. */
-internal fun linuxHandlerEntry(appPath: String): String {
-    // Desktop Entry spec: quote the path; inside quotes, escape " ` $ \.
-    val quoted = appPath.replace(Regex("""(["`$\\])"""), """\\$1""")
+internal fun linuxHandlerEntry(appPath: String): String =
+    linuxEntry(listOf(appPath), linuxIcon.path) + "MimeType=x-scheme-handler/$AppLinkScheme;\n"
+
+/**
+ * A hidden desktop entry for the window: GNOME (46+) no longer shows a
+ * window's own icon, only that of the entry whose StartupWMClass matches.
+ */
+internal fun linuxEntry(command: List<String>, icon: String, links: Boolean = true): String {
+    // Desktop Entry spec: quote each argument; inside quotes, escape " ` $ \,
+    // and % (a field code) is written %%.
+    val exec = command.joinToString(" ") {
+        "\"" + it.replace(Regex("""(["`$\\])"""), """\\$1""").replace("%", "%%") + "\""
+    }
     return """
         |[Desktop Entry]
         |Type=Application
         |Name=LibraryZ
-        |Exec="$quoted" %u
+        |Exec=$exec${if (links) " %u" else ""}
+        |Icon=$icon
+        |StartupWMClass=$LinuxWindowClass
         |NoDisplay=true
         |Terminal=false
-        |MimeType=x-scheme-handler/$AppLinkScheme;
         |""".trimMargin()
 }
+
+/** Where [registerLinuxIcon] puts the icon; entries name the file, not a theme icon. */
+private val linuxIcon: File
+    get() = File(dataHome, "icons/hicolor/256x256/apps/libraryz.png")
+
+/**
+ * Installs the "Lz" icon into the user's icon theme, and for `./gradlew run`
+ * ([devCommand], the JVM's command line) a hidden entry pointing at it; an
+ * installed app's link handler entry names it already.
+ */
+private fun registerLinuxIcon(devCommand: List<String>?) {
+    runCatching {
+        val bytes = object {}.javaClass.getResourceAsStream("/libraryz-icon.png")?.use { it.readBytes() }
+            ?: return
+        val icon = linuxIcon
+        if (!(icon.isFile && icon.readBytes().contentEquals(bytes))) {
+            icon.parentFile.mkdirs()
+            icon.writeBytes(bytes)
+        }
+        if (devCommand == null) return
+        val entry = File(dataHome, "applications/$LinuxDevFile")
+        val content = linuxEntry(devCommand, icon.path, links = false)
+        if (entry.isFile && entry.readText() == content) return
+        entry.parentFile.mkdirs()
+        entry.writeText(content)
+    }
+}
+
+/**
+ * How this JVM was started, to start it again. Not ProcessHandle's info: it
+ * leaves out the arguments when they're long (`./gradlew run`'s classpath).
+ */
+private fun currentCommand(): List<String>? = runCatching {
+    File("/proc/self/cmdline").readText().split('\u0000').filter { it.isNotEmpty() }
+}.getOrNull()?.takeIf { it.isNotEmpty() }
 
 private fun registerWindows(appPath: String) {
     val key = """HKCU\Software\Classes\$AppLinkScheme"""
