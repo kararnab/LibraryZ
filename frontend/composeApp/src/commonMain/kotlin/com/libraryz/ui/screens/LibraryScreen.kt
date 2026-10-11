@@ -54,6 +54,7 @@ import com.libraryz.data.api.LibraryState
 import com.libraryz.data.authorsShort
 import com.libraryz.data.pickReadableEdition
 import com.libraryz.theme.LibraryZ
+import com.libraryz.ui.components.LoadErrorState
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
@@ -164,12 +165,10 @@ fun LibraryScreen(
                         Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        EmptyState(
-                            title = "Couldn't load your library",
+                        LoadErrorState(
+                            title = "Couldn’t load your library",
                             body = err.orEmpty(),
-                            action = {
-                                Button(onClick = { scope.launch { state.refresh() } }) { Text("Retry") }
-                            },
+                            onRetry = { scope.launch { state.refresh() } },
                         )
                     }
                     LoadPhase.Empty -> Box(

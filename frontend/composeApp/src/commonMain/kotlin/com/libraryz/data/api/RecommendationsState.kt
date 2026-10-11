@@ -28,7 +28,7 @@ class RecommendationsState(private val api: ApiClient) {
         try {
             items = api.recommendations()
         } catch (e: Throwable) {
-            error = e.message ?: "Failed to load recommendations"
+            error = api.describe(e)
         }
     }
 

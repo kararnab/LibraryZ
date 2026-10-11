@@ -142,6 +142,8 @@ fun EditWorkSheet(
     isDesktop: Boolean,
     onDismiss: () -> Unit,
     onSubmit: suspend (Map<String, JsonElement>) -> Unit,
+    // Turns a failed submit into words (ApiClient.describe).
+    describeError: (Throwable) -> String,
 ) {
     val fields = remember(work.id) { fieldsFor(work) }
     val values = remember(work.id) { mutableStateMapOf<String, String>() }
@@ -167,7 +169,7 @@ fun EditWorkSheet(
                 onSubmit(patch)
                 sentCount = patch.size
             } catch (e: Throwable) {
-                submitError = (e as? ApiException)?.userMessage ?: e.message ?: "Couldn’t send your suggestion."
+                submitError = describeError(e)
             } finally {
                 submitting = false
             }

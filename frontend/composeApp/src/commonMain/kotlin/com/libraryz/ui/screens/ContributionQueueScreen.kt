@@ -79,6 +79,7 @@ import com.libraryz.data.Work
 import com.libraryz.data.api.ContributionsState
 import com.libraryz.data.authorsFull
 import com.libraryz.theme.LibraryZ
+import com.libraryz.ui.components.LoadErrorState
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
@@ -248,17 +249,10 @@ fun ContributionQueueScreen(
             QueueView.Error -> Column(Modifier.fillMaxSize()) {
                 QueueHeader(null)
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    EmptyState(
+                    LoadErrorState(
                         title = "Couldn’t load the queue",
-                        body = "Check your connection and try again.",
-                        icon = Icons.Outlined.CloudOff,
-                        action = {
-                            FilledTonalButton(onClick = { scope.launch { state.refresh() } }) {
-                                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Try again")
-                            }
-                        },
+                        body = state.error.orEmpty(),
+                        onRetry = { scope.launch { state.refresh() } },
                     )
                 }
             }
@@ -365,7 +359,7 @@ fun ContributionQueueScreen(
                             if (approve) state.approve(c.id) else state.reject(c.id)
                             selectedId = null
                         } catch (e: Throwable) {
-                            actionError = e.message ?: (if (approve) "Approve failed" else "Reject failed")
+                            actionError = state.describe(e)
                         }
                     }
                 }) {

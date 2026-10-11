@@ -50,6 +50,8 @@ import com.libraryz.AppVersion
 import com.libraryz.data.User
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.SectionLabel
+import com.libraryz.ui.components.ServerAddressDialog
+import com.libraryz.ui.components.rememberMultiTap
 
 /**
  * Account + app settings: who you're signed in as, reader text size,
@@ -62,6 +64,7 @@ import com.libraryz.ui.components.SectionLabel
 fun SettingsScreen(
     user: User?,
     serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
     prefs: ReaderPrefs,
     onPrefsChange: (ReaderPrefs) -> Unit,
     onSignOut: () -> Unit,
@@ -70,6 +73,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     var confirmEverywhere by remember { mutableStateOf(false) }
+    var editServer by remember { mutableStateOf(false) }
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -127,10 +131,19 @@ fun SettingsScreen(
 
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 SectionLabel("About", Modifier.padding(top = 0.dp))
-                SettingsRow(icon = Icons.Rounded.Dns, title = "Server", subtitle = serverUrl, onClick = null)
+                SettingsRow(icon = Icons.Rounded.Dns, title = "Server", subtitle = serverUrl, onClick = rememberMultiTap(taps = 3) { editServer = true })
                 SettingsRow(icon = Icons.Rounded.Info, title = "Version", subtitle = AppVersion, onClick = null)
             }
         }
+    }
+
+    if (editServer) {
+        ServerAddressDialog(
+            current = serverUrl,
+            signedIn = user != null,
+            onSave = { editServer = false; onServerUrlChange(it) },
+            onDismiss = { editServer = false },
+        )
     }
 
     if (confirmEverywhere) {

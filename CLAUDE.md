@@ -439,11 +439,29 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in
   `commonTest`. Don't go back to `expect class` for it — it makes the
   test surface miserable.
-- **Android cleartext config** allows `10.0.2.2` (emulator), `localhost`,
-  `127.0.0.1`, and `192.168.29.234` (dev LAN IP). For real-device runs,
-  change `BaseUrl.android.kt` to the LAN IP — the cleartext rule is
-  already in place at
-  `androidApp/src/main/res/xml/network_security_config.xml`.
+- **Server address is editable (triple-tap Settings › Server, or
+  "Server: …" on sign-in; `rememberMultiTap(taps = 3)`)**, saved per device (`ServerUrlStore`, `createServerUrlStore`).
+  `parseServerUrl` validates it (http/https, host = localhost / IPv4 /
+  [IPv6] / DNS name, optional port and path; a bare `host:port` gets
+  `http://`); blank or invalid falls back to `DefaultBaseUrl`. Changing it
+  starts the catalogue states afresh; between dev addresses
+  (`isDevServerUrl`: loopback / local network, often one machine) the
+  session carries over, otherwise it signs out first so tokens never reach
+  a server that didn't issue them; `ApiClient.baseUrl` is a `var`. On Android the
+  ACCESS_LOCAL_NETWORK check reads the saved address (`startupServerUrl`),
+  so switching to a LAN IP on Android 17 needs one app restart for the
+  prompt. **Android cleartext**: debug builds allow it everywhere
+  (`androidApp/src/debug/res/xml/network_security_config.xml`); release
+  keeps `src/main`'s list (`10.0.2.2`, `localhost`, `127.0.0.1`,
+  `192.168.29.234`).
+- **Errors shown to readers go through `describeError` / `api.describe(e)`**
+  (`data/api/Errors.kt`), never `e.message`: engine text carries URLs and
+  timeouts. No answer (`isUnreachable`: an `IOException` in the cause chain,
+  or the browser's failed fetch) → "Can’t reach the library at {host}…",
+  4xx → the backend's message, 5xx → a generic retry line. Full-screen load
+  failures use `LoadErrorState` (the canvas's Review error board: cloud-off,
+  tonal "Try again"). Local failures (saving a download, a book that won't
+  open) keep their own message.
 - **Versions are pinned in `frontend/gradle/libs.versions.toml`** —
   Kotlin 2.4.21, Compose Multiplatform 1.12.1, AGP 9.4.1 (Gradle 9.8.1,
   compileSdk 37). Compose deps use direct coordinates, not the deprecated

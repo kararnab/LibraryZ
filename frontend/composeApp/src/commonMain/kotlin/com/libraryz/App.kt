@@ -2,6 +2,7 @@ package com.libraryz
 
 import androidx.compose.foundation.layout.Arrangement
 import com.libraryz.data.BookLayouts
+import com.libraryz.data.api.describe
 import com.libraryz.data.api.createReaderLayoutStore
 import com.libraryz.data.api.createReaderPrefsStore
 import com.libraryz.ui.screens.VerifyEmailBanner
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.theme.Motion
+import com.libraryz.ui.components.LoadErrorState
 import com.libraryz.ui.components.LoadPhase
 import com.libraryz.ui.components.PhaseCrossfade
 import androidx.compose.animation.AnimatedContent
@@ -104,6 +106,10 @@ import com.libraryz.data.api.AuthState
 import com.libraryz.data.api.ContributionsState
 import com.libraryz.data.api.CreateWorkRequest
 import com.libraryz.data.api.DefaultBaseUrl
+import com.libraryz.data.api.ServerUrlStore
+import com.libraryz.data.api.createServerUrlStore
+import com.libraryz.data.api.isDevServerUrl
+import com.libraryz.data.api.parseServerUrl
 import com.libraryz.data.api.LibraryState
 import com.libraryz.data.api.RecommendationsState
 import com.libraryz.data.api.UpsertLibraryRequest
@@ -134,6 +140,7 @@ import com.libraryz.ui.screens.UploadSubmission
 import com.libraryz.ui.screens.WorkDetailScreen
 import com.libraryz.ui.screens.inferFormatFromName
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.libraryz.data.api.RemovalRequest
 
 val LocalSnackbar = compositionLocalOf<SnackbarHostState> {
@@ -161,18 +168,57 @@ fun App() {
                 auth.setUserFetcher { runCatching { client.me() }.getOrNull() }
             }
         }
-        val works = remember { WorksState(api) }
-        val contributions = remember { ContributionsState(api) }
-        val library = remember { LibraryState(api) }
-        val recs = remember { RecommendationsState(api) }
+        // The server chosen in Settings (or on sign-in), loaded before the
+        // session is restored so that's checked against the right server.
+        val serverStore = remember { ServerUrlStore(::createServerUrlStore) }
+        var serverUrl by remember { mutableStateOf(DefaultBaseUrl) }
+        // Another server is another catalogue: start these afresh.
+        val works = remember(serverUrl) { WorksState(api) }
+        val contributions = remember(serverUrl) { ContributionsState(api) }
+        val library = remember(serverUrl) { LibraryState(api) }
+        val recs = remember(serverUrl) { RecommendationsState(api) }
 
-        LaunchedEffect(Unit) { auth.bootstrap() }
-        LaunchedEffect(auth.isAuthenticated) {
+        LaunchedEffect(Unit) {
+            serverStore.load()?.let { api.baseUrl = it; serverUrl = it }
+            auth.bootstrap()
+        }
+        val scope = rememberCoroutineScope()
+        // Blank or invalid input means the default. Between dev addresses
+        // (often one machine by two names) the session carries over: the new
+        // server either accepts it or the refresh fails and we land on
+        // sign-in. Otherwise its tokens would go to a server that didn't
+        // issue them, so it ends on the old one (best effort, briefly) first.
+        val changeServer: (String) -> Unit = { input ->
+            scope.launch {
+                val parsed = parseServerUrl(input)
+                val url = parsed ?: DefaultBaseUrl
+                if (url != serverUrl) {
+                    val keepSession = isDevServerUrl(serverUrl) && isDevServerUrl(url)
+                    if (auth.isAuthenticated && !keepSession) {
+                        auth.refreshToken?.let { rt -> withTimeoutOrNull(3_000) { runCatching { api.logout(rt) } } }
+                        auth.clear()
+                    }
+                    api.baseUrl = url
+                    serverUrl = url
+                    serverStore.save(url.takeIf { it != DefaultBaseUrl })
+                    if (auth.isAuthenticated) auth.reloadUser()
+                }
+                snackbar.showSnackbar(
+                    when {
+                        parsed == null && input.isNotBlank() -> "That isn’t a valid server address. Using the default, $url."
+                        else -> "Server: $url"
+                    },
+                )
+            }
+        }
+        // Keyed on the states too: a server switch that keeps the session
+        // loads the new server's catalogue.
+        LaunchedEffect(auth.isAuthenticated, works) {
             if (auth.isAuthenticated && works.items == null) works.refresh()
         }
         // Pre-load the moderator queue once we know the user is a moderator —
         // this also drives the badge count on the nav rail / overflow item.
-        LaunchedEffect(auth.isModerator) {
+        LaunchedEffect(auth.isModerator, contributions) {
             if (auth.isModerator && contributions.items == null) contributions.refresh()
         }
 
@@ -195,6 +241,8 @@ fun App() {
                             contributions = contributions,
                             library = library,
                             recs = recs,
+                            serverUrl = serverUrl,
+                            onServerUrlChange = changeServer,
                         )
                     }
                 }
@@ -224,6 +272,8 @@ internal fun Root(
     library: LibraryState,
     recs: RecommendationsState,
     startAt: Screen? = null,
+    serverUrl: String = api.baseUrl,
+    onServerUrlChange: (String) -> Unit = {},
 ) {
     // An emailed reset / verification link opens its screen: the page URL
     // on the web, the launch intent / arguments elsewhere.
@@ -301,7 +351,7 @@ internal fun Root(
                 api.logoutAll()
                 auth.clear()
             } catch (e: Throwable) {
-                snackbar.showSnackbar("Couldn't sign out everywhere: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                snackbar.showSnackbar("Couldn’t sign out everywhere. ${api.describe(e)}")
             }
         }
     }
@@ -330,11 +380,11 @@ internal fun Root(
                     try {
                         recs.undismiss(dismissed)
                     } catch (e: Throwable) {
-                        snackbar.showSnackbar("Couldn't undo: ${e.message ?: "unknown"}")
+                        snackbar.showSnackbar("Couldn’t undo. ${api.describe(e)}")
                     }
                 }
             } catch (e: Throwable) {
-                snackbar.showSnackbar("Couldn't dismiss: ${e.message ?: "unknown"}")
+                snackbar.showSnackbar("Couldn’t dismiss. ${api.describe(e)}")
             }
         }
     }
@@ -345,7 +395,7 @@ internal fun Root(
     }
 
     // Load the library up front: it powers "Continue reading" on Browse.
-    LaunchedEffect(auth.isAuthenticated) {
+    LaunchedEffect(auth.isAuthenticated, library) {
         if (auth.isAuthenticated) library.refresh()
     }
 
@@ -390,9 +440,14 @@ internal fun Root(
             scope.launch { snackbar.showSnackbar("Download not yet implemented on this platform.") }
         } else {
             scope.launch {
+                snackbar.showSnackbar("Downloading ${work.title}…")
+                val file = try {
+                    api.downloadEditionFile(ed.id)
+                } catch (e: Throwable) {
+                    snackbar.showSnackbar("Download failed. ${api.describe(e)}")
+                    return@launch
+                }
                 try {
-                    snackbar.showSnackbar("Downloading ${work.title}…")
-                    val file = api.downloadEditionFile(ed.id)
                     // Server names the file ("<Title> - <Authors>.<format>");
                     // the local name is only a fallback for older backends.
                     val name = file.filename?.let(::safeDownloadName)
@@ -400,7 +455,8 @@ internal fun Root(
                     val path = saveDownload(name, file.bytes)
                     snackbar.showSnackbar("Saved to $path")
                 } catch (e: Throwable) {
-                    snackbar.showSnackbar("Download failed: ${e.message ?: "unknown"}")
+                    // A local problem (disk full, no permission): its own message says which.
+                    snackbar.showSnackbar("Couldn’t save the file: ${e.message ?: "unknown error"}")
                 }
             }
         }
@@ -412,7 +468,7 @@ internal fun Root(
             try {
                 library.upsert(workId, req)
             } catch (e: Throwable) {
-                snackbar.showSnackbar("Couldn't update library: ${e.message ?: "unknown"}")
+                snackbar.showSnackbar("Couldn’t update your library. ${api.describe(e)}")
             }
         }
     }
@@ -422,7 +478,7 @@ internal fun Root(
                 library.remove(workId)
                 snackbar.showSnackbar("Removed from your library.")
             } catch (e: Throwable) {
-                snackbar.showSnackbar("Couldn't remove: ${e.message ?: "unknown"}")
+                snackbar.showSnackbar("Couldn’t remove. ${api.describe(e)}")
             }
         }
     }
@@ -440,7 +496,7 @@ internal fun Root(
                     }
                     snackbar.showSnackbar("Removed “${work.title}”.")
                 } catch (e: Throwable) {
-                    snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                    snackbar.showSnackbar("Couldn’t remove. ${api.describe(e)}")
                 }
             }
         }
@@ -452,7 +508,7 @@ internal fun Root(
                     works.removeEdition(work.id, ed.id, removal)
                     snackbar.showSnackbar("Removed the ${ed.format.uppercase()} edition.")
                 } catch (e: Throwable) {
-                    snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
+                    snackbar.showSnackbar("Couldn’t remove. ${api.describe(e)}")
                 }
             }
         }
@@ -549,6 +605,8 @@ internal fun Root(
                 sessionExpired = expiredNotice,
                 passwordChanged = passwordChanged,
                 onForgotPassword = { email -> nav.push(Screen.ForgotPassword(email)) },
+                serverUrl = serverUrl,
+                onServerUrlChange = onServerUrlChange,
                 onAuthenticated = { session ->
                     expiredNotice = false
                     passwordChanged = false
@@ -656,7 +714,8 @@ internal fun Root(
 
             s == Screen.Settings -> SettingsScreen(
                 user = auth.user,
-                serverUrl = DefaultBaseUrl,
+                serverUrl = serverUrl,
+                onServerUrlChange = onServerUrlChange,
                 prefs = readerPrefs,
                 onPrefsChange = setReaderPrefs,
                 onSignOut = logout,
@@ -721,6 +780,7 @@ internal fun Root(
                         onDismiss = { nav.pop() },
                         // The sheet shows its own "Sent for review" state.
                         onSubmit = { patch -> api.submitContribution(work.id, patch) },
+                        describeError = api::describe,
                     )
                 }
             }
@@ -869,12 +929,10 @@ private fun DataDrivenBrowse(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
-            EmptyState(
-                title = "Couldn't load works",
+            LoadErrorState(
+                title = "Couldn’t load the catalog",
                 body = err.orEmpty(),
-                action = {
-                    Button(onClick = { scope.launch { works.refresh() } }) { Text("Retry") }
-                },
+                onRetry = { scope.launch { works.refresh() } },
             )
         }
         else -> BrowseScreen(

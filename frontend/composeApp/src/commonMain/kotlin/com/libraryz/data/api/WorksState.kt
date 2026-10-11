@@ -91,7 +91,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             items = page
             endReached = page.size < pageSize
         } catch (e: Throwable) {
-            if (gen == generation) error = e.message ?: "Failed to load works"
+            if (gen == generation) error = api.describe(e)
         } finally {
             if (gen == generation) replacing = false
         }
@@ -112,7 +112,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             items = current + page.filter { it.id !in seen }
             endReached = page.size < pageSize
         } catch (e: Throwable) {
-            if (gen == generation) loadMoreError = e.message ?: "Failed to load more works"
+            if (gen == generation) loadMoreError = api.describe(e)
         } finally {
             if (gen == generation) loadingMore = false
         }
@@ -140,7 +140,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             items = page
             endReached = page.size < pageSize
         } catch (e: Throwable) {
-            if (gen == generation) error = e.message ?: "Search failed"
+            if (gen == generation) error = api.describe(e)
         } finally {
             if (gen == generation) replacing = false
         }
@@ -153,7 +153,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             items = items?.map { if (it.id == id) w else it } ?: listOf(w)
             w
         } catch (e: Throwable) {
-            error = e.message ?: "Failed to load work"
+            error = api.describe(e)
             null
         }
     }

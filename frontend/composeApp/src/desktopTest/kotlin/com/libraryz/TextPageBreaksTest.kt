@@ -59,11 +59,17 @@ class TextPageBreaksTest {
             .map { it.value!! }
         val drawnTop = { line: Int -> minOf(layout.getLineTop(line), rects(line).minOfOrNull { it.top } ?: Float.MAX_VALUE) }
         val drawnBottom = { line: Int -> maxOf(layout.getLineBottom(line), rects(line).maxOfOrNull { it.bottom } ?: 0f) }
+        // Blank lines where a page breaks are skipped, not carried by either page.
+        val blank = { line: Int ->
+            val end = if (line + 1 < layout.lineCount) layout.getLineStart(line + 1) else text.length
+            text.text.substring(layout.getLineStart(line), end).isBlank()
+        }
         // Several page heights, so pages start on rows as well as on text.
         for (height in listOf(150f, 170f, 190f, 210f)) {
             val starts = textPageBreaks(layout, height)
             starts.forEachIndexed { p, first ->
-                val last = (starts.getOrNull(p + 1) ?: layout.lineCount) - 1
+                var last = (starts.getOrNull(p + 1) ?: layout.lineCount) - 1
+                while (last > first && blank(last)) last--
                 val span = drawnBottom(last) - drawnTop(first)
                 assertTrue(span <= height || first == last, "page $p spans ${span}px (lines $first..$last), over $height")
             }

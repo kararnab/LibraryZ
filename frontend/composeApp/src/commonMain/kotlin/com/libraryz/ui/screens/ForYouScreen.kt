@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import com.libraryz.data.Recommendation
 import com.libraryz.data.api.RecommendationsState
 import com.libraryz.theme.LibraryZ
+import com.libraryz.ui.components.LoadErrorState
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
@@ -120,12 +121,10 @@ fun ForYouScreen(
                 when (p) {
                     LoadPhase.Loading -> ForYouSkeleton()
                     LoadPhase.Error -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        EmptyState(
-                            title = "Couldn't load recommendations",
+                        LoadErrorState(
+                            title = "Couldn’t load recommendations",
                             body = err.orEmpty(),
-                            action = {
-                                Button(onClick = { scope.launch { state.refresh() } }) { Text("Retry") }
-                            },
+                            onRetry = { scope.launch { state.refresh() } },
                         )
                     }
                     LoadPhase.Empty -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

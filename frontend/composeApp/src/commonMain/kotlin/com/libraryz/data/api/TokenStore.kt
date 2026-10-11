@@ -30,3 +30,6 @@ expect fun createReaderLayoutStore(): TokenStore
 
 /** And one for the reading settings ([com.libraryz.ui.screens.ReaderPrefsStore]). */
 expect fun createReaderPrefsStore(): TokenStore
+
+/** And one for the server address chosen in Settings ([ServerUrlStore]). */
+expect fun createServerUrlStore(): TokenStore
