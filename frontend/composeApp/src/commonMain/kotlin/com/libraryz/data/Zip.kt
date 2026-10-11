@@ -31,11 +31,13 @@ class ZipArchive(private val bytes: ByteArray, private val maxEntrySize: Int = 6
         var p = u32(eocd + 16)
         val list = ArrayList<Entry>(count)
         repeat(count) {
-            if (p + 46 > bytes.size || u32(p) != CENTRAL_SIG) throw ZipException("Bad central directory")
+            // Offsets are unsigned 32-bit; past 2 GiB they read as negative here.
+            // Compared as p > size - n so a large p can't overflow past the check.
+            if (p < 0 || p > bytes.size - 46 || u32(p) != CENTRAL_SIG) throw ZipException("Bad central directory")
             val nameLen = u16(p + 28)
             val extraLen = u16(p + 30)
             val commentLen = u16(p + 32)
-            if (p + 46 + nameLen > bytes.size) throw ZipException("Bad central directory")
+            if (nameLen > bytes.size - 46 - p) throw ZipException("Bad central directory")
             list += Entry(
                 name = bytes.decodeToString(p + 46, p + 46 + nameLen),
                 method = u16(p + 10),
@@ -57,10 +59,10 @@ class ZipArchive(private val bytes: ByteArray, private val maxEntrySize: Int = 6
     fun read(entry: Entry): ByteArray {
         if (entry.flags and 1 != 0) throw ZipException("${entry.name} is encrypted")
         val h = entry.localHeader
-        if (h + 30 > bytes.size || u32(h) != LOCAL_SIG) throw ZipException("Bad local header for ${entry.name}")
+        if (h < 0 || h > bytes.size - 30 || u32(h) != LOCAL_SIG) throw ZipException("Bad local header for ${entry.name}")
         val start = h + 30 + u16(h + 26) + u16(h + 28)
+        if (entry.compressedSize < 0 || entry.compressedSize > bytes.size - start) throw ZipException("${entry.name} runs past the archive")
         val end = start + entry.compressedSize
-        if (entry.compressedSize < 0 || end > bytes.size) throw ZipException("${entry.name} runs past the archive")
         return when (entry.method) {
             0 -> {
                 if (entry.compressedSize > maxEntrySize) throw ZipException("${entry.name} is too large")

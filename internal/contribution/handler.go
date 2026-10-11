@@ -139,6 +139,9 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request, fn decideFn) {
 	case errors.Is(err, ErrAlreadyDecided):
 		http.Error(w, "contribution already decided", http.StatusConflict)
 		return
+	case errors.Is(err, ErrWorkNotFound):
+		http.Error(w, "the work was removed, so this edit can't be applied; reject it instead", http.StatusConflict)
+		return
 	case err != nil:
 		httpx.ServerError(w, r, "decide contribution", err)
 		return

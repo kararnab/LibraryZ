@@ -98,6 +98,37 @@ class WorksStateTest {
     }
 
     @Test
+    fun refreshOneBeforeTheListLoadsLeavesTheListAlone() = runTest {
+        var listUp = false
+        val engine = MockEngine { req ->
+            when (req.url.encodedPath) {
+                "/works" -> if (!listUp) respondError(HttpStatusCode.InternalServerError, "boom") else {
+                    val (s, body, h) = jsonRespond("""[{"id":"z","title":"Z","editions":[]},{"id":"a","title":"A","editions":[]}]""")
+                    respond(body, s, h)
+                }
+                else -> {
+                    val (s, body, h) = jsonRespond("""{"id":"a","title":"A","editions":[]}""")
+                    respond(body, s, h)
+                }
+            }
+        }
+        val state = WorksState(ApiClient("http://t", engine = engine))
+        state.refresh()
+        val listError = assertNotNull(state.error)
+
+        // A book opened from elsewhere (My Library) while the catalog is down.
+        state.refreshOne("a")
+
+        assertNull(state.items, "one book isn't the catalog")
+        assertEquals(listError, state.error)
+        assertEquals("A", state.find("a")?.title)
+
+        listUp = true
+        state.refresh()
+        assertEquals(listOf("z", "a"), state.items?.map { it.id })
+    }
+
+    @Test
     fun searchHitsSearchEndpointAndExposesQuery() = runTest {
         val engine = MockEngine { req ->
             assertEquals("/works/search", req.url.encodedPath)

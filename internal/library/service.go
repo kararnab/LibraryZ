@@ -316,15 +316,17 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]UserBook, error) {
 // Delete removes the user's entry for a work, as of stamp (empty = now),
 // and remembers when, so older offline changes can't bring it back. A
 // change stamped after the removal (made elsewhere before this synced)
-// keeps the entry. Returns ErrNotFound if there was nothing to delete, so
-// the handler can 404 rather than 200 a no-op.
-func (s *Service) Delete(ctx context.Context, userID uint, workID uuid.UUID, stamp string) error {
+// keeps the entry, which is then returned so the caller can show it again;
+// nil means it was removed. Returns ErrNotFound if there was nothing to
+// delete, so the handler can 404 rather than 200 a no-op.
+func (s *Service) Delete(ctx context.Context, userID uint, workID uuid.UUID, stamp string) (*UserBook, error) {
 	now := time.Now()
 	stamp, err := checkStamp(stamp, now)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var kept *UserBook
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		q := tx
 		if tx.Dialector.Name() == "postgres" {
 			q = tx.Clauses(clause.Locking{Strength: "UPDATE"})
@@ -336,6 +338,7 @@ func (s *Service) Delete(ctx context.Context, userID uint, workID uuid.UUID, sta
 			return err
 		}
 		if found && ub.latestStamp() > stamp {
+			kept = &ub
 			return nil
 		}
 		var rm Removal
@@ -353,6 +356,12 @@ func (s *Service) Delete(ctx context.Context, userID uint, workID uuid.UUID, sta
 		}
 		return tx.Delete(&ub).Error
 	})
+	if err != nil || kept == nil {
+		return nil, err
+	}
+	one := []UserBook{*kept}
+	s.enrich(ctx, one)
+	return &one[0], nil
 }
 
 func (ub *UserBook) latestStamp() string {

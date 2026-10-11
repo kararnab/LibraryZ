@@ -190,6 +190,31 @@ class EpubTest {
     }
 
     @Test
+    fun offsetsPastTwoGigabytesAreDamageNotACrash() {
+        val good = epub(opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""), "book/a.xhtml" to "<body><p>Hi</p></body>")
+        fun ByteArray.put32(at: Int, v: Int) { for (i in 0..3) this[at + i] = (v ushr (8 * i)).toByte() }
+        val eocd = good.size - 22
+        val cd = (0..3).sumOf { (good[eocd + 16 + it].toInt() and 0xFF) shl (8 * it) }
+
+        // The central directory "starts" at an offset that reads as negative.
+        val badDirectory = good.copyOf().apply { put32(eocd + 16, 0xFFFFFFF0.toInt()) }
+        assertFailsWith<EpubException> { parseEpub(badDirectory) }
+
+        // Every entry's local header past 2 GiB, or every compressed size.
+        fun ByteArray.everyEntry(field: Int, v: Int) = apply {
+            var p = cd
+            while (p < eocd) {
+                put32(p + field, v)
+                val nameLen = (this[p + 28].toInt() and 0xFF) or ((this[p + 29].toInt() and 0xFF) shl 8)
+                p += 46 + nameLen
+            }
+        }
+        assertFailsWith<EpubException> { parseEpub(good.copyOf().everyEntry(42, 0xFFFFFFF0.toInt())) }
+        assertFailsWith<EpubException> { parseEpub(good.copyOf().everyEntry(42, 0x7FFFFFF0)) }
+        assertFailsWith<EpubException> { parseEpub(good.copyOf().everyEntry(20, 0x7FFFFFF0)) }
+    }
+
+    @Test
     fun keepsPicturesAsPlaceholders() {
         val book = parseEpub(
             epub(

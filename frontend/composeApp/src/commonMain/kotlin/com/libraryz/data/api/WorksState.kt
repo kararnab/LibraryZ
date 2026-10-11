@@ -146,14 +146,18 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
         }
     }
 
+    /**
+     * Fetches one work for [find] and updates it in the list if it's there.
+     * Never starts a list or sets [error]: those belong to the catalog, and
+     * one book isn't it (the list may still be loading, or have failed).
+     */
     suspend fun refreshOne(id: String): Work? {
         return try {
             val w = api.getWork(id)
             opened[id] = w
-            items = items?.map { if (it.id == id) w else it } ?: listOf(w)
+            items = items?.map { if (it.id == id) w else it }
             w
         } catch (e: Throwable) {
-            error = api.describe(e)
             null
         }
     }

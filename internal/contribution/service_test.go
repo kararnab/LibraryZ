@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -213,6 +214,30 @@ func TestRejectDoesNotChangeWork(t *testing.T) {
 	}
 	if w.Title != "Original" {
 		t.Fatalf("title changed after reject: %s", w.Title)
+	}
+}
+
+// Approving an edit to a work taken down since can't apply it, so it says
+// so and leaves the suggestion pending (for a reject) instead of reporting
+// an approval that changed nothing.
+func TestApproveOnRemovedWorkFails(t *testing.T) {
+	db := newTestDB(t)
+	svc := contribution.NewService(db)
+	wid := seedWork(t, db, "Foo", "")
+
+	c, _ := svc.Submit(context.Background(), wid, 1, map[string]any{"title": "Bar"})
+	if err := db.Model(&catalog.Work{}).Where("id = ?", wid).Update("deleted_at", time.Now()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Approve(context.Background(), c.ID, 2); !errors.Is(err, contribution.ErrWorkNotFound) {
+		t.Fatalf("approve on a removed work: want ErrWorkNotFound, got %v", err)
+	}
+	got, err := svc.Get(context.Background(), c.ID)
+	if err != nil || got.Status != contribution.StatusPending {
+		t.Fatalf("after failed approve: %+v %v, want still pending", got, err)
+	}
+	if _, err := svc.Reject(context.Background(), c.ID, 2); err != nil {
+		t.Fatalf("reject: %v", err)
 	}
 }
 

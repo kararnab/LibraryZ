@@ -893,7 +893,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Contribution is not pending
+          description: Contribution is not pending, or its work was removed since (it stays pending; reject it)
           content:
             text/plain:
               schema: { type: string }
@@ -1094,7 +1094,8 @@ paths:
       description: |
         Removes the entry as of `stamp` (default now) and remembers when, so
         changes stamped earlier can't bring it back. If the entry has a change
-        stamped after `stamp`, it's kept (204 all the same).
+        stamped after `stamp`, it's kept and returned (200), so the client
+        can show it again.
       parameters:
         - name: stamp
           in: query
@@ -1103,6 +1104,11 @@ paths:
       responses:
         "204":
           description: Removed
+        "200":
+          description: Kept, because it has a change stamped after `stamp`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserBook" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -1443,17 +1449,19 @@ components:
       description: >
         Only these fields are read. Server-owned fields sent in the body
         (id, created_at, updated_at, editions, tags) are ignored; editions
-        are only created by uploading a file.
+        are only created by uploading a file. Fields have the same limits
+        as a suggested edit (400 past them); publication_year 0 means not
+        given.
       required: [title]
       properties:
-        title:            { type: string }
-        subtitle:         { type: string }
-        authors:          { type: string, description: "Phase 1: semicolon-separated. Normalized in Phase 2." }
-        description:      { type: string }
-        language:         { type: string }
-        publication_year: { type: integer }
-        isbn:             { type: string }
-        openlibrary_id:   { type: string }
+        title:            { type: string, maxLength: 500 }
+        subtitle:         { type: string, maxLength: 500 }
+        authors:          { type: string, maxLength: 1000, description: "Phase 1: semicolon-separated. Normalized in Phase 2." }
+        description:      { type: string, maxLength: 20000 }
+        language:         { type: string, maxLength: 64 }
+        publication_year: { type: integer, minimum: -5000, description: "At most 5 years from now." }
+        isbn:             { type: string, maxLength: 32 }
+        openlibrary_id:   { type: string, maxLength: 64 }
 
     Work:
       type: object

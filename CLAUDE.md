@@ -121,7 +121,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (219 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (225 each;
 # desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -225,7 +225,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 159 backend + 219 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 164 backend + 225 frontend
   tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -248,7 +248,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `new` (unverified or < 7 days), `standard`, moderators unlimited. Knobs:
   `LIBRARYZ_UPLOAD_QUOTA_{WINDOW,FILES,BYTES,NEW_FILES,NEW_BYTES,NEW_ACCOUNT_AGE}`.
   `UploadEdition` checks it **before reading the body**; `AddEdition`
-  re-checks with the stored size inside a transaction that locks the user
+  re-checks with the uploaded size inside a transaction that locks the user
   row (`FOR UPDATE` on Postgres) — keep both. `GET /me/upload-quota?size=N`
   answers `fits` + `retry_after_seconds` from the same `Admit`, and the
   Upload sheet preflights with it. Kong's per-IP upload limit (30/hr) is

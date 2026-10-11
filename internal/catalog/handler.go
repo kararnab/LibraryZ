@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -98,6 +100,24 @@ type CreateWorkRequest struct {
 	OpenLibraryID   string `json:"openlibrary_id"`
 }
 
+// validate holds the fields to the limits a suggested edit has
+// (CheckWorkField). A zero publication_year means "not given".
+func (r CreateWorkRequest) validate() error {
+	fields := map[string]any{
+		"title": r.Title, "subtitle": r.Subtitle, "authors": r.Authors, "description": r.Description,
+		"language": r.Language, "isbn": r.ISBN, "openlibrary_id": r.OpenLibraryID,
+	}
+	if r.PublicationYear != 0 {
+		fields["publication_year"] = r.PublicationYear
+	}
+	for _, k := range slices.Sorted(maps.Keys(fields)) {
+		if err := CheckWorkField(k, fields[k]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *Handler) CreateWork(w http.ResponseWriter, r *http.Request) {
 	var req CreateWorkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -106,6 +126,10 @@ func (h *Handler) CreateWork(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if err := req.validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	work := Work{
@@ -144,10 +168,11 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 
 	// Refuse before reading the body when the quota is already used up, so
 	// a client that didn't check GET /me/upload-quota first wastes as
-	// little as possible. ContentLength includes the multipart framing, so
-	// this errs slightly on the strict side; AddEdition re-checks with the
-	// stored size.
-	if err := h.service.CheckUploadQuota(r.Context(), userID, max(r.ContentLength, 0)); err != nil {
+	// little as possible. ContentLength includes the multipart framing
+	// (boundaries, part headers, the form fields), so take an allowance for
+	// it off: otherwise a file GET /me/upload-quota said fits could be
+	// refused here. AddEdition makes the exact check with the file's size.
+	if err := h.service.CheckUploadQuota(r.Context(), userID, max(r.ContentLength-multipartOverhead, 0)); err != nil {
 		if !writeQuotaExceeded(w, err) {
 			httpx.ServerError(w, r, "upload quota", err)
 		}
@@ -226,7 +251,7 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clean.Close()
 
-	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, sourceSHA, clean)
+	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, sourceSHA, header.Size, clean)
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "work not found", http.StatusNotFound)
 		return
@@ -254,6 +279,11 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, ed)
 }
+
+// multipartOverhead is what an upload's request may carry besides the file
+// itself: boundaries, part headers (a long filename included) and the
+// format/language fields come to well under this.
+const multipartOverhead = 16 << 10
 
 // UploadQuotaResponse is GET /me/upload-quota's body: the status, plus
 // whether a file of the requested size fits now and, if not, when it will.

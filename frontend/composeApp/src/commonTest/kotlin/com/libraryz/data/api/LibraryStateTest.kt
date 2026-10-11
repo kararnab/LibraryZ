@@ -8,6 +8,9 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -339,6 +342,150 @@ class LibraryQueueTest {
         assertEquals(1, server.deletes.size)
         assertTrue(server.deletes[0].endsWith(".0000." + server.deletes[0].substringAfterLast('.')))
         assertTrue(again.pending.isEmpty())
+    }
+
+    @Test
+    fun removalWhileAChangeIsBeingSentIsStillSent() = runTest {
+        val disk = Memory()
+        val firstPut = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var puts = 0
+        val deletes = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            when (req.method) {
+                HttpMethod.Put -> {
+                    if (puts++ == 0) {
+                        firstPut.complete(Unit)
+                        release.await() // still on its way when the next changes are made
+                    }
+                    val (s, b, h) = jsonBody(entryJson("w1", "reading"))
+                    respond(b, s, h)
+                }
+                HttpMethod.Delete -> {
+                    deletes += req.url.encodedPath
+                    respond("", HttpStatusCode.NoContent)
+                }
+                else -> {
+                    val (s, b, h) = jsonBody("[]")
+                    respond(b, s, h)
+                }
+            }
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+
+        val sending = launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 1, totalPages = 300)) }
+        firstPut.await()
+        // Another change to the same book, then taking it out, while the first is in flight.
+        val more = launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 2, totalPages = 300)) }
+        testScheduler.runCurrent()
+        val removal = launch { state.remove("w1") }
+        testScheduler.runCurrent()
+        release.complete(Unit)
+        joinAll(sending, more, removal)
+
+        assertEquals(listOf("/me/library/w1"), deletes, "the removal reached the server")
+        assertTrue(state.pending.isEmpty())
+        assertNull(state.entryFor("w1"))
+    }
+
+    @Test
+    fun removalAChangeOfAnotherBookIsQueuedBehindKeepsThatChange() = runTest {
+        val disk = Memory()
+        val firstPut = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val putPaths = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            when (req.method) {
+                HttpMethod.Put -> {
+                    putPaths += req.url.encodedPath
+                    if (putPaths.size == 1) {
+                        firstPut.complete(Unit)
+                        release.await()
+                    }
+                    val id = req.url.encodedPath.substringAfterLast('/')
+                    val (s, b, h) = jsonBody(entryJson(id, "reading"))
+                    respond(b, s, h)
+                }
+                HttpMethod.Delete -> respond("", HttpStatusCode.NoContent)
+                else -> {
+                    val (s, b, h) = jsonBody("[]")
+                    respond(b, s, h)
+                }
+            }
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+
+        val jobs = mutableListOf(launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 1)) })
+        firstPut.await()
+        jobs += launch { state.upsert("w2", UpsertLibraryRequest(status = "want")) }
+        testScheduler.runCurrent()
+        jobs += launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 2)) }
+        testScheduler.runCurrent()
+        jobs += launch { state.remove("w1") }
+        testScheduler.runCurrent()
+        release.complete(Unit)
+        jobs.joinAll()
+
+        assertTrue("/me/library/w2" in putPaths, "w2's change was sent: $putPaths")
+        assertTrue(state.pending.isEmpty())
+    }
+
+    @Test
+    fun removalTheServerDeclinesShowsTheEntryAgain() = runTest {
+        val disk = Memory()
+        val engine = MockEngine { req ->
+            when (req.method) {
+                // Another device changed it after this removal was made: kept.
+                HttpMethod.Delete -> {
+                    val (s, b, h) = jsonBody(entryJson("w1", "reading"))
+                    respond(b, s, h)
+                }
+                else -> {
+                    val (s, b, h) = jsonBody("[${entryJson("w1", "reading")}]")
+                    respond(b, s, h)
+                }
+            }
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+        state.refresh()
+
+        state.remove("w1")
+
+        assertEquals("reading", state.entryFor("w1")?.status)
+        assertEquals(listOf("w1"), state.items?.map { it.workId })
+        assertTrue(state.pending.isEmpty())
+    }
+
+    @Test
+    fun theListShowsChangesStillWaitingToBeSent() = runTest {
+        val disk = Memory()
+        // The server lists both books but can't take changes right now.
+        val engine = MockEngine { req ->
+            when (req.method) {
+                HttpMethod.Get -> {
+                    val (s, b, h) = jsonBody("[${entryJson("w1", "want")},${entryJson("w2", "want")}]")
+                    respond(b, s, h)
+                }
+                else -> respondError(HttpStatusCode.ServiceUnavailable, "busy")
+            }
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+        state.refresh()
+        state.remove("w1")
+        state.upsert("w2", UpsertLibraryRequest(status = "read"))
+        assertEquals(2, state.pending.size)
+
+        state.refresh()
+        assertEquals(listOf("w2"), state.items?.map { it.workId }, "w1 is waiting to be removed")
+        assertEquals("read", state.items?.single()?.status)
+
+        // The "Want" tab: w2 is "read" on this device now.
+        state.refresh("want")
+        assertEquals(emptyList(), state.items?.map { it.workId })
     }
 
     @Test

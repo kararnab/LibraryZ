@@ -109,7 +109,10 @@ class LibraryState(
                 observe(it)
                 cache[it.workId] = withPending(it.workId, it)
             }
-            items = loaded.map { cache[it.workId] ?: it } + pendingNew(status, loaded)
+            // As this device has it: queued removals stay out, and a queued
+            // status change can move an entry off this tab.
+            items = loaded.mapNotNull { cache[it.workId] }.filter { status == null || it.status == status } +
+                pendingNew(status, loaded)
             offline = false
             save()
         } catch (e: Throwable) {
@@ -284,9 +287,11 @@ class LibraryState(
     }
 
     private fun queue(w: PendingWrite) {
-        // The change being sent can't absorb a newer one: it'd be marked done.
-        pending = if (sending && pending.firstOrNull()?.workId == w.workId && pending.count { it.workId == w.workId } == 1) {
-            pending + w
+        // The change being sent stays first and as it is: [sync] drops the
+        // first change once the server answers, so it can't absorb a newer
+        // one or be dropped by a removal.
+        pending = if (sending && pending.isNotEmpty()) {
+            listOf(pending.first()) + enqueue(pending.drop(1), w)
         } else {
             enqueue(pending, w)
         }
@@ -305,10 +310,8 @@ class LibraryState(
             while (true) {
                 val w = lock.withLock { pending.firstOrNull()?.also { sending = true } } ?: return
                 val result = try {
-                    if (w.upsert != null) api.upsertLibraryEntry(w.workId, w.upsert) else {
-                        api.removeFromLibrary(w.workId, w.removedAt)
-                        null
-                    }
+                    // A removal answers with the entry when the server kept it (changed since elsewhere).
+                    if (w.upsert != null) api.upsertLibraryEntry(w.workId, w.upsert) else api.removeFromLibrary(w.workId, w.removedAt)
                 } catch (e: Throwable) {
                     lock.withLock { sending = false }
                     if (isTransient(e)) return

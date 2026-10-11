@@ -64,7 +64,7 @@ func (f fixture) work(t *testing.T, title string) uuid.UUID {
 }
 
 func (f fixture) add(workID uuid.UUID, sourceSHA, content string) (*catalog.Edition, error) {
-	return f.svc.AddEdition(context.Background(), workID, "txt", "en", 1, sourceSHA, bytes.NewReader([]byte(content)))
+	return f.svc.AddEdition(context.Background(), workID, "txt", "en", 1, sourceSHA, 0, bytes.NewReader([]byte(content)))
 }
 
 func TestCreateWorkOwnsIDAndAssociations(t *testing.T) {
@@ -147,7 +147,7 @@ func checkTechnicalRemoval(t *testing.T, svc *catalog.Service) {
 		return w.ID
 	}
 	add := func(workID uuid.UUID, sourceSHA, content string) (*catalog.Edition, error) {
-		return svc.AddEdition(ctx, workID, "txt", "en", 1, sourceSHA, bytes.NewReader([]byte(content)))
+		return svc.AddEdition(ctx, workID, "txt", "en", 1, sourceSHA, 0, bytes.NewReader([]byte(content)))
 	}
 	a := work("A")
 	first, err := add(a, "src-1", "broken bytes")

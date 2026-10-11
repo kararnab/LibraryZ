@@ -92,7 +92,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := h.service.Delete(r.Context(), userID, workID, r.URL.Query().Get("stamp"))
+	kept, err := h.service.Delete(r.Context(), userID, workID, r.URL.Query().Get("stamp"))
 	switch {
 	case errors.Is(err, ErrInvalidStamp):
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -102,6 +102,10 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		httpx.ServerError(w, r, "delete library entry", err)
+		return
+	case kept != nil:
+		// A newer change kept the entry: send it, so the client shows it again.
+		writeJSON(w, http.StatusOK, kept)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

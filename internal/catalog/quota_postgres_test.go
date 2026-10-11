@@ -41,7 +41,7 @@ func TestPostgresUploadQuotaConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
-			_, errs[i] = svc.AddEdition(context.Background(), w.ID, "txt", "en", 1, "",
+			_, errs[i] = svc.AddEdition(context.Background(), w.ID, "txt", "en", 1, "", 0,
 				bytes.NewReader([]byte(fmt.Sprintf("parallel %d", i))))
 		})
 	}
