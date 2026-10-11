@@ -1,0 +1,133 @@
+{
+  "about": "Library merge cases run by both the server (merge_cases_test.go, through Service.Upsert) and the app (LibraryMergeCasesTest.kt, through applyLocally). Each case starts from no entry and applies its puts (wire UpsertRequest JSON) in order; want lists the wire UserBook fields to check, and a field left out must be zero (missing, null, \"\" and 0 are all zero). Every group in a put carries a stamp: the server would stamp a bare group with its own clock, the app never sends one.",
+  "cases": [
+    {
+      "name": "newer progress wins (newer first)",
+      "steps": [
+        {"put": {"current_page": 80, "stamps": {"progress": "0000000000020.0000.desk"}}},
+        {"put": {"current_page": 40, "stamps": {"progress": "0000000000010.0000.phone"}}}
+      ],
+      "want": {"status": "want", "current_page": 80, "progress_stamp": "0000000000020.0000.desk"}
+    },
+    {
+      "name": "newer progress wins (older first)",
+      "steps": [
+        {"put": {"current_page": 40, "stamps": {"progress": "0000000000010.0000.phone"}}},
+        {"put": {"current_page": 80, "stamps": {"progress": "0000000000020.0000.desk"}}}
+      ],
+      "want": {"status": "want", "current_page": 80, "progress_stamp": "0000000000020.0000.desk"}
+    },
+    {
+      "name": "an older read doesn't override newer progress",
+      "steps": [
+        {"put": {"progress_percent": 30, "stamps": {"progress": "0000000000020.0000.a"}}},
+        {"put": {"status": "read", "stamps": {"status": "0000000000010.0000.b"}}}
+      ],
+      "want": {
+        "status": "read", "progress_percent": 30,
+        "status_stamp": "0000000000010.0000.b", "progress_stamp": "0000000000020.0000.a"
+      }
+    },
+    {
+      "name": "a newer read means all of it",
+      "steps": [
+        {"put": {"progress_percent": 30, "stamps": {"progress": "0000000000010.0000.a"}}},
+        {"put": {"status": "read", "stamps": {"status": "0000000000020.0000.b"}}}
+      ],
+      "want": {
+        "status": "read", "progress_percent": 100,
+        "status_stamp": "0000000000020.0000.b", "progress_stamp": "0000000000020.0000.b"
+      }
+    },
+    {
+      "name": "read with a percent keeps that percent",
+      "steps": [
+        {"put": {"status": "read", "progress_percent": 60, "stamps": {"progress": "0000000000020.0000.a", "status": "0000000000020.0001.a"}}}
+      ],
+      "want": {
+        "status": "read", "progress_percent": 60,
+        "status_stamp": "0000000000020.0001.a", "progress_stamp": "0000000000020.0000.a"
+      }
+    },
+    {
+      "name": "groups merge independently",
+      "steps": [
+        {"put": {"rating": 4, "stamps": {"rating": "0000000000010.0000.a"}}},
+        {"put": {"shelf": "favourites", "stamps": {"shelf": "0000000000011.0000.b"}}},
+        {"put": {"rating": 2, "shelf": "later", "stamps": {"rating": "0000000000005.0000.b", "shelf": "0000000000012.0000.a"}}}
+      ],
+      "want": {
+        "status": "want", "rating": 4, "shelf": "later",
+        "rating_stamp": "0000000000010.0000.a", "shelf_stamp": "0000000000012.0000.a"
+      }
+    },
+    {
+      "name": "replaying a put changes nothing",
+      "steps": [
+        {"put": {"current_page": 40, "status": "reading", "stamps": {"progress": "0000000000010.0000.a", "status": "0000000000010.0001.a"}}},
+        {"put": {"current_page": 80, "stamps": {"progress": "0000000000020.0000.b"}}},
+        {"put": {"current_page": 40, "status": "reading", "stamps": {"progress": "0000000000010.0000.a", "status": "0000000000010.0001.a"}}}
+      ],
+      "want": {
+        "status": "reading", "current_page": 80,
+        "status_stamp": "0000000000010.0001.a", "progress_stamp": "0000000000020.0000.b"
+      }
+    },
+    {
+      "name": "same time and counter: the device id breaks the tie (b first)",
+      "steps": [
+        {"put": {"current_page": 20, "stamps": {"progress": "0000000000010.0000.b"}}},
+        {"put": {"current_page": 10, "stamps": {"progress": "0000000000010.0000.a"}}}
+      ],
+      "want": {"status": "want", "current_page": 20, "progress_stamp": "0000000000010.0000.b"}
+    },
+    {
+      "name": "same time and counter: the device id breaks the tie (a first)",
+      "steps": [
+        {"put": {"current_page": 10, "stamps": {"progress": "0000000000010.0000.a"}}},
+        {"put": {"current_page": 20, "stamps": {"progress": "0000000000010.0000.b"}}}
+      ],
+      "want": {"status": "want", "current_page": 20, "progress_stamp": "0000000000010.0000.b"}
+    },
+    {
+      "name": "notes edited blind on two devices keep both (older first)",
+      "steps": [
+        {"put": {"notes": "from a", "notes_base": "", "stamps": {"notes": "0000000000010.0000.a"}}},
+        {"put": {"notes": "from b", "notes_base": "", "stamps": {"notes": "0000000000020.0000.b"}}}
+      ],
+      "want": {"status": "want", "notes": "from b", "notes_other": "from a", "notes_stamp": "0000000000020.0000.b"}
+    },
+    {
+      "name": "notes edited blind on two devices keep both (newer first)",
+      "steps": [
+        {"put": {"notes": "from b", "notes_base": "", "stamps": {"notes": "0000000000020.0000.b"}}},
+        {"put": {"notes": "from a", "notes_base": "", "stamps": {"notes": "0000000000010.0000.a"}}}
+      ],
+      "want": {"status": "want", "notes": "from b", "notes_other": "from a", "notes_stamp": "0000000000020.0000.b"}
+    },
+    {
+      "name": "notes edited having seen the stored text just replace it",
+      "steps": [
+        {"put": {"notes": "from a", "notes_base": "", "stamps": {"notes": "0000000000010.0000.a"}}},
+        {"put": {"notes": "from b", "notes_base": "0000000000010.0000.a", "stamps": {"notes": "0000000000020.0000.b"}}}
+      ],
+      "want": {"status": "want", "notes": "from b", "notes_stamp": "0000000000020.0000.b"}
+    },
+    {
+      "name": "resolving the notes conflict drops the other text",
+      "steps": [
+        {"put": {"notes": "from a", "notes_base": "", "stamps": {"notes": "0000000000010.0000.a"}}},
+        {"put": {"notes": "from b", "notes_base": "", "stamps": {"notes": "0000000000020.0000.b"}}},
+        {"put": {"resolve_notes": true}}
+      ],
+      "want": {"status": "want", "notes": "from b", "notes_stamp": "0000000000020.0000.b"}
+    },
+    {
+      "name": "a rating alone adds the book as want",
+      "steps": [
+        {"put": {"rating": 5, "stamps": {"rating": "0000000000010.0000.a"}}}
+      ],
+      "want": {"status": "want", "rating": 5, "rating_stamp": "0000000000010.0000.a"}
+    }
+  ]
+}

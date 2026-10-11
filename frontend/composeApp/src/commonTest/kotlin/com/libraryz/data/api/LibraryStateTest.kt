@@ -432,6 +432,102 @@ class LibraryQueueTest {
         assertTrue(state.pending.isEmpty())
     }
 
+    /** A server whose first PUT waits for [release] and whose later answers come from [after]. */
+    private class Gated(val after: (Int) -> HttpStatusCode = { HttpStatusCode.OK }) {
+        val firstPut = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val puts = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            when (req.method) {
+                HttpMethod.Put -> {
+                    puts += req.url.encodedPath
+                    val n = puts.size
+                    if (n == 1) {
+                        firstPut.complete(Unit)
+                        release.await()
+                    }
+                    val status = after(n)
+                    if (status != HttpStatusCode.OK) return@MockEngine respondError(status, "busy")
+                    val id = req.url.encodedPath.substringAfterLast('/')
+                    val (s, b, h) = jsonBody(entryJson(id, "reading"))
+                    respond(b, s, h)
+                }
+                HttpMethod.Delete -> respond("", HttpStatusCode.NoContent)
+                else -> {
+                    val (s, b, h) = jsonBody("[]")
+                    respond(b, s, h)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun signingOutWhileAChangeIsBeingSentIgnoresItsAnswer() = runTest {
+        val disk = Memory()
+        val server = Gated()
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = server.engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+        state.refresh()
+
+        val sending = launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 1)) }
+        server.firstPut.await()
+        state.forget()
+        server.release.complete(Unit)
+        sending.join()
+
+        assertNull(state.entryFor("w1"), "the late answer stays out of the cache")
+        assertTrue(!state.isLoaded("w1"))
+        assertNull(state.items)
+        assertTrue(state.pending.isEmpty())
+        assertNull(disk.value, "and off the device")
+    }
+
+    @Test
+    fun aChangeThatCantGetThroughStaysAheadOfLaterOnes() = runTest {
+        val disk = Memory()
+        val server = Gated(after = { HttpStatusCode.ServiceUnavailable })
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = server.engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+
+        val jobs = mutableListOf(launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 1)) })
+        server.firstPut.await()
+        jobs += launch { state.upsert("w2", UpsertLibraryRequest(status = "want")) }
+        testScheduler.runCurrent()
+        jobs += launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 2)) }
+        testScheduler.runCurrent()
+        server.release.complete(Unit)
+        jobs.joinAll()
+
+        // p. 1 kept as it was and first; p. 2 waits behind w2, not merged into p. 1.
+        assertEquals(
+            listOf("w1" to 1, "w2" to null, "w1" to 2),
+            state.pending.map { it.workId to it.upsert?.currentPage },
+        )
+    }
+
+    @Test
+    fun aRestartWhileAChangeIsBeingSentKeepsIt() = runTest {
+        val disk = Memory()
+        val server = Gated()
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = server.engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+
+        val sending = launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 1)) }
+        server.firstPut.await()
+        val more = launch { state.upsert("w2", UpsertLibraryRequest(status = "want")) }
+        testScheduler.runCurrent()
+
+        // The app dies here; the next start reads what was saved.
+        val offline = MockEngine { throw kotlinx.io.IOException("connection refused") }
+        val next = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = offline), storeFactory = { Memory(disk.value) }, server = BASE)
+        next.refresh()
+        assertEquals(listOf("w1", "w2"), next.pending.map { it.workId })
+        assertEquals(1, next.entryFor("w1")?.currentPage)
+
+        server.release.complete(Unit)
+        joinAll(sending, more)
+    }
+
     @Test
     fun removalTheServerDeclinesShowsTheEntryAgain() = runTest {
         val disk = Memory()

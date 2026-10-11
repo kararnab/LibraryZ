@@ -74,9 +74,13 @@ class LibraryState(
     // "looked up, not in library" — distinct from "not yet looked up" (absent).
     private val cache = mutableStateMapOf<String, UserBook?>()
 
-    /** Changes made on this device that the server hasn't confirmed yet. */
-    var pending: List<PendingWrite> by mutableStateOf(emptyList())
-        private set
+    /** Changes made on this device that the server hasn't confirmed yet, in sending order. */
+    val pending: List<PendingWrite> get() = listOfNotNull(inFlight) + queued
+
+    // The change [sync] is sending, set apart so nothing queued meanwhile can
+    // merge into it or drop it; [forget] clears it, and its answer is then ignored.
+    private var inFlight: PendingWrite? by mutableStateOf(null)
+    private var queued: List<PendingWrite> by mutableStateOf(emptyList())
 
     /** Finds a work for an entry made offline (the list shows its title). */
     var workLookup: (String) -> Work? = { null }
@@ -88,7 +92,6 @@ class LibraryState(
     private var clock: Hlc? = null
     private var restored = false
     private var paused = false
-    private var sending = false
     private val lock = Mutex()
     private val sendLock = Mutex()
 
@@ -140,7 +143,8 @@ class LibraryState(
             cache.clear()
             items = null
             offline = false
-            pending = emptyList()
+            inFlight = null
+            queued = emptyList()
             mine = emptyMap()
             owner = null
             restored = true
@@ -181,7 +185,7 @@ class LibraryState(
         restored = true
         val snapshot = load()
         if (snapshot != null) {
-            pending = snapshot.pending
+            queued = snapshot.pending
             owner = snapshot.owner
             device = snapshot.device
             mine = snapshot.mine
@@ -287,14 +291,7 @@ class LibraryState(
     }
 
     private fun queue(w: PendingWrite) {
-        // The change being sent stays first and as it is: [sync] drops the
-        // first change once the server answers, so it can't absorb a newer
-        // one or be dropped by a removal.
-        pending = if (sending && pending.isNotEmpty()) {
-            listOf(pending.first()) + enqueue(pending.drop(1), w)
-        } else {
-            enqueue(pending, w)
-        }
+        queued = enqueue(queued, w)
     }
 
     /**
@@ -308,24 +305,31 @@ class LibraryState(
         if (paused) return
         sendLock.withLock {
             while (true) {
-                val w = lock.withLock { pending.firstOrNull()?.also { sending = true } } ?: return
+                val w = lock.withLock {
+                    queued.firstOrNull()?.also {
+                        inFlight = it
+                        queued = queued.drop(1)
+                    }
+                } ?: return
                 val result = try {
                     // A removal answers with the entry when the server kept it (changed since elsewhere).
                     if (w.upsert != null) api.upsertLibraryEntry(w.workId, w.upsert) else api.removeFromLibrary(w.workId, w.removedAt)
                 } catch (e: Throwable) {
-                    lock.withLock { sending = false }
-                    if (isTransient(e)) return
-                    lock.withLock {
-                        pending = pending.drop(1)
+                    val ours = lock.withLock {
+                        if (inFlight !== w) return@withLock false // signed out meanwhile
+                        inFlight = null
+                        if (isTransient(e)) queued = listOf(w) + queued
                         save()
+                        true
                     }
+                    if (!ours || isTransient(e)) return
                     loadEntry(w.workId)
                     mergeLoaded(w.workId)
                     throw e
                 }
                 lock.withLock {
-                    sending = false
-                    pending = pending.drop(1)
+                    if (inFlight !== w) return // signed out meanwhile
+                    inFlight = null
                     result?.let { observe(it) }
                     val ub = withPending(w.workId, result)
                     cache[w.workId] = ub

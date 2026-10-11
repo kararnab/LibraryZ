@@ -65,7 +65,16 @@ fun applyLocally(entry: UserBook?, workId: String, req: UpsertLibraryRequest, no
     }
     if (req.rating != null && newer(s.rating, ub.ratingStamp)) ub = ub.copy(rating = req.rating, ratingStamp = s.rating)
     if (req.shelf != null && newer(s.shelf, ub.shelfStamp)) ub = ub.copy(shelf = req.shelf, shelfStamp = s.shelf)
-    if (req.notes != null && newer(s.notes, ub.notesStamp)) ub = ub.copy(notes = req.notes, notesStamp = s.notes)
+    if (req.notes != null) {
+        // Edited without seeing the stored text: whichever loses is kept.
+        val blind = req.notesBase != null && req.notesBase != ub.notesStamp.orEmpty() && !ub.notesStamp.isNullOrEmpty()
+        if (newer(s.notes, ub.notesStamp)) {
+            if (blind && !ub.notes.isNullOrEmpty() && ub.notes != req.notes) ub = ub.copy(notesOther = ub.notes)
+            ub = ub.copy(notes = req.notes, notesStamp = s.notes)
+        } else if (blind && req.notes.isNotEmpty() && req.notes != ub.notes) {
+            ub = ub.copy(notesOther = req.notes)
+        }
+    }
     if (req.resolveNotes == true) ub = ub.copy(notesOther = null)
     return ub.copy(updatedAt = now)
 }

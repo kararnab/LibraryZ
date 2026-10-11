@@ -116,6 +116,29 @@ val generateBuildInfo by tasks.registering {
 }
 kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generateBuildInfo)
 
+// The server's library merge cases (internal/library/testdata) as a string
+// constant, so every test target runs them without file IO
+// (LibraryMergeCasesTest).
+val generateMergeCases by tasks.registering {
+    val cases = rootProject.layout.projectDirectory.file("../internal/library/testdata/merge_cases.json")
+    val outDir = layout.buildDirectory.dir("generated/mergecases/commonTest/kotlin")
+    inputs.file(cases)
+    outputs.dir(outDir)
+    doLast {
+        val text = cases.asFile.readText()
+            .replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$")
+            .replace("\r", "").replace("\n", "\\n")
+        val file = outDir.get().file("com/libraryz/data/MergeCases.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            "package com.libraryz.data\n\n" +
+                "/** Generated from internal/library/testdata/merge_cases.json. */\n" +
+                "internal const val MERGE_CASES_JSON = \"$text\"\n",
+        )
+    }
+}
+kotlin.sourceSets.getByName("commonTest").kotlin.srcDir(generateMergeCases)
+
 // /.well-known/assetlinks.json for the web bundle, which lets Android open
 // the emailed https links in the app (androidApp's libraryz.appLinkUrl).
 // libraryz.androidCertSha256: the SHA-256 fingerprint(s) of the app's
