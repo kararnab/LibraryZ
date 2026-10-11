@@ -1,12 +1,16 @@
 package com.libraryz.data
 
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * A loaded edition ready to render. Subtypes distinguish formats whose
  * UX is genuinely different — paged (PDF, later DJVU / CBZ) renders to
  * an [ImageBitmap] page-by-page; [TextReader] exposes a single flowing
- * string the screen scrolls natively. `ReaderScreen` `when`s over this
+ * string (TXT, or an EPUB reduced to styled text) the screen scrolls or
+ * paginates natively. `ReaderScreen` `when`s over this
  * sealed type and renders accordingly.
  *
  * Always close when done — `ReaderScreen` owns this via `DisposableEffect`.
@@ -32,21 +36,25 @@ interface PagedReader : Reader {
 }
 
 /**
- * A whole-document text payload. UTF-8 decoded once at open time, then
- * rendered with Compose `Text` — no rasterization, no per-platform actual,
- * scales and reflows for free.
+ * A whole-document text payload, decoded once at open time, then rendered
+ * with Compose `Text` — no rasterization, no per-platform actual, scales and
+ * reflows for free. [chapters] are offsets into [text], in order.
  */
-class TextReader(val text: String) : Reader {
+class TextReader(val text: AnnotatedString, val chapters: List<Chapter>) : Reader {
+    /** Plain text, with chapters found from its headings. */
+    constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
+
     override fun close() = Unit
 }
 
 class UnsupportedFormatException(format: String) :
     RuntimeException("No preview reader for format \"$format\" on this build")
 
-/** Formats this build can preview. PDF is platform-gated; TXT is universal. */
+/** Formats this build can preview. PDF is platform-gated; TXT and EPUB are universal. */
 val supportedPreviewFormats: Set<String>
     get() = buildSet {
         add("TXT")
+        add("EPUB")
         if (isPdfPreviewSupported) add("PDF")
     }
 
@@ -62,5 +70,8 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
     when (format.uppercase()) {
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
+        "EPUB" -> withContext(Dispatchers.Default) {
+            parseEpub(bytes).let { TextReader(it.text, it.chapters) }
+        }
         else -> throw UnsupportedFormatException(format)
     }

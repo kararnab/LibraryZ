@@ -21,15 +21,15 @@ private fun entry(
 class ReadingTest {
 
     @Test
-    fun picksTextWhenItIsTheOnlyReadableEdition() {
-        // EPUB isn't readable in-app; TXT is everywhere.
-        val picked = pickReadableEdition(listOf(edition("e1", "EPUB"), edition("e2", "TXT")))
-        assertEquals("e2", picked?.id)
+    fun prefersEpubOverText() {
+        // Both are readable everywhere; EPUB keeps headings and emphasis.
+        val picked = pickReadableEdition(listOf(edition("t", "TXT"), edition("e", "EPUB")))
+        assertEquals("e", picked?.id)
     }
 
     @Test
     fun picksNothingWhenNoEditionIsReadable() {
-        assertNull(pickReadableEdition(listOf(edition("e1", "EPUB"))))
+        assertNull(pickReadableEdition(listOf(edition("m", "MOBI"))))
         assertNull(pickReadableEdition(emptyList()))
     }
 

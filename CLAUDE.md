@@ -109,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (158 each;
-# desktop also has DesktopLinksTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (168 each;
+# desktop also has DesktopLinksTest, InflateJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -212,7 +212,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-10: 150 backend + 158 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 168 frontend
   tests** (+1 with `-tags=eval`, +16 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -350,7 +350,16 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   and for text also two 26 em columns at the current size. `Spreads` pairs
   like a printed book, landscape pages alone (`PagedReader.landscapePages`),
   end card in the empty right-hand slot. The text reader paginates only in
-  two pages (`TextSpreadView`); single page still scrolls. Of the "Future" board, password reset
+  two pages (`TextSpreadView`); single page still scrolls. **EPUB reader
+  (2026-10-11)** is pure commonMain, no per-platform code: `data/Zip.kt`
+  (zip + a puff-style DEFLATE decoder; checked against JDK zlib by
+  `InflateJvmTest`), `data/Markup.kt` (lenient XHTML tokenizer), and
+  `data/Epub.kt`, which flattens the spine into one `AnnotatedString`
+  (headings, emphasis, lists; no CSS or images yet) with chapters from the nav
+  doc, else the NCX, else h1–h3. So EPUB is a `TextReader` like TXT
+  (`TextReader(text: AnnotatedString, chapters)`), with the same themes,
+  spreads and per-mille position. The text reader's Contents sheet
+  (`TextPager.goTo` / `offset`) works for both. Of the "Future" board, password reset
   and email verification are built; notifications aren't.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the
   single source: it generates `com.libraryz.AppVersion` (Settings › About)

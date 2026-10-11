@@ -49,10 +49,10 @@ al." in lists; every name on the book's page, each one a search).
 
 ### Read in the app
 
-PDFs and plain text open right in the app; there's nothing to download
-first. On a wide window pages sit side by side like an open book, and
-phones show one page at a time. Text editions have light, sepia and dark
-reading themes and adjustable type. Your place syncs, so **Continue
+PDFs, EPUBs and plain text open right in the app; there's nothing to
+download first. On a wide window pages sit side by side like an open book,
+and phones show one page at a time. EPUB and text editions have light, sepia
+and dark reading themes, adjustable type and a table of contents. Your place syncs, so **Continue
 reading** picks up where you stopped on any device.
 
 | PDF, as a two-page spread | Plain text, as a two-page spread |
@@ -481,7 +481,7 @@ LIBRARYZ_SCREENSHOTS_DIR=$PWD/../docs/screenshots \
 ## Roadmap
 
 - [ ] Notifications (edit approved, upload passed the safety check)
-- [ ] EPUB reader (EPUBs upload and download today, but don't open in-app yet)
+- [ ] EPUB images and the book's own styling (EPUBs open in-app as reflowed text today)
 - [ ] iOS: run and verify on a device, then a macOS CI runner
 - [ ] OAuth / OIDC login
 - [ ] OPDS feed, so other reading apps can browse the library
