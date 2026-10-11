@@ -104,7 +104,7 @@ class AuthState(private val store: TokenStore) : SessionHooks {
     /** Re-reads the signed-in user (e.g. after verifying their email). */
     suspend fun reloadUser() {
         val fetch = userFetcher ?: return
-        user = runCatching { fetch.invoke() }.getOrNull()
+        user = catchingNonCancel { fetch.invoke() }.getOrNull()
     }
 }
 

@@ -9,6 +9,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -480,6 +481,31 @@ class LibraryQueueTest {
         assertNull(state.items)
         assertTrue(state.pending.isEmpty())
         assertNull(disk.value, "and off the device")
+    }
+
+    @Test
+    fun cancellingAChangeBeingSentKeepsIt() = runTest {
+        val disk = Memory()
+        val server = Gated()
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = server.engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+
+        val sending = launch { state.upsert("w1", UpsertLibraryRequest(currentPage = 1)) }
+        server.firstPut.await()
+        sending.cancelAndJoin() // e.g. the reader that saved progress closed
+
+        // Not a refusal: it waits, first in line, on the device too.
+        assertEquals(listOf("w1" to 1), state.pending.map { it.workId to it.upsert?.currentPage })
+        assertEquals(1, state.entryFor("w1")?.currentPage)
+        val next = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = server.engine), storeFactory = { Memory(disk.value) }, server = BASE)
+        next.signingIn()
+        next.refresh()
+        assertEquals(listOf("w1"), next.pending.map { it.workId })
+
+        server.release.complete(Unit)
+        state.sync()
+        assertTrue(state.pending.isEmpty(), "and goes out with the next sync")
+        assertEquals(2, server.puts.size)
     }
 
     @Test

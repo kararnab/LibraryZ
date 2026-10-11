@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.sp
 import com.libraryz.data.Contribution
 import com.libraryz.data.Work
 import com.libraryz.data.api.ContributionsState
+import com.libraryz.data.api.rethrowIfCancelled
 import com.libraryz.data.authorsFull
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.LoadErrorState
@@ -359,6 +360,7 @@ fun ContributionQueueScreen(
                             if (approve) state.approve(c.id) else state.reject(c.id)
                             selectedId = null
                         } catch (e: Throwable) {
+                            e.rethrowIfCancelled()
                             actionError = state.describe(e)
                         }
                     }

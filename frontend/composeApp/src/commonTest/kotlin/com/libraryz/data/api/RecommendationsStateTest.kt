@@ -7,6 +7,10 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,6 +28,23 @@ class RecommendationsStateTest {
             HttpStatusCode.OK,
             headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
         )
+    }
+
+    @Test
+    fun cancellingRefreshLeavesNoError() = runTest {
+        val requested = CompletableDeferred<Unit>()
+        val engine = MockEngine {
+            requested.complete(Unit)
+            awaitCancellation()
+        }
+        val state = RecommendationsState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine))
+
+        val job = launch { state.refresh() }
+        requested.await()
+        job.cancelAndJoin()
+
+        assertNull(state.error, "leaving the screen isn't a failure")
+        assertTrue(state.loading)
     }
 
     @Test

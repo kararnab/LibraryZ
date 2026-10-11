@@ -132,6 +132,7 @@ import com.libraryz.data.TextReader
 import com.libraryz.data.UserBook
 import com.libraryz.data.api.describe
 import com.libraryz.data.api.ApiClient
+import com.libraryz.data.api.rethrowIfCancelled
 import com.libraryz.data.authorsShort
 import com.libraryz.data.openReader
 import com.libraryz.data.pageBreaks
@@ -263,6 +264,7 @@ fun ReaderScreen(
                 api.downloadEditionFile(editionId)
             }
         } catch (e: Throwable) {
+            e.rethrowIfCancelled()
             loadError = api.describe(e)
             downloadFailed = true
         }
@@ -278,6 +280,7 @@ fun ReaderScreen(
             try {
                 openReader(payload, format)
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 loadError = e.message ?: "Failed to open edition"
                 null
             }

@@ -68,6 +68,7 @@ import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.LoginRequest
 import com.libraryz.data.api.Session
 import com.libraryz.data.api.SignUpRequest
+import com.libraryz.data.api.rethrowIfCancelled
 import com.libraryz.data.capped
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.MessageSlot
@@ -152,7 +153,8 @@ fun AuthGateScreen(
                     else -> AuthProblem.Server(if (signUp) "Couldn't create your account. Please try again." else "Couldn't sign you in. Please try again.")
                 }
                 if (problem == AuthProblem.WrongCredentials) password = ""
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 problem = AuthProblem.Network
             } finally {
                 inFlight = false

@@ -151,6 +151,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import com.libraryz.data.api.RemovalRequest
+import com.libraryz.data.api.catchingNonCancel
+import com.libraryz.data.api.rethrowIfCancelled
 
 val LocalSnackbar = compositionLocalOf<SnackbarHostState> {
     error("No SnackbarHost in scope")
@@ -174,7 +176,7 @@ fun App() {
             // auth is also the client's SessionHooks: on a 401 the client
             // refreshes the session through it, or reports it expired.
             ApiClient(DefaultBaseUrl, tokenProvider = { auth.token }, sessionHooks = auth).also { client ->
-                auth.setUserFetcher { runCatching { client.me() }.getOrNull() }
+                auth.setUserFetcher { catchingNonCancel { client.me() }.getOrNull() }
             }
         }
         // The server chosen in Settings (or on sign-in), loaded before the
@@ -204,7 +206,7 @@ fun App() {
                 if (url != serverUrl) {
                     val keepSession = isDevServerUrl(serverUrl) && isDevServerUrl(url)
                     if (auth.isAuthenticated && !keepSession) {
-                        auth.refreshToken?.let { rt -> withTimeoutOrNull(3_000) { runCatching { api.logout(rt) } } }
+                        auth.refreshToken?.let { rt -> withTimeoutOrNull(3_000) { catchingNonCancel { api.logout(rt) } } }
                         auth.clear()
                     }
                     api.baseUrl = url
@@ -321,6 +323,7 @@ internal fun Root(
                 api.requestEmailVerification()
                 snackbar.showSnackbar("Sent a new link to ${auth.user?.email ?: "your email"}.")
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 snackbar.showSnackbar(
                     if ((e as? ApiException)?.status == 429) "Please wait a few minutes before asking for another link."
                     else "Couldn’t send the link. Please try again.",
@@ -349,7 +352,7 @@ internal fun Root(
     // locally), then clears it; the effect above navigates to sign-in.
     val logout: () -> Unit = {
         scope.launch {
-            auth.refreshToken?.let { rt -> runCatching { api.logout(rt) } }
+            auth.refreshToken?.let { rt -> catchingNonCancel { api.logout(rt) } }
             library.forget()
             auth.clear()
         }
@@ -362,6 +365,7 @@ internal fun Root(
                 library.forget()
                 auth.clear()
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 snackbar.showSnackbar("Couldn’t sign out everywhere. ${api.describe(e)}")
             }
         }
@@ -414,6 +418,7 @@ internal fun Root(
                             if (kept) "“${work.title}” is kept on this device." else "Couldn’t keep “${work.title}” on this device.",
                         )
                     } catch (e: Throwable) {
+                        e.rethrowIfCancelled()
                         snackbar.showSnackbar("Couldn’t download “${work.title}”. ${api.describe(e)}")
                     } finally {
                         keeping = keeping - ed.id
@@ -436,10 +441,12 @@ internal fun Root(
                     try {
                         recs.undismiss(dismissed)
                     } catch (e: Throwable) {
+                        e.rethrowIfCancelled()
                         snackbar.showSnackbar("Couldn’t undo. ${api.describe(e)}")
                     }
                 }
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 snackbar.showSnackbar("Couldn’t dismiss. ${api.describe(e)}")
             }
         }
@@ -447,7 +454,7 @@ internal fun Root(
 
     // Resolves a work for screens that only hold its id (the review queue).
     val loadWork: suspend (String) -> Work? = { id ->
-        works.find(id) ?: runCatching { api.getWork(id) }.getOrNull()
+        works.find(id) ?: catchingNonCancel { api.getWork(id) }.getOrNull()
     }
 
     // Load the library up front: it powers "Continue reading" on Browse.
@@ -462,7 +469,7 @@ internal fun Root(
             delay(if (api.reachable) 30_000 else 15_000)
             when {
                 !api.reachable -> api.ping()
-                library.pending.isNotEmpty() -> runCatching { library.sync() }
+                library.pending.isNotEmpty() -> catchingNonCancel { library.sync() }
             }
         }
     }
@@ -539,6 +546,7 @@ internal fun Root(
                             books.keepLater(ed.id, f.sha256, f.bytes, BookInfo(ed.format, work.id, work.title, work.authors), f.filename)
                         }
                 } catch (e: Throwable) {
+                    e.rethrowIfCancelled()
                     snackbar.showSnackbar("Download failed. ${api.describe(e)}")
                     return@launch
                 }
@@ -550,6 +558,7 @@ internal fun Root(
                     val path = saveDownload(name, file.bytes)
                     snackbar.showSnackbar("Saved to $path")
                 } catch (e: Throwable) {
+                    e.rethrowIfCancelled()
                     // A local problem (disk full, no permission): its own message says which.
                     snackbar.showSnackbar("Couldn’t save the file: ${e.message ?: "unknown error"}")
                 }
@@ -563,6 +572,7 @@ internal fun Root(
             try {
                 library.upsert(workId, req)
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 snackbar.showSnackbar("Couldn’t update your library. ${api.describe(e)}")
             }
         }
@@ -573,6 +583,7 @@ internal fun Root(
                 library.remove(workId)
                 snackbar.showSnackbar("Removed from your library.")
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 snackbar.showSnackbar("Couldn’t remove. ${api.describe(e)}")
             }
         }
@@ -591,6 +602,7 @@ internal fun Root(
                     }
                     snackbar.showSnackbar("Removed “${work.title}”.")
                 } catch (e: Throwable) {
+                    e.rethrowIfCancelled()
                     snackbar.showSnackbar("Couldn’t remove. ${api.describe(e)}")
                 }
             }
@@ -603,6 +615,7 @@ internal fun Root(
                     works.removeEdition(work.id, ed.id, removal)
                     snackbar.showSnackbar("Removed the ${ed.format.uppercase()} edition.")
                 } catch (e: Throwable) {
+                    e.rethrowIfCancelled()
                     snackbar.showSnackbar("Couldn’t remove. ${api.describe(e)}")
                 }
             }
@@ -743,7 +756,7 @@ internal fun Root(
                     // means the next one carries it.
                     onProgress = { pos ->
                         scope.launch {
-                            runCatching { library.upsert(s.workId, progressUpdate(library.entryFor(s.workId), pos)) }
+                            catchingNonCancel { library.upsert(s.workId, progressUpdate(library.entryFor(s.workId), pos)) }
                         }
                     },
                     onMarkRead = {

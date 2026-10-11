@@ -59,6 +59,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.libraryz.data.Work
 import com.libraryz.data.api.ApiException
+import com.libraryz.data.api.rethrowIfCancelled
 import com.libraryz.data.splitAuthors
 import com.libraryz.data.surname
 import com.libraryz.ui.components.AuthorChipsField
@@ -169,6 +170,7 @@ fun EditWorkSheet(
                 onSubmit(patch)
                 sentCount = patch.size
             } catch (e: Throwable) {
+                e.rethrowIfCancelled()
                 submitError = describeError(e)
             } finally {
                 submitting = false
