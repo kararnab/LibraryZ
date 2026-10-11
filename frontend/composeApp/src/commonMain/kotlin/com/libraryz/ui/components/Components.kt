@@ -23,13 +23,17 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadForOffline
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -280,16 +284,30 @@ fun EditionRow(
                     }
                 }
             }
-            IconButton(onClick = onDownload) {
-                Icon(
-                    Icons.Rounded.Download,
-                    contentDescription = "Download ${edition.format.uppercase()} edition",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (onRemove != null) {
-                TextButton(onClick = onRemove) {
-                    Text("Remove", color = MaterialTheme.colorScheme.error)
+            // Exporting the file (and the moderator's takedown) are rarer
+            // than reading or keeping it offline, so they live in a menu.
+            Box {
+                var menuOpen by remember { mutableStateOf(false) }
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Rounded.MoreVert,
+                        contentDescription = "More for the ${edition.format.uppercase()} edition",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Save a copy to Downloads") },
+                        leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+                        onClick = { menuOpen = false; onDownload() },
+                    )
+                    if (onRemove != null) {
+                        DropdownMenuItem(
+                            text = { Text("Remove", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = { menuOpen = false; onRemove() },
+                        )
+                    }
                 }
             }
         }
