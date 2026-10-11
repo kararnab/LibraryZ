@@ -62,6 +62,11 @@ DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' 
 # hit-rate@K, MF vs popularity baseline. Tagged so it's off by default.
 go test -tags=eval ./internal/recommendation/...
 
+# Load test (docs/load-testing.md): a separate compose project
+# (libraryz-load, no host ports, own volumes) pinned to the CPUs given, with
+# k6 from its image. Seed once, then steps; `down` removes it.
+scripts/load/run.sh seed && scripts/load/run.sh mix 8-9 "200 400 800"
+
 # Run the whole backend stack (Postgres + API) in one command:
 docker compose up --build          # API (2 instances behind Kong) on :8080, Postgres on :5432
 # The frontend is a client, not a service — run it on the host (see below)

@@ -42,3 +42,6 @@ Thumbs.db
 # Android Studio per-machine config (also covered by frontend/.gitignore,
 # duplicated here defensively for any future top-level appearance)
 # local.properties
+
+# Raw k6 summaries from scripts/load/run.sh (docs/load-testing.md has the numbers)
+scripts/load/results/
