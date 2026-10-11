@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -37,7 +38,7 @@ fun main(args: Array<String>) {
                 window.toFront()
                 window.requestFocus()
             }
-            val fullscreen = remember(state) { WindowFullscreen(state) }
+            val fullscreen = remember(state) { WindowFullscreen(state, window) }
             val systemDark by LinuxColorScheme.dark.collectAsState()
             CompositionLocalProvider(
                 LocalFullscreen provides fullscreen,
@@ -65,14 +66,19 @@ private fun setLinuxWindowClass(name: String) {
     }
 }
 
-/** Full screen as a window placement; leaving it restores the previous one (maximized or not). */
-private class WindowFullscreen(private val state: WindowState) : Fullscreen {
-    private var before = WindowPlacement.Floating
+/**
+ * Full screen as a window placement. Leaving goes through Floating, set on
+ * the window itself: Compose's Maximized only maximizes and leaves full
+ * screen on, so restoring a window that was maximized before kept it full
+ * screen for good. GNOME also drops a maximize sent while it's leaving full
+ * screen, so such a window comes back as a normal one.
+ */
+private class WindowFullscreen(private val state: WindowState, private val window: ComposeWindow) : Fullscreen {
     override val isSupported = true
     override val isOn get() = state.placement == WindowPlacement.Fullscreen
     override fun set(on: Boolean) {
         if (on == isOn) return
-        if (on) before = state.placement
-        state.placement = if (on) WindowPlacement.Fullscreen else before
+        if (on) state.placement = WindowPlacement.Fullscreen
+        else window.placement = WindowPlacement.Floating
     }
 }
