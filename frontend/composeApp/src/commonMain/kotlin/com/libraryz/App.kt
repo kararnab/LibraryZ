@@ -788,7 +788,7 @@ internal fun Root(
                     onDismiss = dismissRec,
                     onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
                     isInLibrary = { workId -> library.entryFor(workId) != null },
-                    onOpenLibrary = { nav.replace(Screen.Library) },
+                    onUpload = { nav.push(Screen.Upload()) },
                 )
             }
 
