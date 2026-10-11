@@ -121,7 +121,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (225 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (229 each;
 # desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -225,7 +225,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 164 backend + 225 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 165 backend + 229 frontend
   tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -461,9 +461,13 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `remove` applies on the device at once, waits in a saved queue, and is
   sent by `sync`; the server merges per field group (status / progress /
   rating / shelf / notes), newest hybrid-logical-clock stamp wins
-  (`internal/library/stamp.go`, `data/Hlc.kt`). Keep `applyLocally`
-  (LibraryMerge.kt) in step with `mergeInto` (service.go): the app shows
-  what the server will store. Removals are remembered in
+  (`internal/library/stamp.go`, `data/Hlc.kt`). `applyLocally`
+  (LibraryMerge.kt) must store what `mergeInto` (service.go) does: when
+  you change a merge rule, add a case to
+  `internal/library/testdata/merge_cases.json`, which both `go test` and
+  the app's `LibraryMergeCasesTest` run (Gradle's `generateMergeCases`
+  inlines it for every target). The change being sent is
+  `LibraryState.inFlight`, apart from the queue; nothing merges into it. Removals are remembered in
   `library_removals`, not by soft-deleting `user_books`. **Offline UI
   (8.4):** `ApiClient.reachable` follows every request (any answer = online)
   and drives the app-wide `OfflineStrip`; screens that only work online are

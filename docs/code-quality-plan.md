@@ -157,7 +157,7 @@ to see the count", or keep only the date line.
 ## Status
 
 - [x] 1. Explicit in-flight write
-- [ ] 2. Shared merge cases + notes parity
+- [x] 2. Shared merge cases + notes parity
 - [ ] 3. Validation audit
 - [ ] 4. Cancellation hygiene
 - [ ] 5. File splits
