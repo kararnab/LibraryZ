@@ -39,9 +39,11 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   (e.g. `docker compose logs libraryz-1`).
 
 ### Fixed
-- Two-page text no longer clips a table at the foot of a page: rows that
-  should have started the next page were taken for blank lines, drawn cut
-  off at the bottom of the page before, and the rows after them never shown.
+- Two-page text no longer clips tables and plates at the foot of a page:
+  rows that should have started the next page were taken for blank lines,
+  drawn cut off at the bottom of the page before, and the rows after them
+  never shown; and a row taller than its line (a plate beside its caption)
+  could run past the foot, or push the page's last line past it.
 
 ## [0.1.0] - 2026-10-11
 

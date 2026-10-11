@@ -1432,18 +1432,30 @@ private fun TextView(
 }
 
 /**
- * The first line of each [height]-tall page of [layout]. A line's text runs
- * to where the next line starts: Skia ends a line of only a placeholder (a
- * picture, a table row) where it starts, and read as empty those lines
- * looked blank, so they were skipped at the top of a page and drawn,
- * clipped, at the foot of the one before.
+ * The first line of each [height]-tall page of [layout]. Placeholder lines
+ * (pictures, table rows) need two corrections, or they're cut off at the
+ * foot of a page:
+ * - A line spans what its placeholders draw, which can reach above and
+ *   below its box: table rows are centred on fixed-height lines.
+ * - A line's text runs to where the next line starts: Skia ends a line of
+ *   only a placeholder where it starts, and read as empty those lines looked
+ *   blank, so they were skipped at the top of a page.
  */
 internal fun textPageBreaks(layout: TextLayoutResult, height: Float): List<Int> {
     val text = layout.layoutInput.text.text
+    // The highest and lowest drawn edges of each line's placeholders.
+    val drawnTop = HashMap<Int, Float>()
+    val drawnBottom = HashMap<Int, Float>()
+    layout.layoutInput.placeholders.forEachIndexed { i, range ->
+        val rect = layout.placeholderRects.getOrNull(i) ?: return@forEachIndexed
+        val line = layout.getLineForOffset(range.start)
+        drawnTop[line] = minOf(drawnTop[line] ?: rect.top, rect.top)
+        drawnBottom[line] = maxOf(drawnBottom[line] ?: rect.bottom, rect.bottom)
+    }
     return pageBreaks(
         lineCount = layout.lineCount,
-        top = layout::getLineTop,
-        bottom = layout::getLineBottom,
+        top = { line -> minOf(layout.getLineTop(line), drawnTop[line] ?: Float.MAX_VALUE) },
+        bottom = { line -> maxOf(layout.getLineBottom(line), drawnBottom[line] ?: 0f) },
         height = height,
         blank = { line ->
             val end = if (line + 1 < layout.lineCount) layout.getLineStart(line + 1) else text.length
