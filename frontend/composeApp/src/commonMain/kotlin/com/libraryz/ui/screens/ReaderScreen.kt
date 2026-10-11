@@ -59,6 +59,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
@@ -110,6 +111,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import com.libraryz.data.BookLayout
 import com.libraryz.data.BookLayouts
@@ -133,6 +135,7 @@ import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.LocalFullscreen
 import com.libraryz.ui.components.StarRating
+import com.libraryz.ui.components.rememberSizedText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1250,26 +1253,39 @@ private fun TextView(
                 onPosition(if (max <= 0) last else (value.toFloat() / max * last).roundToInt())
             }
     }
-    Box(
-        modifier = Modifier.fillMaxSize().verticalScroll(scroll),
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = prefs.width.max)
-                .padding(horizontal = if (wide) 40.dp else 28.dp)
-                .padding(top = topPadding, bottom = 40.dp),
-            verticalArrangement = Arrangement.spacedBy(40.dp),
-        ) {
-            Text(
-                text = reader.text,
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val gutter = if (wide) 40.dp else 28.dp
+        val style = LocalTextStyle.current.merge(
+            TextStyle(
                 fontFamily = LibraryZ.tokens.serif,
                 fontSize = prefs.textSize.sp,
                 lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
                 color = prefs.theme.ink,
-                onTextLayout = { textLayout = it },
-            )
-            end()
+            ),
+        )
+        // Pictures and tables fit the column, pictures most of the screen's height.
+        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme)
+        Box(
+            modifier = Modifier.fillMaxSize().verticalScroll(scroll),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    // The whole column even when the text is short, so headings center in it.
+                    .fillMaxWidth()
+                    .widthIn(max = prefs.width.max)
+                    .padding(horizontal = gutter)
+                    .padding(top = topPadding, bottom = 40.dp),
+                verticalArrangement = Arrangement.spacedBy(40.dp),
+            ) {
+                Text(
+                    text = sized.text,
+                    style = style.merge(TextStyle(lineHeightStyle = sized.lineHeightStyle)),
+                    inlineContent = sized.inlineContent,
+                    onTextLayout = { textLayout = it },
+                )
+                end()
+            }
         }
     }
 }
@@ -1314,14 +1330,13 @@ private fun TextSpreadView(
     onToggleChrome: () -> Unit,
     end: @Composable () -> Unit,
 ) {
-    val text = reader.text
     val theme = prefs.theme
     val last = TEXT_POSITIONS - 1
     val chapters = reader.chapters
     // Where the reader is, as a character offset: stays put when the pages
     // are re-measured (text size, spacing, window size). Past the text = the end card.
     var anchor by remember(reader) {
-        mutableStateOf((startPosition.toFloat() / last * text.length).roundToInt().coerceIn(0, text.length))
+        mutableStateOf((startPosition.toFloat() / last * reader.text.length).roundToInt().coerceIn(0, reader.text.length))
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -1329,20 +1344,24 @@ private fun TextSpreadView(
         // Running head (16 + 20) and foot (14 + 16) around the body; page padding 28 / 20.
         val pageHeight = maxHeight
         val bodyHeight = maxHeight - 28.dp - 20.dp - 36.dp - 30.dp
-        val style = TextStyle(
+        val baseStyle = TextStyle(
             fontFamily = LibraryZ.tokens.serif,
             fontSize = prefs.textSize.sp,
             lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
             color = theme.ink,
             textAlign = TextAlign.Justify,
         )
+        // A picture or table row fits a page, a little under so rounding can't push it over.
+        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme)
+        val text = sized.text
+        val style = baseStyle.copy(lineHeightStyle = sized.lineHeightStyle)
         val measurer = rememberTextMeasurer(cacheSize = 0)
         val columnPx = with(density) { column.roundToPx() }.coerceAtLeast(1)
         val bodyPx = with(density) { bodyHeight.toPx() }.coerceAtLeast(1f)
         // Lay the whole text out once per column width and style, then cut it
         // into pages of whole lines. Each page then draws only its own text.
         val layout = remember(text, style, columnPx) {
-            measurer.measure(text, style, constraints = Constraints(maxWidth = columnPx))
+            measurer.measure(text, style, placeholders = sized.placeholders, constraints = Constraints(maxWidth = columnPx))
         }
         val starts = remember(layout, bodyPx) {
             pageBreaks(
@@ -1447,6 +1466,7 @@ private fun TextSpreadView(
                             Text(
                                 text.subSequence(startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
                                 style = style,
+                                inlineContent = sized.inlineContent,
                                 modifier = Modifier.requiredWidth(with(density) { columnPx.toDp() }),
                             )
                         }

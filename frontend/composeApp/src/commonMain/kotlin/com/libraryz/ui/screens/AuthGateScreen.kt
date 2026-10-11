@@ -379,7 +379,7 @@ private fun WelcomePanel(modifier: Modifier) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Feature(Icons.Outlined.Explore, "Browse a catalog the community builds together")
                 Feature(Icons.Outlined.AutoStories, "Keep your own shelves, ratings and notes")
-                Feature(Icons.AutoMirrored.Rounded.MenuBook, "Read PDF and plain-text editions right here")
+                Feature(Icons.AutoMirrored.Rounded.MenuBook, "Read PDF, EPUB and plain-text editions right here")
             }
         }
     }

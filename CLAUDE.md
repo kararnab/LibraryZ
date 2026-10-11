@@ -109,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (168 each;
-# desktop also has DesktopLinksTest, InflateJvmTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (180 each;
+# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -212,7 +212,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 168 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 180 frontend
   tests** (+1 with `-tags=eval`, +16 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -355,10 +355,35 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (zip + a puff-style DEFLATE decoder; checked against JDK zlib by
   `InflateJvmTest`), `data/Markup.kt` (lenient XHTML tokenizer), and
   `data/Epub.kt`, which flattens the spine into one `AnnotatedString`
-  (headings, emphasis, lists; no CSS or images yet) with chapters from the nav
+  (headings, emphasis, lists, pictures, tables, a subset of the book's CSS) with chapters from the nav
   doc, else the NCX, else h1–h3. So EPUB is a `TextReader` like TXT
-  (`TextReader(text: AnnotatedString, chapters)`), with the same themes,
-  spreads and per-mille position. The text reader's Contents sheet
+  (`TextReader(text: AnnotatedString, chapters, images, tables)`), with the same themes,
+  spreads and per-mille position. **Pictures (2026-10-11):** each `<img>` (and
+  `<svg><image>`, e.g. covers) is one `IMAGE_CHAR` annotated `IMAGE_TAG` = its
+  zip path, also inline content under that key; `BookImage` keeps the size
+  read from the header (`data/ImageSize.kt`: PNG/JPEG/GIF/WebP/BMP, no SVG,
+  which falls back to alt text) and re-reads the bytes when drawn.
+  `ui/components/BookImages.kt` sizes placeholders per column (block: full
+  column width, picture centered, capped to the page / 85% of the screen;
+  ≤ 40 px high: inline, 1 em) and decodes only while on screen. The style
+  needs `LineHeightStyle.Mode.Minimum` when there are pictures: Android's
+  default `Fixed` mode crops a tall placeholder's line to one text line (Skia
+  grows it either way). **Book CSS (2026-10-11):** `data/Css.kt` parses
+  linked sheets, `<style>` and `style=""` (tag/.class/#id/*, descendant and
+  child; pseudo, attribute, sibling and `@media` are dropped).
+  `BookBuilder` honours alignment (center/right; left/justify stay the
+  reader's), text-indent, margin/padding-left (`TextIndent`), explicit 0
+  margins (no blank line), `display: none|block`, colour, background,
+  weight, style, decoration, small caps. Paragraph styles go on
+  **non-overlapping regions**: where one ends the line break is implied, so a
+  region carries its trailing `\n` (expect one `\n` at region edges, two
+  inside). **Tables** (`BookTable`): each row is one `IMAGE_CHAR` with
+  `TABLE_TAG` = "t:r", in a one-line paragraph of its own (`TABLE_ROW`),
+  because Android's `LineHeightStyleSpan` sizes a paragraph's middle lines
+  from its first and would crop rows; `BookText.kt` lays out columns
+  browser-style and rows as a placeholder each. Colours are adapted per
+  reading theme at render (`themed`: greys → ink, hues kept at ≥ 4:1,
+  highlights toned so ink reads at 4.5:1). The text reader's Contents sheet
   (`TextPager.goTo` / `offset`) works for both. Of the "Future" board, password reset
   and email verification are built; notifications aren't.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the

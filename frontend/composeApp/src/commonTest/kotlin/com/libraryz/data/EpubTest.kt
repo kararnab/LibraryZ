@@ -14,14 +14,14 @@ import kotlin.test.assertTrue
  * A minimal zip with every entry stored (no compression), so a test can
  * spell out an EPUB's files. CRCs are left 0: the reader doesn't check them.
  */
-private fun storedZip(vararg files: Pair<String, String>): ByteArray {
+internal fun storedZip(vararg files: Pair<String, Any>): ByteArray {
     val out = ArrayList<Byte>()
     val central = ArrayList<Byte>()
     fun MutableList<Byte>.u16(v: Int) { add(v.toByte()); add((v shr 8).toByte()) }
     fun MutableList<Byte>.u32(v: Int) { u16(v and 0xFFFF); u16(v ushr 16) }
     for ((name, body) in files) {
         val n = name.encodeToByteArray()
-        val b = body.encodeToByteArray()
+        val b = body as? ByteArray ?: body.toString().encodeToByteArray()
         val offset = out.size
         out.u32(0x04034b50); out.u16(20); out.u16(0); out.u16(0); out.u32(0); out.u32(0)
         out.u32(b.size); out.u32(b.size); out.u16(n.size); out.u16(0)
@@ -38,16 +38,16 @@ private fun storedZip(vararg files: Pair<String, String>): ByteArray {
     return out.toByteArray()
 }
 
-private val CONTAINER = "META-INF/container.xml" to
+internal val CONTAINER = "META-INF/container.xml" to
     """<container><rootfiles><rootfile full-path="book/content.opf"/></rootfiles></container>"""
 
-private fun epub(opf: String, vararg docs: Pair<String, String>): ByteArray =
+internal fun epub(opf: String, vararg docs: Pair<String, Any>): ByteArray =
     storedZip("mimetype" to "application/epub+zip", CONTAINER, "book/content.opf" to opf, *docs)
 
-private fun opf(manifest: String, spine: String, toc: String = "") =
+internal fun opf(manifest: String, spine: String, toc: String = "") =
     """<package><manifest>$manifest</manifest><spine $toc>$spine</spine></package>"""
 
-private fun item(id: String, href: String, type: String = "application/xhtml+xml", props: String = "") =
+internal fun item(id: String, href: String, type: String = "application/xhtml+xml", props: String = "") =
     """<item id="$id" href="$href" media-type="$type" properties="$props"/>"""
 
 class EpubTest {
@@ -56,8 +56,8 @@ class EpubTest {
     fun readsADeflatedEpubWithANavDocument() {
         val book = parseEpub(FIXTURE)
         val text = book.text.text
-        assertTrue(text.startsWith("One\n\nIt was a dark and stormy night; the rain fell in torrents."), text.take(80))
-        assertTrue(text.endsWith("Intro.\n\nTwo\n\nThe end."), text.takeLast(40))
+        assertTrue(text.startsWith("One\nIt was a dark and stormy night; the rain fell in torrents."), text.take(80))
+        assertTrue(text.endsWith("Intro.\nTwo\nThe end."), text.takeLast(40))
         // The head's title and style aren't text.
         assertTrue("Ignored" !in text && "color" !in text)
         // The toc nav, not the landmarks one; hrefs percent-decoded and fragments resolved.
@@ -74,7 +74,7 @@ class EpubTest {
         val italic = text.spanStyles.single { it.item.fontStyle == FontStyle.Italic }
         assertEquals(end to end + 3, italic.start to italic.end)
         val centered = text.paragraphStyles.filter { (it.item as ParagraphStyle).textAlign == TextAlign.Center }
-        assertEquals(listOf("One", "Two"), centered.map { text.text.substring(it.start, it.end) })
+        assertEquals(listOf("One", "Two"), centered.map { text.text.substring(it.start, it.end).trimEnd() })
     }
 
     @Test
@@ -121,8 +121,9 @@ class EpubTest {
             <p>Unclosed <em>em<p>Next</body>"""
         val book = parseEpub(epub(opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""), "book/a.xhtml" to body))
         assertEquals(
-            "Hello, world!\n\nNested\n\nLine one\nline two\n\nLeading break\n\n3. three\n\n4. four\n\n• dot\n\n*   *   *\n\n" +
-                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n\n*   *   *\n\nafter\n\n• \n\n    • inner\n\n" +
+            // A centered heading or rule is a paragraph region of its own: its end breaks the line, so one \n makes the blank line.
+            "Hello, world!\n\nNested\n\nLine one\nline two\nLeading break\n3. three\n\n4. four\n\n• dot\n*   *   *\n" +
+                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n*   *   *\nafter\n\n• \n\n    • inner\n\n" +
                     "Unclosed em\n\nNext",
             book.text.text,
         )
@@ -144,6 +145,59 @@ class EpubTest {
         assertFailsWith<EpubException> { parseEpub("not a zip".encodeToByteArray()) }
         val imagesOnly = epub(opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""), "book/a.xhtml" to """<body><img src="p.png"/></body>""")
         assertFailsWith<EpubException> { parseEpub(imagesOnly) }
+    }
+
+    @Test
+    fun keepsPicturesAsPlaceholders() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "Text/a.xhtml") + item("c", "Text/c.xhtml"), """<itemref idref="c"/><itemref idref="a"/>"""),
+                "book/Text/c.xhtml" to """<body><svg><title>x</title><image width="9" xlink:href="../Images/cover.png"/></svg></body>""",
+                "book/Text/a.xhtml" to """<body><h1><img src="../Images/one.png" alt="Chapter One"/></h1>
+                    <p>Before <img src="../Images/star.png" alt="*"/> after.</p>
+                    <figure><img src="../Images/map.png"/><figcaption>A map</figcaption></figure>
+                    <p>Gone: <img src="../Images/missing.png" alt="[missing]"/> <img src="data:image/png;base64,AA"/>.</p></body>""",
+                "book/Images/cover.png" to png(600, 900),
+                "book/Images/one.png" to png(400, 120),
+                "book/Images/star.png" to png(16, 16),
+                "book/Images/map.png" to png(800, 600),
+            ),
+        )
+        val p = IMAGE_CHAR
+        assertEquals("$p\n$p\nBefore $p after.\n\n$p\nA map\nGone: [missing] .", book.text.text)
+        val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length)
+        assertEquals(listOf("cover", "one", "star", "map").map { "book/Images/$it.png" }, marks.map { it.item })
+        assertEquals(marks.map { it.start }, Regex(p).findAll(book.text.text).map { it.range.first }.toList())
+        assertEquals(setOf(true to (600 to 900), true to (400 to 120), false to (16 to 16), true to (800 to 600)),
+            book.images.values.map { it.block to (it.width to it.height) }.toSet())
+        assertEquals("Chapter One", book.images.getValue("book/Images/one.png").alt)
+        // A heading that is only a picture is named by its alt text.
+        assertEquals(listOf("Chapter One"), book.chapters.map { it.title })
+        assertEquals(book.text.text.indexOf(p, 1), book.chapters.single().offset)
+        assertEquals(png(800, 600).toList(), book.images.getValue("book/Images/map.png").bytes().toList())
+    }
+
+    @Test
+    fun opensABookOfPicturesOnly() {
+        val book = parseEpub(
+            epub(opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""), "book/a.xhtml" to """<body><img src="p.png"/></body>""", "book/p.png" to png(10, 10)),
+        )
+        assertEquals(IMAGE_CHAR, book.text.text)
+    }
+
+    @Test
+    fun readsImageSizesFromHeaders() {
+        assertEquals(400 to 120, imageSize(png(400, 120)))
+        val gif = "GIF89a".encodeToByteArray() + byteArrayOf(0x2C, 0x01, 0x64, 0x00)
+        assertEquals(300 to 100, imageSize(gif))
+        // SOI, an APP0 segment to skip, then SOF0: height 0x01E0 (480), width 0x0280 (640).
+        val jpeg = bytes(0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x4A, 0x46, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x01, 0xE0, 0x02, 0x80, 0x03)
+        assertEquals(640 to 480, imageSize(jpeg))
+        // WebP extended: canvas width - 1 and height - 1 as 24-bit little-endian.
+        val webp = "RIFF....WEBPVP8X".encodeToByteArray() + ByteArray(8) + bytes(0xFF, 0x00, 0x00, 0x7F, 0x00, 0x00)
+        assertEquals(256 to 128, imageSize(webp))
+        assertEquals(null, imageSize("<svg xmlns='http://www.w3.org/2000/svg'/>".encodeToByteArray()))
+        assertEquals(null, imageSize(bytes(0xFF, 0xD8, 0xFF)))
     }
 
     @Test
@@ -179,6 +233,15 @@ class EpubTest {
     @Test
     fun capsHowFarAnEntryInflates() {
         assertFailsWith<ZipException> { ZipArchive(FIXTURE, maxEntrySize = 100).readText("OEBPS/Text/chapter 1.xhtml") }
+    }
+
+    private fun bytes(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
+
+    /** A PNG's signature and IHDR, enough for [imageSize]; not decodable. */
+    private fun png(width: Int, height: Int): ByteArray {
+        fun be32(v: Int) = bytes(v ushr 24, (v ushr 16) and 0xFF, (v ushr 8) and 0xFF, v and 0xFF)
+        return bytes(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) + be32(13) + "IHDR".encodeToByteArray() +
+            be32(width) + be32(height) + bytes(8, 6, 0, 0, 0)
     }
 
     private companion object {
