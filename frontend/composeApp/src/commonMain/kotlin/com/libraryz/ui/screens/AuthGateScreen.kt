@@ -67,6 +67,10 @@ import com.libraryz.data.api.LoginRequest
 import com.libraryz.data.api.Session
 import com.libraryz.data.api.SignUpRequest
 import com.libraryz.ui.components.Banner
+import com.libraryz.ui.components.MessageSlot
+import com.libraryz.theme.LocalReduceMotion
+import com.libraryz.theme.Motion
+import androidx.compose.animation.AnimatedVisibility
 import com.libraryz.ui.components.BannerTone
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
@@ -159,12 +163,19 @@ fun AuthGateScreen(
                 Tab(selected = !signUp, onClick = { tab = 0; problem = null }, text = { Text("Log in") })
                 Tab(selected = signUp, onClick = { tab = 1; problem = null }, text = { Text("Create account") })
             }
-            if (passwordChanged && problem == null) {
-                Banner(BannerTone.Info, Icons.Rounded.CheckCircle, "Password changed. Log in with your new password.")
-            } else if (sessionExpired && problem == null) {
-                Banner(BannerTone.Info, Icons.Rounded.Schedule, "Your session expired. Please sign in again.")
+            val notice = when {
+                problem != null -> null
+                passwordChanged -> AuthNotice.PasswordChanged
+                sessionExpired -> AuthNotice.SessionExpired
+                else -> null
             }
-            when (val p = problem) {
+            MessageSlot(notice) { n ->
+                when (n) {
+                    AuthNotice.PasswordChanged -> Banner(BannerTone.Info, Icons.Rounded.CheckCircle, "Password changed. Log in with your new password.")
+                    AuthNotice.SessionExpired -> Banner(BannerTone.Info, Icons.Rounded.Schedule, "Your session expired. Please sign in again.")
+                }
+            }
+            MessageSlot(problem) { p -> when (p) {
                 AuthProblem.WrongCredentials -> Banner(BannerTone.Error, Icons.Rounded.Error, "Incorrect email or password.")
                 AuthProblem.Throttled -> Banner(
                     BannerTone.Calm,
@@ -180,9 +191,9 @@ fun AuthGateScreen(
                 )
                 AuthProblem.MissingFields -> Banner(BannerTone.Error, Icons.Rounded.Error, "Please fill in every field.")
                 is AuthProblem.Server -> Banner(BannerTone.Error, Icons.Rounded.Error, p.message)
-                null -> Unit
-            }
-            if (signUp) {
+            } }
+            val reduce = LocalReduceMotion.current
+            AnimatedVisibility(signUp, enter = Motion.reveal(reduce), exit = Motion.conceal(reduce)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -224,11 +235,15 @@ fun AuthGateScreen(
                 } else null,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (!signUp && onForgotPassword != null) {
-                TextButton(
-                    onClick = { onForgotPassword(email.trim()) },
+            if (onForgotPassword != null) {
+                AnimatedVisibility(
+                    !signUp,
+                    enter = Motion.reveal(reduce),
+                    exit = Motion.conceal(reduce),
                     modifier = Modifier.align(Alignment.End).offset(y = (-8).dp),
-                ) { Text("Forgot password?") }
+                ) {
+                    TextButton(onClick = { onForgotPassword(email.trim()) }) { Text("Forgot password?") }
+                }
             }
             Button(
                 onClick = ::submit,
@@ -397,3 +412,6 @@ private fun Feature(icon: ImageVector, text: String) {
 private fun Shelf(modifier: Modifier) {
     Box(modifier.height(6.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(3.dp)))
 }
+
+/** Why the sign-in form opened, when there's something to say. */
+private enum class AuthNotice { PasswordChanged, SessionExpired }

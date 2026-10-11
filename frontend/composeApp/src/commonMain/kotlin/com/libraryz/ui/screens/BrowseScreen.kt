@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.libraryz.data.Work
 import com.libraryz.theme.LibraryZ
+import com.libraryz.theme.itemMotion
 import com.libraryz.ui.components.EmptyState
 import com.libraryz.ui.components.SectionLabel
 import com.libraryz.ui.components.Skeleton
@@ -222,7 +223,8 @@ fun BrowseScreen(
                         highlight = activeSearchQuery,
                         inLibrary = w.id in libraryWorkIds,
                         selected = w.id == selectedWorkId,
-                        modifier = Modifier.padding(horizontal = if (compact) 0.dp else 8.dp),
+                        // Search results fade in and slide into place.
+                        modifier = itemMotion().padding(horizontal = if (compact) 0.dp else 8.dp),
                     )
                 }
             }

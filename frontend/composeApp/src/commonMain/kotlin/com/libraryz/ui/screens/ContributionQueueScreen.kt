@@ -82,6 +82,12 @@ import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
+import com.libraryz.theme.LocalReduceMotion
+import com.libraryz.theme.Motion
+import com.libraryz.theme.itemMotion
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.platform.LocalDensity
 import com.libraryz.ui.components.Skeleton
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
@@ -209,13 +215,37 @@ fun ContributionQueueScreen(
 
     val decide: (Contribution, Boolean) -> Unit = { c, approve -> confirm = c to approve }
 
+    val view = when {
+        state.loading -> QueueView.Loading
+        state.error != null && items == null -> QueueView.Error
+        items.isNullOrEmpty() -> QueueView.Empty
+        isWide -> QueueView.Wide
+        selected != null -> QueueView.Detail(selected)
+        else -> QueueView.List
+    }
+    val reduce = LocalReduceMotion.current
+    val shift = with(LocalDensity.current) { Motion.SHIFT_DP.dp.roundToPx() }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
-        when {
-            state.loading -> Column(Modifier.fillMaxSize()) {
+        // On phones a suggestion opens like a screen of its own, and closes back to the list.
+        AnimatedContent(
+            targetState = view,
+            contentKey = { if (it is QueueView.Detail) QueueView.List::class else it },
+            transitionSpec = {
+                when {
+                    initialState == QueueView.List && targetState is QueueView.Detail -> Motion.sharedAxisX(forward = true, shift, reduce)
+                    initialState is QueueView.Detail && targetState == QueueView.List -> Motion.sharedAxisX(forward = false, shift, reduce)
+                    else -> Motion.crossfade(Motion.MEDIUM)
+                }
+            },
+            label = "queue",
+        ) { v ->
+        val items = items.orEmpty()
+        when (v) {
+            QueueView.Loading -> Column(Modifier.fillMaxSize()) {
                 QueueHeader(null)
                 QueueSkeleton()
             }
-            state.error != null && items == null -> Column(Modifier.fillMaxSize()) {
+            QueueView.Error -> Column(Modifier.fillMaxSize()) {
                 QueueHeader(null)
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     EmptyState(
@@ -232,7 +262,7 @@ fun ContributionQueueScreen(
                     )
                 }
             }
-            items.isNullOrEmpty() -> Column(Modifier.fillMaxSize()) {
+            QueueView.Empty -> Column(Modifier.fillMaxSize()) {
                 QueueHeader(null)
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     EmptyState(
@@ -242,7 +272,7 @@ fun ContributionQueueScreen(
                     )
                 }
             }
-            isWide -> Row(Modifier.fillMaxSize()) {
+            QueueView.Wide -> Row(Modifier.fillMaxSize()) {
                 Column(Modifier.width(380.dp).fillMaxHeight().padding(top = 8.dp)) {
                     QueueHeader(items.size)
                     QueueList(items, books, selected?.id, Modifier.padding(end = 16.dp)) { selectedId = it.id }
@@ -252,12 +282,18 @@ fun ContributionQueueScreen(
                     shape = RoundedCornerShape(24.dp),
                     modifier = Modifier.fillMaxSize().padding(top = 16.dp, end = 16.dp, bottom = 16.dp),
                 ) {
-                    selected?.let { c ->
-                        SuggestionDetail(c, books[c.workId], wide = true, actionError, onOpenWork, decide)
+                    AnimatedContent(
+                        targetState = selected,
+                        contentKey = { it?.id },
+                        transitionSpec = { Motion.fadeThrough(reduce) },
+                        label = "suggestion",
+                    ) { c ->
+                        if (c != null) SuggestionDetail(c, books[c.workId], wide = true, actionError, onOpenWork, decide)
                     }
                 }
             }
-            selected != null -> Column(Modifier.fillMaxSize()) {
+            is QueueView.Detail -> Column(Modifier.fillMaxSize()) {
+                val selected = v.contribution
                 Row(
                     Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -293,10 +329,11 @@ fun ContributionQueueScreen(
                     }
                 }
             }
-            else -> Column(Modifier.fillMaxSize()) {
+            QueueView.List -> Column(Modifier.fillMaxSize()) {
                 QueueHeader(items.size)
                 QueueList(items, books, null, Modifier) { selectedId = it.id; actionError = null }
             }
+        }
         }
     }
 
@@ -343,6 +380,17 @@ fun ContributionQueueScreen(
     }
 }
 
+/** What the queue shows; on phones a suggestion is opened over the list. */
+private sealed interface QueueView {
+    data object Loading : QueueView
+    data object Error : QueueView
+    data object Empty : QueueView
+    data object Wide : QueueView
+    data object List : QueueView
+    /** Carries its suggestion, so it can still draw while it closes after a decision. */
+    data class Detail(val contribution: Contribution) : QueueView
+}
+
 /** "subtitle and description", "a, b and c". */
 internal fun joinNatural(parts: List<String>): String = when (parts.size) {
     0 -> "changes"
@@ -377,11 +425,18 @@ private fun QueueList(
             val book = books[c.workId]
             val title = book?.title ?: "Loading…"
             val selected = c.id == selectedId
+            val selectedColor = MaterialTheme.colorScheme.secondaryContainer
+            val container by animateColorAsState(
+                if (selected) selectedColor else selectedColor.copy(alpha = 0f),
+                Motion.standard(),
+                label = "row container",
+            )
+            // Decided suggestions fade out and the rest close the gap.
             Surface(
                 onClick = { onOpen(c) },
-                color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                color = container,
                 shape = if (selectedId != null) MaterialTheme.shapes.large else RoundedCornerShape(0.dp),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = itemMotion().fillMaxWidth(),
             ) {
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 96.dp).padding(horizontal = 16.dp, vertical = 14.dp),

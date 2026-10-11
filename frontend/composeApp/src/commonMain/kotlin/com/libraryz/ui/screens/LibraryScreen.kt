@@ -57,6 +57,9 @@ import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
+import com.libraryz.ui.components.LoadPhase
+import com.libraryz.ui.components.PhaseCrossfade
+import com.libraryz.theme.itemMotion
 import com.libraryz.ui.components.Skeleton
 import com.libraryz.ui.components.StarRating
 import kotlinx.coroutines.launch
@@ -148,22 +151,28 @@ fun LibraryScreen(
 
             val items = state.items
             val err = state.error
-            Box(Modifier.fillMaxSize()) {
-                when {
-                    state.loading -> LibrarySkeleton(isWide)
-                    err != null && items == null -> Box(
+            val phase = when {
+                state.loading -> LoadPhase.Loading
+                err != null && items == null -> LoadPhase.Error
+                items.isNullOrEmpty() -> LoadPhase.Empty
+                else -> LoadPhase.Content
+            }
+            PhaseCrossfade(phase, Modifier.fillMaxSize()) { p ->
+                when (p) {
+                    LoadPhase.Loading -> LibrarySkeleton(isWide)
+                    LoadPhase.Error -> Box(
                         Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
                         EmptyState(
                             title = "Couldn't load your library",
-                            body = err,
+                            body = err.orEmpty(),
                             action = {
                                 Button(onClick = { scope.launch { state.refresh() } }) { Text("Retry") }
                             },
                         )
                     }
-                    items.isNullOrEmpty() -> Box(
+                    LoadPhase.Empty -> Box(
                         Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -181,14 +190,16 @@ fun LibraryScreen(
                             },
                         )
                     }
-                    else -> LazyVerticalGrid(
+                    LoadPhase.Content -> LazyVerticalGrid(
                         columns = if (isWide) GridCells.Adaptive(360.dp) else GridCells.Fixed(1),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(items, key = { it.id }) { ub -> LibraryCard(ub, onOpenWork, onRead) }
+                        items(items.orEmpty(), key = { it.id }) { ub ->
+                            Box(itemMotion()) { LibraryCard(ub, onOpenWork, onRead) }
+                        }
                     }
                 }
             }

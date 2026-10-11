@@ -38,6 +38,8 @@ class Navigator(initial: Screen) {
     private val stack = mutableStateListOf(initial)
     val current: Screen by derivedStateOf { stack.last() }
     val canGoBack: Boolean get() = stack.size > 1
+    /** The whole stack, bottom first. */
+    val entries: List<Screen> get() = stack
 
     fun push(s: Screen) { stack.add(s) }
     fun pop(): Boolean {

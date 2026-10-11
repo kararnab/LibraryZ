@@ -8,13 +8,30 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
 import com.libraryz.ui.Fullscreen
 import com.libraryz.ui.LocalFullscreen
+import com.libraryz.theme.LocalReduceMotion
 import kotlinx.browser.document
+import kotlinx.browser.window
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     val fullscreen = BrowserFullscreen()
+    val reduceMotion = ReduceMotionQuery()
     ComposeViewport(document.body!!) {
-        CompositionLocalProvider(LocalFullscreen provides fullscreen) { App() }
+        CompositionLocalProvider(
+            LocalFullscreen provides fullscreen,
+            LocalReduceMotion provides reduceMotion.on,
+        ) { App() }
+    }
+}
+
+/** The browser's `prefers-reduced-motion`, followed live. */
+private class ReduceMotionQuery {
+    private val query = window.matchMedia("(prefers-reduced-motion: reduce)")
+    var on by mutableStateOf(query.matches)
+        private set
+
+    init {
+        query.addEventListener("change", { on = query.matches })
     }
 }
 

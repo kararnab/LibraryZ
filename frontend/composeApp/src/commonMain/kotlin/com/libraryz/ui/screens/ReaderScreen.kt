@@ -135,6 +135,25 @@ import com.libraryz.data.pagesLabel
 import com.libraryz.data.pagesLeftLabel
 import com.libraryz.data.resumePage
 import com.libraryz.theme.LibraryZ
+import com.libraryz.theme.LocalReduceMotion
+import com.libraryz.theme.Motion
+import com.libraryz.theme.dissolveFrom
+import com.libraryz.theme.movementSpec
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.ui.graphics.TransformOrigin
 import com.libraryz.theme.LibraryZTheme
 import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.LocalFullscreen
@@ -535,8 +554,14 @@ private fun PagedReaderLayout(
     val pages = slots.filter { it < pageCount }
     val atEndCard = reader != null && pages.isEmpty() && slots.isNotEmpty()
     val pageText = pagesLabel(slots, pageCount)
+    val reduce = LocalReduceMotion.current
     Column(Modifier.fillMaxSize().background(LibraryZ.tokens.readerBackdrop)) {
-        if (chrome) {
+        // The bars slide away, and the page grows into their room.
+        AnimatedVisibility(
+            chrome,
+            enter = Motion.reveal(reduce) + if (reduce) EnterTransition.None else slideInVertically(movementSpec()) { -it },
+            exit = Motion.conceal(reduce) + if (reduce) ExitTransition.None else slideOutVertically(movementSpec()) { -it },
+        ) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                 Row(
                     modifier = Modifier.fillMaxWidth().statusBarsPadding().height(64.dp).padding(start = 4.dp, end = 12.dp),
@@ -589,14 +614,22 @@ private fun PagedReaderLayout(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
         ) {
+            val phase = when {
+                loadError != null -> PagedPhase.Error
+                reader == null -> PagedPhase.Loading
+                atEndCard -> PagedPhase.End
+                else -> PagedPhase.Pages
+            }
+            Crossfade(phase, animationSpec = tween(Motion.MEDIUM, easing = Motion.Standard), label = "reader") { ph ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             when {
-                loadError != null -> Text(
+                ph == PagedPhase.Error -> Text(
                     "Couldn't load: $loadError",
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(24.dp),
                 )
-                reader == null -> CircularProgressIndicator()
-                atEndCard -> Box(Modifier.padding(16.dp).widthIn(max = 440.dp)) { end() }
+                ph == PagedPhase.Loading || reader == null -> CircularProgressIndicator()
+                ph == PagedPhase.End -> Box(Modifier.padding(16.dp).widthIn(max = 440.dp)) { end() }
                 else -> PageView(
                     reader = reader,
                     pages = pages,
@@ -609,23 +642,20 @@ private fun PagedReaderLayout(
                     end = end,
                 )
             }
-            if (!chrome && reader != null && !atEndCard) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 20.dp),
-                ) {
-                    Text(
-                        "${pages.joinToString("–") { "${it + 1}" }} / $pageCount",
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    )
-                }
             }
+            }
+            PageCounter(
+                visible = !chrome && reader != null && !atEndCard,
+                text = "${pages.joinToString("–") { "${it + 1}" }} / $pageCount",
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
 
-        if (chrome && pageCount > 0) {
+        AnimatedVisibility(
+            chrome && pageCount > 0,
+            enter = Motion.reveal(reduce) + if (reduce) EnterTransition.None else slideInVertically(movementSpec()) { it },
+            exit = Motion.conceal(reduce) + if (reduce) ExitTransition.None else slideOutVertically(movementSpec()) { it },
+        ) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                 Row(
                     modifier = Modifier.fillMaxWidth().navigationBarsPadding()
@@ -684,6 +714,36 @@ private fun PagedReaderLayout(
     }
 }
 
+/** The page number floating over the page while the bars are hidden. */
+@Composable
+private fun PageCounter(visible: Boolean, text: String, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible,
+        enter = fadeIn(Motion.standard(Motion.MEDIUM)),
+        exit = fadeOut(Motion.standard()),
+        modifier = modifier,
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.navigationBarsPadding().padding(bottom = 20.dp),
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** Why a two-page text spread changed, which decides how it animates. */
+private enum class SpreadChange { Forward, Back, Jump, Repage }
+
+/** What the paged reader's main area shows. */
+private enum class PagedPhase { Loading, Error, Pages, End }
+
 /** Single page / two pages, as a two-button icon control. Picking one sets the book's layout. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -739,6 +799,11 @@ private fun LayoutMenu(bookLayout: BookLayout, onChange: (BookLayout) -> Unit) {
 /** A rendered page, or null [image] when the renderer failed on it. */
 private class RenderedPage(val index: Int, val image: ImageBitmap?)
 
+/** What's on screen: the rendered pages, and whether the end card takes the slot after them. */
+private class RenderedSpread(val pages: List<RenderedPage>, val endSlot: Boolean) {
+    val key: Pair<List<Int>, Boolean> get() = pages.map { it.index } to endSlot
+}
+
 /** A US Letter / A4-ish page shape, until a real page says otherwise. */
 private const val DEFAULT_PAGE_ASPECT = 1.3f
 
@@ -785,25 +850,46 @@ private fun PageView(
         val widthPx = with(LocalDensity.current) { slot.roundToPx().coerceAtMost(1600) }
         // Keep showing the previous pages until the next ones are rasterized,
         // so turning pages doesn't flash a spinner.
-        var shown by remember(reader, widthPx) { mutableStateOf<List<RenderedPage>>(emptyList()) }
-        LaunchedEffect(reader, pages, widthPx) {
+        var shown by remember(reader, widthPx) { mutableStateOf<RenderedSpread?>(null) }
+        LaunchedEffect(reader, pages, endSlot, widthPx) {
             // One at a time: PagedReader isn't thread-safe. A page the
             // renderer chokes on (e.g. a broken font) shows a message instead
             // of escaping to the UI thread and taking the app down.
-            shown = pages.map { i ->
-                val image = try {
-                    lock.withLock { reader.renderPage(i, widthPx) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    null
-                }
-                RenderedPage(i, image)
-            }
+            shown = RenderedSpread(
+                pages.map { i ->
+                    val image = try {
+                        lock.withLock { reader.renderPage(i, widthPx) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        null
+                    }
+                    RenderedPage(i, image)
+                },
+                endSlot,
+            )
         }
-        if (shown.isEmpty()) {
+        val current = shown
+        if (current == null) {
             CircularProgressIndicator()
         } else {
+            // Turning slides the new pages in from the side they come from;
+            // a re-render of the same pages (a resize) just swaps.
+            val reduce = LocalReduceMotion.current
+            AnimatedContent(
+                targetState = current,
+                contentKey = { it.key },
+                transitionSpec = {
+                    val from = initialState.pages.firstOrNull()?.index ?: Int.MAX_VALUE
+                    val to = targetState.pages.firstOrNull()?.index ?: Int.MAX_VALUE
+                    if (from == to) Motion.crossfade()
+                    else Motion.pageTurn(forward = to > from, reduce)
+                },
+                contentAlignment = Alignment.Center,
+                label = "page turn",
+            ) { spread ->
+            val shown = spread.pages
+            val endSlot = spread.endSlot
             // Height over width per slot; the end card takes its neighbour's shape.
             val aspects = shown.map { p -> p.image?.let { it.height.toFloat() / it.width } ?: DEFAULT_PAGE_ASPECT }
             val slots = if (endSlot) aspects + (aspects.lastOrNull() ?: DEFAULT_PAGE_ASPECT) else aspects
@@ -846,6 +932,7 @@ private fun PageView(
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -903,10 +990,14 @@ private fun TextReaderLayout(
             showBookFonts = reader.hasBookFonts,
         )
     }
+    val reduce = LocalReduceMotion.current
     Box(Modifier.fillMaxSize().background(theme.background)) {
         Row(Modifier.fillMaxSize()) {
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                if (chrome) Row(
+            // A new reading theme dissolves in over the old one.
+            Column(Modifier.weight(1f).fillMaxHeight().dissolveFrom(theme.background)) {
+                // The bars only fade: sliding them would re-page the book every frame.
+                AnimatedVisibility(chrome, enter = fadeIn(Motion.standard(Motion.MEDIUM)), exit = fadeOut(Motion.standard())) {
+                Row(
                     modifier = Modifier.fillMaxWidth().statusBarsPadding().height(if (wide) 64.dp else 56.dp)
                         .padding(horizontal = if (wide) 12.dp else 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -940,6 +1031,7 @@ private fun TextReaderLayout(
                         }
                     }
                     FullscreenButton(theme.muted)
+                }
                 }
                 // Thin full-width progress line.
                 Box(Modifier.fillMaxWidth().height(2.dp).background(theme.rule)) {
@@ -977,7 +1069,8 @@ private fun TextReaderLayout(
                     }
                 }
                 // Pages carry their own feet in a spread.
-                if (chrome && !spread) Row(
+                AnimatedVisibility(chrome && !spread, enter = fadeIn(Motion.standard(Motion.MEDIUM)), exit = fadeOut(Motion.standard())) {
+                Row(
                     modifier = Modifier.fillMaxWidth().navigationBarsPadding().height(if (wide) 48.dp else 44.dp)
                         .padding(horizontal = if (wide) 32.dp else 28.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -996,9 +1089,14 @@ private fun TextReaderLayout(
                         color = theme.muted,
                     )
                 }
+                }
             }
             // In two pages the panel floats, so opening it doesn't re-page the book.
-            if (wide && settingsOpen && !spread) {
+            AnimatedVisibility(
+                wide && settingsOpen && !spread,
+                enter = fadeIn(Motion.standard(Motion.MEDIUM)) + if (reduce) EnterTransition.None else slideInHorizontally(movementSpec()) { it / 3 },
+                exit = fadeOut(Motion.standard()) + if (reduce) ExitTransition.None else slideOutHorizontally(movementSpec()) { it / 3 },
+            ) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp),
@@ -1021,13 +1119,21 @@ private fun TextReaderLayout(
                 }
             }
         }
-        if (wide && settingsOpen && spread) {
+        // The floating panel grows out of the settings button's corner.
+        val fromCorner = TransformOrigin(1f, 0f)
+        AnimatedVisibility(
+            wide && settingsOpen && spread,
+            enter = fadeIn(Motion.standard(Motion.MEDIUM)) +
+                if (reduce) EnterTransition.None else scaleIn(movementSpec(), initialScale = 0.9f, transformOrigin = fromCorner),
+            exit = fadeOut(Motion.standard()) +
+                if (reduce) ExitTransition.None else scaleOut(movementSpec(), targetScale = 0.9f, transformOrigin = fromCorner),
+            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 64.dp, end = 64.dp),
+        ) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = RoundedCornerShape(16.dp),
                 shadowElevation = 6.dp,
-                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding()
-                    .padding(top = 64.dp, end = 64.dp).width(360.dp),
+                modifier = Modifier.width(360.dp),
             ) {
                 Column(
                     Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
@@ -1422,11 +1528,24 @@ private fun TextSpreadView(
         // Empty text: straight to the end card.
         val slots = spreads.at(pageAt(anchor)).ifEmpty { listOf(pageCount) }
         val atEnd = pageCount in slots
+        // How the next change of spread came about: a turn slides that way,
+        // a jump fades, and re-paging (size, font, window) just swaps.
+        var change by remember { mutableStateOf(SpreadChange.Repage) }
+        LaunchedEffect(slots) { change = SpreadChange.Repage }
 
         SideEffect {
-            pager.turn = { delta -> anchor = startOf(spreads.turn(pageAt(anchor), delta)) }
-            pager.jump = { toEnd -> anchor = if (toEnd) text.length else 0 }
-            pager.goTo = { offset -> anchor = offset.coerceIn(0, text.length) }
+            pager.turn = { delta ->
+                change = if (delta > 0) SpreadChange.Forward else SpreadChange.Back
+                anchor = startOf(spreads.turn(pageAt(anchor), delta))
+            }
+            pager.jump = { toEnd ->
+                change = SpreadChange.Jump
+                anchor = if (toEnd) text.length else 0
+            }
+            pager.goTo = { offset ->
+                change = SpreadChange.Jump
+                anchor = offset.coerceIn(0, text.length)
+            }
             pager.offset = { (endOf(slots.filter { it < pageCount }.maxOrNull() ?: pageCount) - 1).coerceAtLeast(0) }
         }
         LaunchedEffect(slots, atEnd) {
@@ -1438,7 +1557,8 @@ private fun TextSpreadView(
             if (next.isNotEmpty() && next != slots) prefetchImages(reader, startOf(next.min()), endOf(next.max()))
         }
 
-        Row(
+        val reduce = LocalReduceMotion.current
+        Box(
             Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
@@ -1459,6 +1579,19 @@ private fun TextSpreadView(
                     )
                 },
         ) {
+        AnimatedContent(
+            targetState = slots,
+            transitionSpec = {
+                when (change) {
+                    SpreadChange.Forward -> Motion.pageTurn(forward = true, reduce)
+                    SpreadChange.Back -> Motion.pageTurn(forward = false, reduce)
+                    SpreadChange.Jump -> Motion.crossfade(Motion.MEDIUM)
+                    SpreadChange.Repage -> Motion.none
+                }
+            },
+            label = "spread turn",
+        ) { slots ->
+        Row(Modifier.fillMaxSize()) {
             if (slots == listOf(pageCount)) {
                 // The book ended on a right-hand page: the card follows alone.
                 Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
@@ -1535,6 +1668,8 @@ private fun TextSpreadView(
                     }
                 }
             }
+        }
+        }
         }
         if (chrome) {
             listOf(-1 to Alignment.CenterStart, 1 to Alignment.CenterEnd).forEach { (delta, where) ->

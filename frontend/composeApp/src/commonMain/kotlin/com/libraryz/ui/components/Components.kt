@@ -65,6 +65,24 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.RadioButton
 import androidx.compose.ui.semantics.Role
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import com.libraryz.theme.LocalReduceMotion
+import com.libraryz.theme.Motion
+import com.libraryz.theme.loadingPulse
 
 /** Human name for an edition format. */
 fun formatName(format: String): String = when (format.uppercase()) {
@@ -95,10 +113,27 @@ fun WorkCard(
     inLibrary: Boolean = false,
     selected: Boolean = false,
 ) {
+    // Selection fades in and out rather than snapping between rows.
+    val selectedColor = MaterialTheme.colorScheme.secondaryContainer
+    val container by animateColorAsState(
+        if (selected) selectedColor else selectedColor.copy(alpha = 0f),
+        Motion.standard(),
+        label = "card container",
+    )
+    val content by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+        Motion.standard(),
+        label = "card content",
+    )
+    val muted by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        Motion.standard(),
+        label = "card muted",
+    )
     Surface(
         onClick = onClick,
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+        color = container,
+        contentColor = content,
         shape = MaterialTheme.shapes.large,
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -111,7 +146,6 @@ fun WorkCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BookCover(work.title, work.authors, CoverSize.S)
-            val muted = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = highlightMatches(work.title, highlight, MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
@@ -133,7 +167,13 @@ fun WorkCard(
                     Text(formatsLabel(work.editions), style = MaterialTheme.typography.labelSmall, color = muted)
                 }
             }
-            if (inLibrary) {
+            // Pops in when the book is saved from its detail pane alongside.
+            val reduce = LocalReduceMotion.current
+            AnimatedVisibility(
+                visible = inLibrary,
+                enter = fadeIn(Motion.standard()) + if (reduce) EnterTransition.None else scaleIn(Motion.standard(Motion.MEDIUM), initialScale = 0.6f),
+                exit = fadeOut(Motion.standard()) + if (reduce) ExitTransition.None else scaleOut(Motion.standard(), targetScale = 0.6f),
+            ) {
                 Icon(
                     Icons.Rounded.Bookmark,
                     contentDescription = "In your library",
@@ -266,7 +306,11 @@ fun StarRating(
         for (star in 1..5) {
             val filled = (rating ?: 0) >= star
             val icon = if (filled) Icons.Rounded.Star else Icons.Rounded.StarOutline
-            val tint = if (filled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline
+            val tint by animateColorAsState(
+                if (filled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline,
+                Motion.standard(),
+                label = "star",
+            )
             if (onRate != null) {
                 IconButton(onClick = { onRate(star) }, modifier = Modifier.size(starSize + 16.dp)) {
                     Icon(icon, contentDescription = "$star star${if (star == 1) "" else "s"}", tint = tint, modifier = Modifier.size(starSize))
@@ -278,10 +322,24 @@ fun StarRating(
     }
 }
 
-/** A placeholder block for loading states. */
+/** A placeholder block for loading states. It breathes while it waits. */
 @Composable
 fun Skeleton(modifier: Modifier = Modifier, shape: RoundedCornerShape = RoundedCornerShape(4.dp)) {
-    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest))
+    Box(modifier.loadingPulse().clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest))
+}
+
+/** Where a screen's data is: what [PhaseCrossfade] fades between. */
+enum class LoadPhase { Loading, Error, Empty, Content }
+
+/**
+ * Fades between a screen's loading placeholder, its error, its empty state
+ * and its content, instead of swapping them in a single frame.
+ */
+@Composable
+fun PhaseCrossfade(phase: LoadPhase, modifier: Modifier = Modifier, content: @Composable (LoadPhase) -> Unit) {
+    Crossfade(phase, modifier, animationSpec = tween(Motion.MEDIUM, easing = Motion.Standard), label = "load phase") {
+        content(it)
+    }
 }
 
 @Composable
@@ -440,6 +498,38 @@ fun ContinueReadingCard(entry: UserBook, onClick: () -> Unit, modifier: Modifier
             }
         }
     }
+}
+
+/**
+ * Room for a status message that comes, goes or changes: it fades, and the
+ * space for it opens and closes, so what's below slides instead of jumping.
+ * [content] draws [message]; while a message leaves it keeps drawing it.
+ */
+@Composable
+fun <T : Any> MessageSlot(message: T?, modifier: Modifier = Modifier, content: @Composable (T) -> Unit) {
+    val reduce = LocalReduceMotion.current
+    val last = remember { LastMessage<T>() }
+    if (message != null) last.value = message
+    AnimatedVisibility(
+        visible = message != null,
+        modifier = modifier,
+        enter = Motion.reveal(reduce),
+        exit = Motion.conceal(reduce),
+    ) {
+        val shown = last.value ?: return@AnimatedVisibility
+        // One message replacing another crossfades, resizing to fit.
+        val size = if (reduce) snap<IntSize>() else Motion.standard(Motion.MEDIUM)
+        AnimatedContent(
+            targetState = shown,
+            transitionSpec = { Motion.crossfade() using SizeTransform(clip = false) { _, _ -> size } },
+            label = "message",
+        ) { content(it) }
+    }
+}
+
+/** The message a [MessageSlot] last showed; not state, it only matters while drawing. */
+private class LastMessage<T : Any> {
+    var value: T? = null
 }
 
 /** Tones for [Banner], from the design's inline status messages. */

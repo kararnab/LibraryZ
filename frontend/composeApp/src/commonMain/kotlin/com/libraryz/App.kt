@@ -29,6 +29,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.libraryz.theme.LibraryZ
+import com.libraryz.theme.LocalReduceMotion
+import com.libraryz.theme.Motion
+import com.libraryz.ui.components.LoadPhase
+import com.libraryz.ui.components.PhaseCrossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.platform.LocalDensity
 import com.libraryz.ui.screens.ReaderPrefs
 import com.libraryz.ui.screens.ReaderPrefsStore
 import com.libraryz.ui.screens.BrowseSkeleton
@@ -451,60 +458,64 @@ internal fun Root(
         }
     } else null
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val expanded = maxWidth.value >= EXPANDED_DP
+    // Sheets (Upload, Suggest edit) open over the screen they were opened
+    // from, which stays where it was underneath.
+    val top = nav.current
+    val sheet = top is Screen.Upload || top is Screen.EditWork
+    val depth = nav.entries.size - if (sheet) 1 else 0
+    val base = if (sheet) nav.entries.getOrNull(nav.entries.size - 2) ?: Screen.Browse else top
 
-        when (val s = nav.current) {
-            Screen.Auth -> AuthGateScreen(
-                api = api,
-                sessionExpired = expiredNotice,
-                passwordChanged = passwordChanged,
-                onForgotPassword = { email -> nav.push(Screen.ForgotPassword(email)) },
-                onAuthenticated = { session ->
-                    expiredNotice = false
-                    passwordChanged = false
-                    auth.signIn(session)        // suspends until token persisted
-                    works.refresh()             // pull initial list
-                    nav.replace(Screen.Browse)
+    // Screens keep their scroll positions while they're in the stack, so
+    // going back lands where you left; top-level destinations keep theirs
+    // for good, like tabs. Popped screens' states are dropped.
+    val saved = rememberSaveableStateHolder()
+    val savedKeys = remember { mutableSetOf<String>() }
+    val stack = nav.entries.toList()
+    LaunchedEffect(stack) {
+        val live = stack.mapTo(HashSet()) { stateKey(it) }
+        savedKeys.filter { it !in live && it !in TopLevelKeys }.forEach {
+            saved.removeState(it)
+            savedKeys.remove(it)
+        }
+        savedKeys += live
+    }
+
+    // One screen's content, without the navigation bar or rail around it.
+    val screen: @Composable (Screen, Boolean) -> Unit = { s, expanded ->
+        when {
+            // Wide: the catalog and the open book share one list/detail
+            // layout, so picking another book keeps the list where it is.
+            expanded && (s == Screen.Browse || s is Screen.WorkDetail) -> ListDetailLayout(
+                onAuthorClick = searchAuthor,
+                nav = nav,
+                auth = auth,
+                works = works,
+                library = library,
+                selectedWorkId = (s as? Screen.WorkDetail)?.workId,
+                onSelect = { w ->
+                    if (nav.current != Screen.Browse) nav.replace(Screen.Browse)
+                    nav.push(Screen.WorkDetail(w.id))
                 },
+                onRead = readEdition,
+                onReadFromLibrary = readFromLibrary,
+                extraHeader = verifyBanner,
+                onDownload = downloadEdition,
+                onLibraryUpsert = libraryUpsert,
+                onLibraryRemove = libraryRemove,
+                onRemoveWork = removeWork,
+                onRemoveEdition = removeEdition,
             )
 
-            Screen.Browse -> {
-                if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ListDetailLayout(
-                            onAuthorClick = searchAuthor,
-                            nav = nav,
-                            auth = auth,
-                            works = works,
-                            library = library,
-                            selectedWorkId = null,
-                            onSelect = { w -> nav.push(Screen.WorkDetail(w.id)) },
-                            onRead = readEdition,
-                            onReadFromLibrary = readFromLibrary,
-                            extraHeader = verifyBanner,
-                            onDownload = downloadEdition,
-                            onLibraryUpsert = libraryUpsert,
-                            onLibraryRemove = libraryRemove,
-                            onRemoveWork = removeWork,
-                            onRemoveEdition = removeEdition,
-                        )
-                    }
-                } else {
-                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
-                        DataDrivenBrowse(
-                            works = works,
-                            onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
-                            onUploadClick = { nav.push(Screen.Upload()) },
-                            compact = true,
-                            header = stackHeaders(verifyBanner, continueReadingHeader(library, readFromLibrary)),
-                            libraryWorkIds = library.workIds,
-                        )
-                    }
-                }
-            }
+            s == Screen.Browse -> DataDrivenBrowse(
+                works = works,
+                onWorkClick = { nav.push(Screen.WorkDetail(it.id)) },
+                onUploadClick = { nav.push(Screen.Upload()) },
+                compact = true,
+                header = stackHeaders(verifyBanner, continueReadingHeader(library, readFromLibrary)),
+                libraryWorkIds = library.workIds,
+            )
 
-            is Screen.WorkDetail -> {
+            s is Screen.WorkDetail -> {
                 // Ensure we have an editions-populated copy of this work, plus
                 // the caller's library entry for the controls.
                 LaunchedEffect(s.workId) {
@@ -514,29 +525,6 @@ internal fun Root(
                 val work = works.find(s.workId)
                 if (work == null) {
                     NotFound()
-                } else if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ListDetailLayout(
-                            onAuthorClick = searchAuthor,
-                            nav = nav,
-                            auth = auth,
-                            works = works,
-                            library = library,
-                            selectedWorkId = s.workId,
-                            onSelect = { w ->
-                                nav.replace(Screen.Browse)
-                                nav.push(Screen.WorkDetail(w.id))
-                            },
-                            onRead = readEdition,
-                            onReadFromLibrary = readFromLibrary,
-                            extraHeader = verifyBanner,
-                            onDownload = downloadEdition,
-                            onLibraryUpsert = libraryUpsert,
-                            onLibraryRemove = libraryRemove,
-                            onRemoveWork = removeWork,
-                            onRemoveEdition = removeEdition,
-                        )
-                    }
                 } else {
                     WorkDetailScreen(
                         work = work,
@@ -556,162 +544,21 @@ internal fun Root(
                 }
             }
 
-            is Screen.EditWork -> {
-                // Render WorkDetail behind so the sheet/dialog has visible context.
-                LaunchedEffect(s.workId) {
-                    works.refreshOne(s.workId)
-                    if (auth.isAuthenticated) library.loadEntry(s.workId)
-                }
-                val work = works.find(s.workId)
-                if (work == null) {
-                    NotFound()
-                } else {
-                    if (expanded) {
-                        ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                            ListDetailLayout(
-                                onAuthorClick = searchAuthor,
-                                nav = nav,
-                                auth = auth,
-                                works = works,
-                                library = library,
-                                selectedWorkId = s.workId,
-                                onSelect = { w ->
-                                    nav.replace(Screen.Browse)
-                                    nav.push(Screen.WorkDetail(w.id))
-                                },
-                                onRead = readEdition,
-                            onReadFromLibrary = readFromLibrary,
-                            extraHeader = verifyBanner,
-                                onDownload = downloadEdition,
-                                onLibraryUpsert = libraryUpsert,
-                                onLibraryRemove = libraryRemove,
-                                onRemoveWork = removeWork,
-                                onRemoveEdition = removeEdition,
-                            )
-                        }
-                    } else {
-                        WorkDetailScreen(
-                            work = work,
-                            onBack = { nav.pop() },
-                            onAddEdition = { nav.push(Screen.Upload(workId = s.workId)) },
-                            onRead = { ed -> readEdition(work, ed) },
-                            onDownload = { ed -> downloadEdition(work, ed) },
-                            onSuggestEdit = null, // already in the edit flow
-                        )
-                    }
-                    EditWorkSheet(
-                        work = work,
-                        isDesktop = expanded,
-                        onDismiss = { nav.pop() },
-                        // The sheet shows its own "Sent for review" state.
-                        onSubmit = { patch -> api.submitContribution(work.id, patch) },
-                    )
-                }
-            }
+            s == Screen.Auth -> AuthGateScreen(
+                api = api,
+                sessionExpired = expiredNotice,
+                passwordChanged = passwordChanged,
+                onForgotPassword = { email -> nav.push(Screen.ForgotPassword(email)) },
+                onAuthenticated = { session ->
+                    expiredNotice = false
+                    passwordChanged = false
+                    auth.signIn(session)        // suspends until token persisted
+                    works.refresh()             // pull initial list
+                    nav.replace(Screen.Browse)
+                },
+            )
 
-            is Screen.Upload -> {
-                // Render the screen behind the modal so it has context.
-                if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ListDetailLayout(
-                            onAuthorClick = searchAuthor,
-                            nav = nav,
-                            auth = auth,
-                            works = works,
-                            library = library,
-                            selectedWorkId = s.workId,
-                            onSelect = { w ->
-                                nav.replace(Screen.Browse)
-                                nav.push(Screen.WorkDetail(w.id))
-                            },
-                            onRead = readEdition,
-                            onReadFromLibrary = readFromLibrary,
-                            extraHeader = verifyBanner,
-                            onDownload = downloadEdition,
-                            onLibraryUpsert = libraryUpsert,
-                            onLibraryRemove = libraryRemove,
-                            onRemoveWork = removeWork,
-                            onRemoveEdition = removeEdition,
-                        )
-                    }
-                } else {
-                    DataDrivenBrowse(
-                        works = works,
-                        onWorkClick = {},
-                        onUploadClick = {},
-                        compact = true,
-                    )
-                }
-                UploadSheet(
-                    mode = if (s.workId == null) UploadMode.NewWork else UploadMode.AddEdition,
-                    isDesktop = expanded,
-                    target = s.workId?.let { works.find(it) },
-                    onDismiss = { nav.pop() },
-                    onViewBook = { workId ->
-                        nav.replace(Screen.Browse)
-                        nav.push(Screen.WorkDetail(workId))
-                    },
-                    onUnsupportedFilePicker = {
-                        scope.launch {
-                            snackbar.showSnackbar("File picker not yet implemented on this platform.")
-                        }
-                    },
-                    loadQuota = { size -> api.uploadQuota(size) },
-                    onSubmit = { submission, onProgress ->
-                        when (submission) {
-                            is UploadSubmission.NewWork -> {
-                                val created = api.createWork(
-                                    CreateWorkRequest(
-                                        title = submission.title,
-                                        authors = submission.authors,
-                                        language = submission.language,
-                                        publicationYear = submission.publicationYear,
-                                    )
-                                )
-                                try {
-                                    api.uploadEdition(
-                                        workId = created.id,
-                                        format = inferFormatFromName(submission.file.name),
-                                        language = submission.language,
-                                        fileName = submission.file.name,
-                                        bytes = submission.file.bytes,
-                                        onProgress = onProgress,
-                                    )
-                                } catch (e: Throwable) {
-                                    // Don't leave an empty work behind when its
-                                    // only upload was rejected (e.g. duplicate
-                                    // file) or cancelled. Creators may remove
-                                    // their own still-empty work. Best effort,
-                                    // and it must run even when cancelled.
-                                    withContext(NonCancellable) {
-                                        runCatching { api.deleteWork(created.id, RemovalRequest("Upload failed; discarding the empty work")) }
-                                    }
-                                    throw e
-                                } finally {
-                                    withContext(NonCancellable) { works.refresh() }
-                                }
-                                created.id
-                            }
-                            is UploadSubmission.AddEdition -> {
-                                val wid = s.workId
-                                    ?: error("AddEdition submission without a workId")
-                                api.uploadEdition(
-                                    workId = wid,
-                                    format = submission.format,
-                                    language = submission.language,
-                                    fileName = submission.file.name,
-                                    bytes = submission.file.bytes,
-                                    onProgress = onProgress,
-                                )
-                                works.refreshOne(wid)
-                                wid
-                            }
-                        }
-                    },
-                )
-            }
-
-            is Screen.Preview -> {
+            s is Screen.Preview -> {
                 val entry = library.entryFor(s.workId)
                 ReaderScreen(
                     api = api,
@@ -741,104 +588,50 @@ internal fun Root(
                 )
             }
 
-            Screen.ContributionQueue -> {
+            s == Screen.ContributionQueue -> {
                 LaunchedEffect(Unit) { contributions.refresh() }
-                if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ContributionQueueScreen(
-                            state = contributions,
-                            isWide = true,
-                            onOpenWork = { workId ->
-                                nav.replace(Screen.Browse)
-                                nav.push(Screen.WorkDetail(workId))
-                            },
-                            loadWork = loadWork,
-                        )
-                    }
-                } else {
-                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ContributionQueueScreen(
-                            state = contributions,
-                            isWide = false,
-                            onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                            loadWork = loadWork,
-                        )
-                    }
-                }
+                ContributionQueueScreen(
+                    state = contributions,
+                    isWide = expanded,
+                    onOpenWork = { workId -> openWork(nav, workId, expanded) },
+                    loadWork = loadWork,
+                )
             }
 
-            Screen.Library -> {
+            s == Screen.Library -> {
                 LaunchedEffect(Unit) { library.refresh() }
-                if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                        LibraryScreen(
-                            state = library,
-                            isWide = true,
-                            onBack = null,
-                            onOpenWork = { workId ->
-                                nav.replace(Screen.Browse)
-                                nav.push(Screen.WorkDetail(workId))
-                            },
-                            onRead = readFromLibrary,
-                            onBrowse = { nav.replace(Screen.Browse) },
-                        )
-                    }
-                } else {
-                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
-                        LibraryScreen(
-                            state = library,
-                            isWide = false,
-                            onBack = null,
-                            onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                            onRead = readFromLibrary,
-                            onBrowse = { nav.replace(Screen.Browse) },
-                        )
-                    }
-                }
+                LibraryScreen(
+                    state = library,
+                    isWide = expanded,
+                    onBack = null,
+                    onOpenWork = { workId -> openWork(nav, workId, expanded) },
+                    onRead = readFromLibrary,
+                    onBrowse = { nav.replace(Screen.Browse) },
+                )
             }
 
-            Screen.ForYou -> {
+            s == Screen.ForYou -> {
                 LaunchedEffect(Unit) { recs.refresh() }
-                if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ForYouScreen(
-                            state = recs,
-                            isWide = true,
-                            onBack = null,
-                            onOpenWork = { workId ->
-                                nav.replace(Screen.Browse)
-                                nav.push(Screen.WorkDetail(workId))
-                            },
-                            onDismiss = dismissRec,
-                            onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
-                            isInLibrary = { workId -> library.entryFor(workId) != null },
-                            onOpenLibrary = { nav.replace(Screen.Library) },
-                        )
-                    }
-                } else {
-                    CompactFrame(nav = nav, auth = auth, contributions = contributions) {
-                        ForYouScreen(
-                            state = recs,
-                            isWide = false,
-                            onBack = null,
-                            onOpenWork = { workId -> nav.push(Screen.WorkDetail(workId)) },
-                            onDismiss = dismissRec,
-                            onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
-                            isInLibrary = { workId -> library.entryFor(workId) != null },
-                            onOpenLibrary = { nav.replace(Screen.Library) },
-                        )
-                    }
-                }
+                ForYouScreen(
+                    state = recs,
+                    isWide = expanded,
+                    onBack = null,
+                    onOpenWork = { workId -> openWork(nav, workId, expanded) },
+                    onDismiss = dismissRec,
+                    onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
+                    isInLibrary = { workId -> library.entryFor(workId) != null },
+                    onOpenLibrary = { nav.replace(Screen.Library) },
+                )
             }
 
-            is Screen.ForgotPassword -> ForgotPasswordScreen(
+            s is Screen.ForgotPassword -> ForgotPasswordScreen(
                 api = api,
                 initialEmail = s.email,
                 onBack = { if (!nav.pop()) nav.replace(Screen.Auth) },
                 onHaveCode = { code -> nav.push(Screen.ResetPassword(code)) },
             )
 
-            is Screen.ResetPassword -> ResetPasswordScreen(
+            s is Screen.ResetPassword -> ResetPasswordScreen(
                 api = api,
                 token = s.token,
                 onOpenInApp = openInApp?.let { open -> { open(appLinkUrl(DeepLink.ResetPassword(s.token))) } },
@@ -853,7 +646,7 @@ internal fun Root(
                 onRequestNewLink = { nav.replace(Screen.Auth); nav.push(Screen.ForgotPassword()) },
             )
 
-            is Screen.VerifyEmail -> VerifyEmailScreen(
+            s is Screen.VerifyEmail -> VerifyEmailScreen(
                 api = api,
                 token = s.token,
                 onVerified = { if (auth.isAuthenticated) auth.reloadUser() },
@@ -861,26 +654,193 @@ internal fun Root(
                 onResend = if (auth.isAuthenticated) ({ api.requestEmailVerification() }) else null,
             )
 
-            Screen.Settings -> {
-                val settings = @Composable {
-                    SettingsScreen(
-                        user = auth.user,
-                        serverUrl = DefaultBaseUrl,
-                        prefs = readerPrefs,
-                        onPrefsChange = setReaderPrefs,
-                        onSignOut = logout,
-                        onSignOutEverywhere = logoutEverywhere,
-                        onBack = null,
-                    )
-                }
-                if (expanded) {
-                    ExpandedFrame(nav = nav, auth = auth, contributions = contributions) { settings() }
-                } else {
-                    CompactFrame(nav = nav, auth = auth, contributions = contributions) { settings() }
-                }
-            }
+            s == Screen.Settings -> SettingsScreen(
+                user = auth.user,
+                serverUrl = DefaultBaseUrl,
+                prefs = readerPrefs,
+                onPrefsChange = setReaderPrefs,
+                onSignOut = logout,
+                onSignOutEverywhere = logoutEverywhere,
+                onBack = null,
+            )
+
+            // Sheets never become the base screen.
+            else -> Unit
         }
     }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val expanded = maxWidth.value >= EXPANDED_DP
+        val reduce = LocalReduceMotion.current
+        val shift = with(LocalDensity.current) { Motion.SHIFT_DP.dp.roundToPx() }
+
+        // Deeper into the stack slides forward, back out slides back, and
+        // peers (tabs, signing in) fade through. Screens that share the
+        // navigation bar or rail keep it still: only their content changes.
+        AnimatedContent(
+            targetState = NavEntry(base, depth, expanded),
+            contentKey = { windowKey(it.screen, it.expanded) },
+            transitionSpec = {
+                when {
+                    // A resize across the breakpoint re-lays the window out; nothing moved.
+                    initialState.expanded != targetState.expanded -> Motion.none
+                    targetState.depth > initialState.depth -> Motion.sharedAxisX(forward = true, shift, reduce)
+                    targetState.depth < initialState.depth -> Motion.sharedAxisX(forward = false, shift, reduce)
+                    else -> Motion.fadeThrough(reduce)
+                }
+            },
+            label = "screen",
+        ) { entry ->
+            val s = entry.screen
+            val pane = @Composable {
+                AnimatedContent(
+                    targetState = s,
+                    contentKey = { paneKey(it, entry.expanded) },
+                    transitionSpec = { Motion.fadeThrough(reduce) },
+                    label = "pane",
+                ) { p ->
+                    saved.SaveableStateProvider(paneKey(p, entry.expanded)) { screen(p, entry.expanded) }
+                }
+            }
+            // Upload is a destination of its own on the rail.
+            val selected = if (nav.current is Screen.Upload) nav.current else s
+            when (chromeOf(s, entry.expanded)) {
+                Chrome.Rail -> ExpandedFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)
+                Chrome.Bar -> CompactFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)
+                Chrome.None -> saved.SaveableStateProvider(paneKey(s, entry.expanded)) { screen(s, entry.expanded) }
+            }
+        }
+
+        when (top) {
+            is Screen.EditWork -> {
+                LaunchedEffect(top.workId) { works.refreshOne(top.workId) }
+                works.find(top.workId)?.let { work ->
+                    EditWorkSheet(
+                        work = work,
+                        isDesktop = expanded,
+                        onDismiss = { nav.pop() },
+                        // The sheet shows its own "Sent for review" state.
+                        onSubmit = { patch -> api.submitContribution(work.id, patch) },
+                    )
+                }
+            }
+
+            is Screen.Upload -> UploadSheet(
+                mode = if (top.workId == null) UploadMode.NewWork else UploadMode.AddEdition,
+                isDesktop = expanded,
+                target = top.workId?.let { works.find(it) },
+                onDismiss = { nav.pop() },
+                onViewBook = { workId ->
+                    nav.replace(Screen.Browse)
+                    nav.push(Screen.WorkDetail(workId))
+                },
+                onUnsupportedFilePicker = {
+                    scope.launch {
+                        snackbar.showSnackbar("File picker not yet implemented on this platform.")
+                    }
+                },
+                loadQuota = { size -> api.uploadQuota(size) },
+                onSubmit = { submission, onProgress ->
+                    when (submission) {
+                        is UploadSubmission.NewWork -> {
+                            val created = api.createWork(
+                                CreateWorkRequest(
+                                    title = submission.title,
+                                    authors = submission.authors,
+                                    language = submission.language,
+                                    publicationYear = submission.publicationYear,
+                                )
+                            )
+                            try {
+                                api.uploadEdition(
+                                    workId = created.id,
+                                    format = inferFormatFromName(submission.file.name),
+                                    language = submission.language,
+                                    fileName = submission.file.name,
+                                    bytes = submission.file.bytes,
+                                    onProgress = onProgress,
+                                )
+                            } catch (e: Throwable) {
+                                // Don't leave an empty work behind when its
+                                // only upload was rejected (e.g. duplicate
+                                // file) or cancelled. Creators may remove
+                                // their own still-empty work. Best effort,
+                                // and it must run even when cancelled.
+                                withContext(NonCancellable) {
+                                    runCatching { api.deleteWork(created.id, RemovalRequest("Upload failed; discarding the empty work")) }
+                                }
+                                throw e
+                            } finally {
+                                withContext(NonCancellable) { works.refresh() }
+                            }
+                            created.id
+                        }
+                        is UploadSubmission.AddEdition -> {
+                            val wid = top.workId
+                                ?: error("AddEdition submission without a workId")
+                            api.uploadEdition(
+                                workId = wid,
+                                format = submission.format,
+                                language = submission.language,
+                                fileName = submission.file.name,
+                                bytes = submission.file.bytes,
+                                onProgress = onProgress,
+                            )
+                            works.refreshOne(wid)
+                            wid
+                        }
+                    }
+                },
+            )
+
+            else -> Unit
+        }
+    }
+}
+
+/** A screen as the window shows it: where it sits in the stack, and at which width. */
+private data class NavEntry(val screen: Screen, val depth: Int, val expanded: Boolean)
+
+/** What surrounds a screen: the phone's navigation bar, the wide window's rail, or nothing. */
+private enum class Chrome { Bar, Rail, None }
+
+private fun chromeOf(s: Screen, expanded: Boolean): Chrome = when (s) {
+    Screen.Browse, Screen.Library, Screen.ForYou, Screen.ContributionQueue, Screen.Settings ->
+        if (expanded) Chrome.Rail else Chrome.Bar
+    // Wide, a book opens in the catalog's detail pane.
+    is Screen.WorkDetail -> if (expanded) Chrome.Rail else Chrome.None
+    else -> Chrome.None
+}
+
+/** Screens with one key share the window: moving between them animates only what differs. */
+private fun windowKey(s: Screen, expanded: Boolean): Any =
+    chromeOf(s, expanded).takeIf { it != Chrome.None } ?: stateKey(s)
+
+/** Screens with one key share one composition inside the bar or rail. */
+private fun paneKey(s: Screen, expanded: Boolean): String =
+    if (expanded && s is Screen.WorkDetail) stateKey(Screen.Browse) else stateKey(s)
+
+/** Names a screen's saved state (scroll positions and the like). */
+private fun stateKey(s: Screen): String = when (s) {
+    is Screen.WorkDetail -> "work:${s.workId}"
+    is Screen.Preview -> "read:${s.editionId}"
+    is Screen.EditWork -> "edit:${s.workId}"
+    is Screen.Upload -> "upload:${s.workId}"
+    is Screen.ForgotPassword -> "forgot"
+    is Screen.ResetPassword -> "reset"
+    is Screen.VerifyEmail -> "verify"
+    else -> s.toString()
+}
+
+/** Top-level destinations keep their state when you leave them, like tabs. */
+private val TopLevelKeys = listOf(
+    Screen.Auth, Screen.Browse, Screen.Library, Screen.ForYou, Screen.ContributionQueue, Screen.Settings,
+).map(::stateKey).toSet()
+
+/** Opens a book from another destination: wide, in the catalog's detail pane. */
+private fun openWork(nav: Navigator, workId: String, expanded: Boolean) {
+    if (expanded) nav.replace(Screen.Browse)
+    nav.push(Screen.WorkDetail(workId))
 }
 
 @Composable
@@ -897,15 +857,21 @@ private fun DataDrivenBrowse(
     val list = works.items
     val err = works.error
 
-    when {
-        works.loading -> BrowseSkeleton(compact)
-        err != null && list == null -> Box(
+    val phase = when {
+        works.loading -> LoadPhase.Loading
+        err != null && list == null -> LoadPhase.Error
+        else -> LoadPhase.Content
+    }
+    PhaseCrossfade(phase) { p ->
+    when (p) {
+        LoadPhase.Loading -> BrowseSkeleton(compact)
+        LoadPhase.Error -> Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
             EmptyState(
                 title = "Couldn't load works",
-                body = err,
+                body = err.orEmpty(),
                 action = {
                     Button(onClick = { scope.launch { works.refresh() } }) { Text("Retry") }
                 },
@@ -928,6 +894,7 @@ private fun DataDrivenBrowse(
             loadMoreError = works.loadMoreError,
         )
     }
+    }
 }
 
 @Composable
@@ -941,24 +908,25 @@ private fun NotFound() {
 
 @Composable
 private fun ExpandedFrame(
+    current: Screen,
     nav: Navigator,
     auth: AuthState,
     contributions: ContributionsState,
     content: @Composable () -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
-        NavRail(nav = nav, auth = auth, contributions = contributions)
+        NavRail(current, nav = nav, auth = auth, contributions = contributions)
         Box(modifier = Modifier.fillMaxSize()) { content() }
     }
 }
 
 @Composable
 private fun NavRail(
+    current: Screen,
     nav: Navigator,
     auth: AuthState,
     contributions: ContributionsState,
 ) {
-    val current = nav.current
     val isLibrary = current is Screen.Browse || current is Screen.WorkDetail || current is Screen.EditWork
     val isQueue = current is Screen.ContributionQueue
     val isUpload = current is Screen.Upload
@@ -1054,12 +1022,12 @@ private fun NavRail(
  */
 @Composable
 private fun CompactFrame(
+    current: Screen,
     nav: Navigator,
     auth: AuthState,
     contributions: ContributionsState,
     content: @Composable () -> Unit,
 ) {
-    val current = nav.current
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) { content() }
         NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
@@ -1181,16 +1149,23 @@ private fun ListDetailLayout(
             shape = RoundedCornerShape(24.dp),
             modifier = Modifier.fillMaxSize().padding(top = 16.dp, end = 16.dp, bottom = 16.dp),
         ) {
-            val work = selectedWorkId?.let { works.find(it) }
-            if (work == null) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // Each book fades through to the next.
+            val reduce = LocalReduceMotion.current
+            AnimatedContent(
+                targetState = selectedWorkId,
+                transitionSpec = { Motion.fadeThrough(reduce) },
+                label = "detail",
+            ) { id ->
+            val work = id?.let { works.find(it) }
+            when {
+                id == null -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     EmptyState(
                         title = "Pick a book",
                         body = "Choose one from the catalog to see its details and editions.",
                     )
                 }
-            } else {
-                WorkDetailScreen(
+                work == null -> NotFound()
+                else -> WorkDetailScreen(
                     work = work,
                     onBack = null,
                     onAddEdition = { nav.push(Screen.Upload(workId = work.id)) },
@@ -1206,6 +1181,7 @@ private fun ListDetailLayout(
                     onRemoveEdition = onRemoveEdition?.let { rm -> { ed, removal -> rm(work, ed, removal) } },
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 )
+            }
             }
         }
     }
