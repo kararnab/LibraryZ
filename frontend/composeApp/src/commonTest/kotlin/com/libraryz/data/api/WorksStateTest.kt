@@ -183,7 +183,8 @@ class WorksStateTest {
         val state = WorksState(ApiClient("http://t", tokenProvider = { "tok" }, engine = engine))
         state.refresh()
 
-        state.removeWork("a", "spam")
+        // A content takedown is the default, so it isn't sent.
+        state.removeWork("a", RemovalRequest("spam"))
 
         assertEquals(listOf("b"), state.items?.map { it.id })
     }
@@ -193,6 +194,7 @@ class WorksStateTest {
         val engine = MockEngine { req ->
             if (req.method == io.ktor.http.HttpMethod.Delete) {
                 assertEquals("/editions/e1", req.url.encodedPath)
+                assertEquals("""{"reason":"broken file","kind":"technical"}""", (req.body as io.ktor.http.content.TextContent).text)
                 respond("", HttpStatusCode.NoContent)
             } else {
                 val (s, body, h) = jsonRespond(
@@ -206,7 +208,7 @@ class WorksStateTest {
         val state = WorksState(ApiClient("http://t", tokenProvider = { "tok" }, engine = engine))
         state.refresh()
 
-        state.removeEdition("a", "e1", "broken file")
+        state.removeEdition("a", "e1", RemovalRequest("broken file", RemovalKind.Technical))
 
         assertEquals(listOf("e2"), state.find("a")?.editions?.map { it.id })
     }
@@ -224,7 +226,7 @@ class WorksStateTest {
         val state = WorksState(ApiClient("http://t", tokenProvider = { "tok" }, engine = engine))
         state.refresh()
 
-        val ex = kotlin.test.assertFailsWith<ApiException> { state.removeWork("a", "x") }
+        val ex = kotlin.test.assertFailsWith<ApiException> { state.removeWork("a", RemovalRequest("x")) }
         assertEquals(403, ex.status)
         assertEquals(listOf("a"), state.items?.map { it.id })
     }

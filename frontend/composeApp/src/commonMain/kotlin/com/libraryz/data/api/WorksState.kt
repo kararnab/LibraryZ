@@ -159,15 +159,15 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
     }
 
     /** Moderator takedown; drops the work from the local list on success. Throws on failure. */
-    suspend fun removeWork(id: String, reason: String) {
-        api.deleteWork(id, reason)
+    suspend fun removeWork(id: String, removal: RemovalRequest) {
+        api.deleteWork(id, removal)
         opened.remove(id)
         items = items?.filterNot { it.id == id }
     }
 
     /** Moderator takedown of one edition; updates the cached work on success. Throws on failure. */
-    suspend fun removeEdition(workId: String, editionId: String, reason: String) {
-        api.deleteEdition(editionId, reason)
+    suspend fun removeEdition(workId: String, editionId: String, removal: RemovalRequest) {
+        api.deleteEdition(editionId, removal)
         val drop = { w: Work -> w.copy(editions = w.editions.filterNot { it.id == editionId }) }
         opened[workId]?.let { opened[workId] = drop(it) }
         items = items?.map { w -> if (w.id == workId) drop(w) else w }

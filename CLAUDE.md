@@ -109,8 +109,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (180 each;
-# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (187 each;
+# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -212,8 +212,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 150 backend + 180 frontend
-  tests** (+1 with `-tags=eval`, +16 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-11: 152 backend + 187 frontend
+  tests** (+1 with `-tags=eval`, +17 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -223,7 +223,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (library, contribution, recommendation do). Blob GC
   (`catalog.Service.CollectGarbage`, `runlock.KeyBlobGC`) deletes blobs no
   live edition references after `LIBRARYZ_BLOB_GC_RETENTION`; it needs
-  `storage.Storage.List`.
+  `storage.Storage.List`. **Removal kinds (#27):** `Removal.RemovalKind` is
+  `content` (default; the file's hashes stay blocked → `ErrRemoved`) or
+  `technical` (a broken file; the same file may come back). The edition
+  hash unique indexes are **partial** (`WHERE removal_kind <> 'technical'`,
+  sqlite + Postgres) and `findDuplicate` skips technical removals.
 - **Upload limits are a per-account quota, not Kong (2026-10-10).**
   `catalog.UploadQuota` (`internal/catalog/quota.go`) counts the user's
   recorded editions (`uploaded_by_user_id`, `created_at`, **Unscoped** so

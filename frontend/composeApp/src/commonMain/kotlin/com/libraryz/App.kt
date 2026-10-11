@@ -127,6 +127,7 @@ import com.libraryz.ui.screens.UploadSubmission
 import com.libraryz.ui.screens.WorkDetailScreen
 import com.libraryz.ui.screens.inferFormatFromName
 import kotlinx.coroutines.launch
+import com.libraryz.data.api.RemovalRequest
 
 val LocalSnackbar = compositionLocalOf<SnackbarHostState> {
     error("No SnackbarHost in scope")
@@ -421,11 +422,11 @@ internal fun Root(
 
     // Moderator takedowns, shared by compact + expanded WorkDetail. Null for
     // everyone else, which hides the Remove affordances.
-    val removeWork: ((Work, String) -> Unit)? = if (auth.isModerator) {
-        { work, reason ->
+    val removeWork: ((Work, RemovalRequest) -> Unit)? = if (auth.isModerator) {
+        { work, removal ->
             scope.launch {
                 try {
-                    works.removeWork(work.id, reason)
+                    works.removeWork(work.id, removal)
                     // Leave the now-404 detail screen.
                     if (nav.current.let { it is Screen.WorkDetail && it.workId == work.id }) {
                         if (!nav.pop()) nav.replace(Screen.Browse)
@@ -437,11 +438,11 @@ internal fun Root(
             }
         }
     } else null
-    val removeEdition: ((Work, Edition, String) -> Unit)? = if (auth.isModerator) {
-        { work, ed, reason ->
+    val removeEdition: ((Work, Edition, RemovalRequest) -> Unit)? = if (auth.isModerator) {
+        { work, ed, removal ->
             scope.launch {
                 try {
-                    works.removeEdition(work.id, ed.id, reason)
+                    works.removeEdition(work.id, ed.id, removal)
                     snackbar.showSnackbar("Removed the ${ed.format.uppercase()} edition.")
                 } catch (e: Throwable) {
                     snackbar.showSnackbar("Couldn't remove: ${(e as? ApiException)?.userMessage ?: e.message ?: "unknown"}")
@@ -549,8 +550,8 @@ internal fun Root(
                         libraryEntry = library.entryFor(s.workId),
                         onLibraryUpsert = { req -> libraryUpsert(s.workId, req) },
                         onLibraryRemove = { libraryRemove(s.workId) },
-                        onRemoveWork = removeWork?.let { rm -> { reason -> rm(work, reason) } },
-                        onRemoveEdition = removeEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
+                        onRemoveWork = removeWork?.let { rm -> { removal -> rm(work, removal) } },
+                        onRemoveEdition = removeEdition?.let { rm -> { ed, removal -> rm(work, ed, removal) } },
                     )
                 }
             }
@@ -683,7 +684,7 @@ internal fun Root(
                                     // their own still-empty work. Best effort,
                                     // and it must run even when cancelled.
                                     withContext(NonCancellable) {
-                                        runCatching { api.deleteWork(created.id, "Upload failed; discarding the empty work") }
+                                        runCatching { api.deleteWork(created.id, RemovalRequest("Upload failed; discarding the empty work")) }
                                     }
                                     throw e
                                 } finally {
@@ -1150,8 +1151,8 @@ private fun ListDetailLayout(
     onDownload: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
-    onRemoveWork: ((Work, String) -> Unit)? = null,
-    onRemoveEdition: ((Work, Edition, String) -> Unit)? = null,
+    onRemoveWork: ((Work, RemovalRequest) -> Unit)? = null,
+    onRemoveEdition: ((Work, Edition, RemovalRequest) -> Unit)? = null,
     onAuthorClick: (String) -> Unit,
 ) {
     LaunchedEffect(selectedWorkId) {
@@ -1201,8 +1202,8 @@ private fun ListDetailLayout(
                     libraryEntry = library.entryFor(work.id),
                     onLibraryUpsert = { req -> onLibraryUpsert(work.id, req) },
                     onLibraryRemove = { onLibraryRemove(work.id) },
-                    onRemoveWork = onRemoveWork?.let { rm -> { reason -> rm(work, reason) } },
-                    onRemoveEdition = onRemoveEdition?.let { rm -> { ed, reason -> rm(work, ed, reason) } },
+                    onRemoveWork = onRemoveWork?.let { rm -> { removal -> rm(work, removal) } },
+                    onRemoveEdition = onRemoveEdition?.let { rm -> { ed, removal -> rm(work, ed, removal) } },
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 )
             }

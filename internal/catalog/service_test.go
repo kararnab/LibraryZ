@@ -110,15 +110,90 @@ func TestAddEditionDuplicates(t *testing.T) {
 	if _, err := f.add(a, "src-1", "different stored bytes"); !errors.As(err, &dup) || dup.Existing.ID != first.ID {
 		t.Fatalf("source-hash duplicate: err=%v", err)
 	}
-	// Removed edition → ErrRemoved, not a duplicate to link to.
-	if err := f.svc.DeleteEdition(context.Background(), first.ID, 1, "takedown"); err != nil {
+	// Removed for its content → ErrRemoved, not a duplicate to link to,
+	// matched by either hash.
+	if err := f.svc.DeleteEdition(context.Background(), first.ID, 1, "takedown", catalog.RemovalContent); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.add(b, "src-3", "same bytes"); !errors.Is(err, catalog.ErrRemoved) {
 		t.Fatalf("re-upload of removed bytes: err=%v, want ErrRemoved", err)
 	}
+	if _, err := f.add(b, "src-1", "other stored bytes"); !errors.Is(err, catalog.ErrRemoved) {
+		t.Fatalf("re-upload of removed source: err=%v, want ErrRemoved", err)
+	}
 	if _, err := f.add(uuid.New(), "", "anything"); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatalf("unknown work: err=%v", err)
+	}
+}
+
+// A file removed for being broken (#27) can be uploaded again, matched by
+// either hash, and the new edition is a live one that blocks duplicates as
+// usual. A content takedown of the same bytes still blocks them.
+func TestTechnicalRemovalReleasesTheFile(t *testing.T) {
+	f := newFixture(t)
+	f.db.Exec(`INSERT INTO user_roles (user_id, role) VALUES (1, 'moderator')`)
+	checkTechnicalRemoval(t, f.svc)
+}
+
+// checkTechnicalRemoval runs the #27 scenario against svc, as user 1 (a moderator).
+func checkTechnicalRemoval(t *testing.T, svc *catalog.Service) {
+	t.Helper()
+	ctx := context.Background()
+	work := func(title string) uuid.UUID {
+		w := catalog.Work{Title: title}
+		if err := svc.CreateWork(ctx, &w); err != nil {
+			t.Fatal(err)
+		}
+		return w.ID
+	}
+	add := func(workID uuid.UUID, sourceSHA, content string) (*catalog.Edition, error) {
+		return svc.AddEdition(ctx, workID, "txt", "en", 1, sourceSHA, bytes.NewReader([]byte(content)))
+	}
+	a := work("A")
+	first, err := add(a, "src-1", "broken bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteEdition(ctx, first.ID, 1, "Broken file", catalog.RemovalTechnical); err != nil {
+		t.Fatal(err)
+	}
+	// Same source, different stored bytes (the PDF that's sanitized correctly now).
+	second, err := add(a, "src-1", "fixed bytes")
+	if err != nil {
+		t.Fatalf("re-upload after a technical removal (source hash): %v", err)
+	}
+	if err := svc.DeleteEdition(ctx, second.ID, 1, "Still broken", catalog.RemovalTechnical); err != nil {
+		t.Fatal(err)
+	}
+	// Same stored bytes as the first, and a second technical removal of them.
+	third, err := add(a, "src-3", "broken bytes")
+	if err != nil {
+		t.Fatalf("re-upload after a technical removal (stored hash): %v", err)
+	}
+	var dup *catalog.DuplicateEditionError
+	if _, err := add(work("B"), "src-4", "broken bytes"); !errors.As(err, &dup) || dup.Existing.ID != third.ID {
+		t.Fatalf("duplicate of the live re-upload: err=%v", err)
+	}
+	if err := svc.DeleteEdition(ctx, third.ID, 1, "DMCA", catalog.RemovalContent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := add(a, "src-5", "broken bytes"); !errors.Is(err, catalog.ErrRemoved) {
+		t.Fatalf("after a content takedown: err=%v, want ErrRemoved", err)
+	}
+	if err := svc.DeleteEdition(ctx, third.ID, 1, "x", "other"); !errors.Is(err, catalog.ErrBadRemovalKind) {
+		t.Fatalf("unknown kind: err=%v", err)
+	}
+	// A work taken down as technical releases its editions' files too.
+	w := work("C")
+	ed, err := add(w, "src-6", "work bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteWork(ctx, w, 1, "Broken upload", catalog.RemovalTechnical); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := add(a, "src-6", "work bytes"); err != nil {
+		t.Fatalf("re-upload of a technically removed work's file (was %s): %v", ed.ID, err)
 	}
 }
 

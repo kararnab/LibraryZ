@@ -148,7 +148,7 @@ func TestUploadQuotaCountsTakenDownUploads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.svc.DeleteEdition(context.Background(), ed.ID, 1, "takedown"); err != nil {
+	if err := f.svc.DeleteEdition(context.Background(), ed.ID, 1, "takedown", catalog.RemovalContent); err != nil {
 		t.Fatal(err)
 	}
 	st, err := f.svc.UploadQuotaStatus(context.Background(), 1)

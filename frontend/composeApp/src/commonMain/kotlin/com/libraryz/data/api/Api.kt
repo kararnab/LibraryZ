@@ -42,6 +42,7 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNamingStrategy
@@ -73,7 +74,21 @@ data class CreateWorkRequest(
 )
 
 @Serializable
-data class RemovalRequest(val reason: String)
+data class RemovalRequest(
+    val reason: String,
+    // Content (the default, left off the wire) keeps the file blocked; Technical lets it be uploaded again.
+    val kind: RemovalKind = RemovalKind.Content,
+)
+
+/** Why a moderator takes something down; see the server's RemovalKind. */
+@Serializable
+enum class RemovalKind {
+    /** Rights, spam, abuse: the same file can't be uploaded again. */
+    @SerialName("content") Content,
+
+    /** A broken or unreadable file: the same file may be uploaded again. */
+    @SerialName("technical") Technical,
+}
 
 @Serializable
 data class SubmitContributionRequest(val patch: Map<String, JsonElement>)
@@ -481,9 +496,9 @@ class ApiClient(
      * Removes a work and its editions (soft delete). Moderators can remove any
      * work; anyone else only a work they created that has no editions.
      */
-    suspend fun deleteWork(id: String, reason: String) {
+    suspend fun deleteWork(id: String, removal: RemovalRequest) {
         val resp = client.delete("$baseUrl/works/$id") {
-            setBody(RemovalRequest(reason))
+            setBody(removal)
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove work failed")
@@ -491,9 +506,9 @@ class ApiClient(
     }
 
     /** Moderator-only. Takes a single edition down (soft delete). */
-    suspend fun deleteEdition(id: String, reason: String) {
+    suspend fun deleteEdition(id: String, removal: RemovalRequest) {
         val resp = client.delete("$baseUrl/editions/$id") {
-            setBody(RemovalRequest(reason))
+            setBody(removal)
         }
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove edition failed")

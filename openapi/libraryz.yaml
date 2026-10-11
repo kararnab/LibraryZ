@@ -679,8 +679,10 @@ paths:
             The file is already in the library as an edition, on this work or
             another one. Matched on the sha256 of the uploaded bytes, or of the
             bytes after sanitization. Nothing is recorded. If that edition was
-            removed by a moderator, `edition_id` / `work_id` are omitted and
-            `error` says so (a takedown can't be undone by re-uploading).
+            removed by a moderator for its content, `edition_id` / `work_id`
+            are omitted and `error` says so (a takedown can't be undone by
+            re-uploading). An edition removed as a broken file (`kind:
+            technical`) doesn't count: the same file can be uploaded again.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DuplicateEdition" }
@@ -1328,6 +1330,15 @@ components:
           minLength: 1
           maxLength: 1000
           description: Why it was taken down — kept for the audit trail.
+        kind:
+          type: string
+          enum: [content, technical]
+          default: content
+          description: |
+            `content` (rights, spam, abuse) keeps the file blocked: uploading
+            the same bytes again is refused. `technical` (a broken or
+            unreadable file) releases it, so the same file can be uploaded
+            again. For a work, it applies to its editions too.
 
     Ready:
       type: object

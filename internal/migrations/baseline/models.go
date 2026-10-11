@@ -83,6 +83,7 @@ type Work struct {
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
 	DeletedBy       *uint
 	DeleteReason    string
+	RemovalKind     string `gorm:"not null;default:''"`
 
 	Editions []Edition `gorm:"foreignKey:WorkID;constraint:OnDelete:CASCADE"`
 	Tags     []Tag     `gorm:"many2many:work_tags;"`
@@ -95,13 +96,14 @@ type Edition struct {
 	Language         string
 	FileKey          string `gorm:"not null;index"`
 	SizeBytes        int64
-	SHA256           string  `gorm:"size:64;uniqueIndex"`
-	SourceSHA256     *string `gorm:"size:64;uniqueIndex"`
+	SHA256           string  `gorm:"size:64;uniqueIndex:idx_editions_sha256,where:removal_kind <> 'technical'"`
+	SourceSHA256     *string `gorm:"size:64;uniqueIndex:idx_editions_source_sha256,where:removal_kind <> 'technical'"`
 	UploadedByUserID uint    `gorm:"not null;index"`
 	CreatedAt        time.Time
 	DeletedAt        gorm.DeletedAt `gorm:"index"`
 	DeletedBy        *uint
 	DeleteReason     string
+	RemovalKind      string `gorm:"not null;default:''"`
 }
 
 type Tag struct {

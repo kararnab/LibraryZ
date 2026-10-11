@@ -18,6 +18,9 @@ import (
 
 var (
 	ErrNotFound = errors.New("not found")
+	// ErrBadRemovalKind is returned for a removal kind other than
+	// "content" or "technical".
+	ErrBadRemovalKind = errors.New(`kind must be "content" or "technical"`)
 	// ErrRemoved is returned when uploading bytes identical to an edition a
 	// moderator took down — a takedown shouldn't be undone by re-uploading.
 	ErrRemoved = errors.New("this file was removed by a moderator and can't be re-uploaded")
@@ -170,7 +173,8 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 }
 
 // asDuplicate maps a matching edition to the error AddEdition returns: a
-// takedown can't be undone by re-uploading the same file.
+// content takedown can't be undone by re-uploading the same file.
+// (findDuplicate never returns a technical removal.)
 func asDuplicate(dup *Edition) error {
 	if dup.DeletedAt.Valid {
 		return ErrRemoved
@@ -193,11 +197,13 @@ func (s *Service) findDuplicate(ctx context.Context, sha, sourceSHA string) (*Ed
 	default:
 		return nil, nil
 	}
-	// Unscoped: hashes stay unique across removed editions too, so a removed
-	// one must be found here (and reported as ErrRemoved by asDuplicate)
-	// rather than tripping the unique index.
+	// Unscoped: hashes stay unique across editions removed for their
+	// content too, so such a removed one must be found here (and reported as
+	// ErrRemoved by asDuplicate) rather than tripping the unique index. A
+	// technical removal released its hashes (the indexes skip it), so it
+	// isn't a duplicate.
 	var e Edition
-	err := q.Unscoped().First(&e).Error
+	err := q.Unscoped().Where("removal_kind <> ?", RemovalTechnical).First(&e).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -350,12 +356,24 @@ func validReason(reason string) bool {
 	return n > 0 && n <= maxDeleteReasonRunes
 }
 
-func removal(by uint, reason string) map[string]any {
+func removal(by uint, reason string, kind RemovalKind) map[string]any {
 	return map[string]any{
 		"deleted_at":    time.Now(),
 		"deleted_by":    by,
 		"delete_reason": strings.TrimSpace(reason),
+		"removal_kind":  kind,
 	}
+}
+
+// removalKind validates kind; "" means RemovalContent.
+func removalKind(kind RemovalKind) (RemovalKind, error) {
+	switch kind {
+	case "", RemovalContent:
+		return RemovalContent, nil
+	case RemovalTechnical:
+		return RemovalTechnical, nil
+	}
+	return "", ErrBadRemovalKind
 }
 
 // DeleteWork takes a work down along with all its editions. The rows are
@@ -365,9 +383,14 @@ func removal(by uint, reason string) map[string]any {
 // Moderators can remove any work. Anyone else can only remove a work they
 // created that has no editions at all — which is how the new-work upload
 // flow cleans up after its first upload is rejected (e.g. a duplicate).
-func (s *Service) DeleteWork(ctx context.Context, id uuid.UUID, by uint, reason string) error {
+// kind (see RemovalKind; "" = content) applies to the editions too.
+func (s *Service) DeleteWork(ctx context.Context, id uuid.UUID, by uint, reason string, kind RemovalKind) error {
 	if !validReason(reason) {
 		return ErrReasonRequired
+	}
+	kind, err := removalKind(kind)
+	if err != nil {
+		return err
 	}
 	isMod, err := middleware.IsModerator(ctx, s.db, by)
 	if err != nil {
@@ -392,23 +415,28 @@ func (s *Service) DeleteWork(ctx context.Context, id uuid.UUID, by uint, reason 
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Model(&Work{}) scopes to deleted_at IS NULL, so removing an
 		// already-removed work is a 404, not a silent re-stamp.
-		res := tx.Model(&Work{}).Where("id = ?", id).Updates(removal(by, reason))
+		res := tx.Model(&Work{}).Where("id = ?", id).Updates(removal(by, reason, kind))
 		if res.Error != nil {
 			return res.Error
 		}
 		if res.RowsAffected == 0 {
 			return ErrNotFound
 		}
-		return tx.Model(&Edition{}).Where("work_id = ?", id).Updates(removal(by, reason)).Error
+		return tx.Model(&Edition{}).Where("work_id = ?", id).Updates(removal(by, reason, kind)).Error
 	})
 }
 
-// DeleteEdition takes a single edition down (see DeleteWork).
-func (s *Service) DeleteEdition(ctx context.Context, id uuid.UUID, by uint, reason string) error {
+// DeleteEdition takes a single edition down (see DeleteWork). A technical
+// removal (kind) lets the same file be uploaded again.
+func (s *Service) DeleteEdition(ctx context.Context, id uuid.UUID, by uint, reason string, kind RemovalKind) error {
 	if !validReason(reason) {
 		return ErrReasonRequired
 	}
-	res := s.db.WithContext(ctx).Model(&Edition{}).Where("id = ?", id).Updates(removal(by, reason))
+	kind, err := removalKind(kind)
+	if err != nil {
+		return err
+	}
+	res := s.db.WithContext(ctx).Model(&Edition{}).Where("id = ?", id).Updates(removal(by, reason, kind))
 	if res.Error != nil {
 		return res.Error
 	}
