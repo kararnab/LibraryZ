@@ -22,6 +22,9 @@ var MaxFieldRunes = map[string]int{
 	"openlibrary_id": 64,
 }
 
+// MaxQueryRunes caps a search query: longer is no search a reader types.
+const MaxQueryRunes = 200
+
 // Sane bounds for publication_year: allows ancient texts (negative = BCE)
 // and a little room for announced-but-unpublished works.
 const (

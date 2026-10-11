@@ -7,11 +7,13 @@ import io.ktor.client.plugins.plugin
 import io.ktor.client.plugins.HttpSend
 import com.libraryz.data.Contribution
 import com.libraryz.data.Edition
+import com.libraryz.data.Limits
 import com.libraryz.data.Recommendation
 import com.libraryz.data.User
 import com.libraryz.data.UploadQuota
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
+import com.libraryz.data.capped
 import kotlinx.serialization.json.JsonElement
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
@@ -473,7 +475,7 @@ class ApiClient(
     /** Public. Free-text search over title / authors / description. */
     suspend fun searchWorks(q: String, limit: Int = 50, offset: Int = 0): List<Work> {
         val resp = client.get("$baseUrl/works/search") {
-            parameter("q", q)
+            parameter("q", q.capped(Limits.QUERY))
             parameter("limit", limit)
             parameter("offset", offset)
         }

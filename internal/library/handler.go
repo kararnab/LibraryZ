@@ -76,7 +76,8 @@ func (h *Handler) Upsert(w http.ResponseWriter, r *http.Request) {
 		// Removed after this change was made (on another device).
 		http.Error(w, "removed from your library", http.StatusNotFound)
 		return
-	case errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrInvalidRating), errors.Is(err, ErrInvalidProgress), errors.Is(err, ErrInvalidStamp):
+	case errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrInvalidRating), errors.Is(err, ErrInvalidProgress), errors.Is(err, ErrInvalidStamp),
+		errors.Is(err, ErrInvalidPages), errors.Is(err, ErrNotesTooLong), errors.Is(err, ErrShelfTooLong):
 		// These are sentinel validation errors with safe, user-facing text.
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

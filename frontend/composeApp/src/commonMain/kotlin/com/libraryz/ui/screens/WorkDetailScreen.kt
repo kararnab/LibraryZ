@@ -78,6 +78,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
+import com.libraryz.data.Limits
 import com.libraryz.data.SavedBook
 import com.libraryz.data.LibraryStatus
 import com.libraryz.data.TEXT_POSITIONS
@@ -85,6 +86,7 @@ import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import com.libraryz.data.api.UpsertLibraryRequest
 import com.libraryz.data.authorsFull
+import com.libraryz.data.capped
 import com.libraryz.data.joinAuthors
 import com.libraryz.data.pickReadableEdition
 import com.libraryz.data.prettySize
@@ -587,7 +589,7 @@ private fun LibraryCard(
                     onKeepThis = { onUpsert(UpsertLibraryRequest(resolveNotes = true)) },
                     onUseOther = { onUpsert(UpsertLibraryRequest(notes = other, resolveNotes = true)) },
                     onKeepBoth = {
-                        onUpsert(UpsertLibraryRequest(notes = listOfNotNull(note, other).joinToString("\n\n"), resolveNotes = true))
+                        onUpsert(UpsertLibraryRequest(notes = listOfNotNull(note, other).joinToString("\n\n").capped(Limits.NOTES), resolveNotes = true))
                     },
                 )
             }
@@ -625,7 +627,7 @@ private fun LibraryCard(
             text = {
                 OutlinedTextField(
                     value = shelf,
-                    onValueChange = { shelf = it },
+                    onValueChange = { shelf = it.capped(Limits.SHELF) },
                     label = { Text("Shelf name") },
                     placeholder = { Text("e.g. Victorian novels") },
                     singleLine = true,
@@ -649,7 +651,7 @@ private fun NoteEditor(initial: String, onCancel: () -> Unit, onSave: (String) -
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = text,
-            onValueChange = { text = it },
+            onValueChange = { text = it.capped(Limits.NOTES) },
             label = { Text("Note") },
             minLines = 3,
             modifier = Modifier.fillMaxWidth(),

@@ -62,11 +62,13 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.libraryz.data.Limits
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.LoginRequest
 import com.libraryz.data.api.Session
 import com.libraryz.data.api.SignUpRequest
+import com.libraryz.data.capped
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.MessageSlot
 import com.libraryz.ui.components.ServerAddressDialog
@@ -203,7 +205,7 @@ fun AuthGateScreen(
             AnimatedVisibility(signUp, enter = Motion.reveal(reduce), exit = Motion.conceal(reduce)) {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = it.capped(Limits.NAME) },
                     label = { Text("Name") },
                     singleLine = true,
                     enabled = !inFlight,
