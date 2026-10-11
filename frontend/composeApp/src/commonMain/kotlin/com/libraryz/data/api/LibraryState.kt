@@ -46,7 +46,7 @@ class LibraryState(private val api: ApiClient) {
             items = loaded
             loaded.forEach { cache[it.workId] = it }
         } catch (e: Throwable) {
-            error = e.message ?: "Failed to load library"
+            error = api.describe(e)
         }
     }
 

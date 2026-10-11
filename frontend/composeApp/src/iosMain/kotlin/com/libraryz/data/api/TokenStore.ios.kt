@@ -21,3 +21,5 @@ actual fun createTokenStore(): TokenStore = UserDefaultsTokenStore()
 actual fun createReaderLayoutStore(): TokenStore = UserDefaultsTokenStore("libraryz_reader_layouts")
 
 actual fun createReaderPrefsStore(): TokenStore = UserDefaultsTokenStore("libraryz_reader_prefs")
+
+actual fun createServerUrlStore(): TokenStore = UserDefaultsTokenStore("libraryz_server_url")

@@ -34,9 +34,12 @@ class ContributionsState(private val api: ApiClient) {
         try {
             items = api.listContributions(status = "pending")
         } catch (e: Throwable) {
-            error = e.message ?: "Failed to load contributions"
+            error = api.describe(e)
         }
     }
+
+    /** A failed approve or reject, in words. */
+    fun describe(e: Throwable): String = api.describe(e)
 
     suspend fun approve(id: String) {
         api.approveContribution(id)

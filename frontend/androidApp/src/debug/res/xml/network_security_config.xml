@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Debug builds only (overrides src/main): the server address can be
+         changed in Settings to any emulator / LAN / dev host, so allow
+         cleartext to all of them. Release builds keep the main config. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

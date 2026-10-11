@@ -230,7 +230,8 @@ class DuplicateEditionException(
  */
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 class ApiClient(
-    private val baseUrl: String,
+    // Settings can point the app at another server; takes effect on the next request.
+    var baseUrl: String,
     private val tokenProvider: () -> String? = { null },
     engine: HttpClientEngine? = null,
     private val sessionHooks: SessionHooks? = null,

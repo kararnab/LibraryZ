@@ -18,7 +18,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.libraryz.data.DeepLinkInbox
 import com.libraryz.data.api.AndroidContextHolder
-import com.libraryz.data.api.DefaultBaseUrl
+import com.libraryz.data.api.startupServerUrl
 import com.libraryz.data.api.isLocalNetworkUrl
 import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.ui.Fullscreen
@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun needsLocalNetwork(): Boolean =
         Build.VERSION.SDK_INT >= 37 &&
-            isLocalNetworkUrl(DefaultBaseUrl) &&
+            isLocalNetworkUrl(startupServerUrl()) &&
             checkSelfPermission(LocalNetworkPermission) != PackageManager.PERMISSION_GRANTED
 
     private companion object {

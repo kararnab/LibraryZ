@@ -29,3 +29,6 @@ actual fun createReaderLayoutStore(): TokenStore =
 
 actual fun createReaderPrefsStore(): TokenStore =
     FileTokenStore(File(System.getProperty("user.home"), ".libraryz/reader-prefs.json"))
+
+actual fun createServerUrlStore(): TokenStore =
+    FileTokenStore(File(System.getProperty("user.home"), ".libraryz/server-url"))

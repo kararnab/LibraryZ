@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
@@ -68,6 +69,8 @@ import com.libraryz.data.api.Session
 import com.libraryz.data.api.SignUpRequest
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.MessageSlot
+import com.libraryz.ui.components.ServerAddressDialog
+import com.libraryz.ui.components.rememberMultiTap
 import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.theme.Motion
 import androidx.compose.animation.AnimatedVisibility
@@ -105,6 +108,9 @@ fun AuthGateScreen(
     // After a password reset: "Password changed. Log in with your new one."
     passwordChanged: Boolean = false,
     onForgotPassword: ((email: String) -> Unit)? = null,
+    // Which server to sign in to; null hides the control.
+    serverUrl: String? = null,
+    onServerUrlChange: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(0) }
@@ -115,6 +121,7 @@ fun AuthGateScreen(
     var problem by remember { mutableStateOf<AuthProblem?>(null) }
     var inFlight by remember { mutableStateOf(false) }
     val signUp = tab == 1
+    var editServer by remember { mutableStateOf(false) }
 
     fun submit() {
         if (inFlight) return
@@ -271,7 +278,29 @@ fun AuthGateScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (serverUrl != null) {
+                // A device that can't reach the default server needs this
+                // before it can sign in to reach Settings.
+                TextButton(
+                    onClick = rememberMultiTap(taps = 3) { editServer = true },
+                    enabled = !inFlight,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                ) {
+                    Icon(Icons.Rounded.Dns, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Server: $serverUrl", style = MaterialTheme.typography.labelMedium)
+                }
+            }
         }
+    }
+
+    if (editServer && serverUrl != null) {
+        ServerAddressDialog(
+            current = serverUrl,
+            signedIn = false,
+            onSave = { editServer = false; onServerUrlChange(it) },
+            onDismiss = { editServer = false },
+        )
     }
 
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {

@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Star
@@ -387,6 +391,33 @@ fun EmptyState(
             action()
         }
     }
+}
+
+/**
+ * A screen whose content couldn't load: the design's error state (offline
+ * cloud, a short title, what to do, "Try again"). [body] comes from
+ * [com.libraryz.data.api.describeError], never an exception's own text.
+ */
+@Composable
+fun LoadErrorState(
+    title: String,
+    body: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    EmptyState(
+        title = title,
+        body = body,
+        icon = Icons.Outlined.CloudOff,
+        action = {
+            FilledTonalButton(onClick = onRetry) {
+                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Try again")
+            }
+        },
+        modifier = modifier,
+    )
 }
 
 /**

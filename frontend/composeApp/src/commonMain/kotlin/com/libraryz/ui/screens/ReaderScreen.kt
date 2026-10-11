@@ -127,6 +127,7 @@ import com.libraryz.data.Spreads
 import com.libraryz.data.TEXT_POSITIONS
 import com.libraryz.data.TextReader
 import com.libraryz.data.UserBook
+import com.libraryz.data.api.describe
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.authorsShort
 import com.libraryz.data.openReader
@@ -157,6 +158,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import com.libraryz.theme.LibraryZTheme
 import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.LocalFullscreen
+import com.libraryz.ui.components.LoadErrorState
 import com.libraryz.ui.components.StarRating
 import com.libraryz.ui.components.bookBoxes
 import com.libraryz.ui.components.prefetchImages
@@ -237,12 +239,16 @@ fun ReaderScreen(
 ) {
     var bytes by remember(editionId) { mutableStateOf<ByteArray?>(null) }
     var loadError by remember(editionId) { mutableStateOf<String?>(null) }
+    // A failed download can be retried; a file that won't open can't.
+    var downloadFailed by remember(editionId) { mutableStateOf(false) }
+    var attempt by remember(editionId) { mutableStateOf(0) }
 
-    LaunchedEffect(editionId) {
+    LaunchedEffect(editionId, attempt) {
         try {
             bytes = api.downloadEdition(editionId)
         } catch (e: Throwable) {
-            loadError = e.message ?: "Failed to load edition"
+            loadError = api.describe(e)
+            downloadFailed = true
         }
     }
 
@@ -446,6 +452,7 @@ fun ReaderScreen(
                 else -> PagedReaderLayout(
                     reader = r as PagedReader?,
                     loadError = loadError,
+                    onRetry = if (downloadFailed) ({ loadError = null; downloadFailed = false; attempt++ }) else null,
                     title = title,
                     authors = authors,
                     wide = wide,
@@ -527,6 +534,8 @@ private fun ProgressReporter(
 private fun PagedReaderLayout(
     reader: PagedReader?,
     loadError: String?,
+    // Set when the download failed (worth retrying), not when the file is bad.
+    onRetry: (() -> Unit)?,
     title: String,
     authors: String?,
     wide: Boolean,
@@ -623,8 +632,13 @@ private fun PagedReaderLayout(
             Crossfade(phase, animationSpec = tween(Motion.MEDIUM, easing = Motion.Standard), label = "reader") { ph ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             when {
+                ph == PagedPhase.Error && onRetry != null -> LoadErrorState(
+                    title = "Couldn’t open this book",
+                    body = loadError.orEmpty(),
+                    onRetry = onRetry,
+                )
                 ph == PagedPhase.Error -> Text(
-                    "Couldn't load: $loadError",
+                    "Couldn’t open this book: $loadError",
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(24.dp),
                 )

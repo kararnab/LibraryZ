@@ -31,8 +31,19 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   slide or fade away, settings panels slide in, and a new reading theme
   dissolves in. Every platform's "reduce motion" setting turns slides and
   scales into short fades.
+- **Editable server address** (triple-tap Settings › Server, or the
+  "Server: …" button on sign-in), saved on the device. Blank or invalid
+  input falls back to the platform default. Switching between local
+  addresses (localhost, emulator, LAN) keeps you signed in; switching to or
+  from a public server signs you out first. Debug Android builds allow
+  plain http to any host.
 
 ### Changed
+- **Readable errors.** Screens and snackbars no longer show raw
+  exception text: an unreachable server reads "Can’t reach the library at
+  {host}. Check your connection, or the server address in Settings.", and
+  full-screen load failures use the design's error state with a "Try
+  again" button (the reader's download error now has one too).
 - Going back to a screen keeps its scroll position (Browse, My Library…).
 - Upload and Suggest edit open over the screen they were opened from.
 - The compose service `libraryz` is now `libraryz-1` and `libraryz-2`

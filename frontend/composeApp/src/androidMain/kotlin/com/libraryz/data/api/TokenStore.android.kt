@@ -42,3 +42,14 @@ actual fun createReaderLayoutStore(): TokenStore =
 
 actual fun createReaderPrefsStore(): TokenStore =
     FileTokenStore(File(AndroidContextHolder.appContext.filesDir, "reader_prefs.json"))
+
+private fun serverUrlFile() = File(AndroidContextHolder.appContext.filesDir, "server_url")
+
+actual fun createServerUrlStore(): TokenStore = FileTokenStore(serverUrlFile())
+
+/**
+ * The server the app will talk to, read before Compose starts (MainActivity
+ * decides from it whether to ask for local-network access).
+ */
+fun startupServerUrl(): String =
+    runCatching { serverUrlFile().takeIf { it.exists() }?.readText() }.getOrNull()?.let(::parseServerUrl) ?: DefaultBaseUrl
