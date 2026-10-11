@@ -30,8 +30,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
@@ -92,6 +98,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
@@ -106,6 +113,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.libraryz.data.BookLayout
 import com.libraryz.data.BookLayouts
+import com.libraryz.data.Chapter
 import com.libraryz.data.PageLayout
 import com.libraryz.data.PagedReader
 import com.libraryz.data.Reader
@@ -116,7 +124,6 @@ import com.libraryz.data.TextReader
 import com.libraryz.data.UserBook
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.authorsShort
-import com.libraryz.data.chaptersOf
 import com.libraryz.data.openReader
 import com.libraryz.data.pageBreaks
 import com.libraryz.data.pagesLabel
@@ -867,6 +874,7 @@ private fun TextReaderLayout(
     pager: TextPager,
 ) {
     val theme = prefs.theme
+    var contentsOpen by remember { mutableStateOf(false) }
     val settings = @Composable {
         ReadingSettings(
             prefs, onPrefsChange,
@@ -896,6 +904,11 @@ private fun TextReaderLayout(
                         val byline = authorsShort(authors)
                         if (wide && byline.isNotEmpty()) {
                             Text(byline, style = MaterialTheme.typography.bodySmall, color = theme.muted, maxLines = 1)
+                        }
+                    }
+                    if (reader.chapters.size >= 2) {
+                        IconButton(onClick = { contentsOpen = true }) {
+                            Icon(Icons.AutoMirrored.Rounded.List, contentDescription = "Contents", tint = theme.muted)
                         }
                     }
                     IconButton(onClick = { onSettingsOpen(!settingsOpen) }) {
@@ -934,6 +947,7 @@ private fun TextReaderLayout(
                     Box(Modifier.weight(1f).fillMaxWidth().pointerInput(Unit) { detectTapGestures { onToggleChrome() } }) {
                         TextView(
                             reader = reader,
+                            pager = pager,
                             scroll = scroll,
                             prefs = prefs,
                             wide = wide,
@@ -1010,6 +1024,15 @@ private fun TextReaderLayout(
                 }
             }
         }
+    }
+    if (contentsOpen) {
+        val here = pager.offset() ?: (startPosition.toFloat() / (TEXT_POSITIONS - 1) * reader.text.length).roundToInt()
+        ContentsSheet(
+            chapters = reader.chapters,
+            current = reader.chapters.indexOfLast { it.offset <= here },
+            onPick = { pager.goTo(it.offset); contentsOpen = false },
+            onDismiss = { contentsOpen = false },
+        )
     }
     if (!wide && settingsOpen) {
         ModalBottomSheet(
@@ -1169,6 +1192,7 @@ fun TextSizeControl(size: Int, onChange: (Int) -> Unit, modifier: Modifier = Mod
 @Composable
 private fun TextView(
     reader: TextReader,
+    pager: TextPager,
     scroll: ScrollState,
     prefs: ReaderPrefs,
     wide: Boolean,
@@ -1195,6 +1219,29 @@ private fun TextView(
         scroll.scrollTo((fraction * scroll.maxValue).roundToInt())
         anchor = null
     }
+    // Contents jumps: the text's top in the scroll, plus its line's.
+    var textLayout by remember(reader) { mutableStateOf<TextLayoutResult?>(null) }
+    val topPadding = if (wide) 56.dp else 28.dp
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    SideEffect {
+        pager.goTo = { offset ->
+            textLayout?.let { l ->
+                val line = l.getLineForOffset(offset.coerceIn(0, reader.text.length))
+                // A little space above, so a heading doesn't sit against the bar.
+                val y = with(density) { (topPadding - 16.dp).toPx() } + l.getLineTop(line)
+                anchor = null
+                scope.launch { scroll.scrollTo(y.roundToInt()) }
+            }
+        }
+        pager.offset = {
+            textLayout?.let { l ->
+                // Just below the top: a jump leaves a margin above its heading.
+                val y = scroll.value - with(density) { (topPadding - 24.dp).toPx() }
+                l.getLineStart(l.getLineForVerticalPosition(y.coerceAtLeast(0f)))
+            }
+        }
+    }
     LaunchedEffect(reader) {
         snapshotFlow { if (anchor != null) null else scroll.value to scroll.maxValue }
             .collect { state ->
@@ -1211,7 +1258,7 @@ private fun TextView(
             modifier = Modifier
                 .widthIn(max = prefs.width.max)
                 .padding(horizontal = if (wide) 40.dp else 28.dp)
-                .padding(top = if (wide) 56.dp else 28.dp, bottom = 40.dp),
+                .padding(top = topPadding, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(40.dp),
         ) {
             Text(
@@ -1220,6 +1267,7 @@ private fun TextView(
                 fontSize = prefs.textSize.sp,
                 lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
                 color = prefs.theme.ink,
+                onTextLayout = { textLayout = it },
             )
             end()
         }
@@ -1234,6 +1282,14 @@ class TextPager {
     var turn: (Int) -> Unit = {}
     /** To the first spread, or ([toEnd]) the last. */
     var jump: (toEnd: Boolean) -> Unit = {}
+    /** To a character offset in the text, e.g. a chapter picked from the contents. */
+    var goTo: (offset: Int) -> Unit = {}
+    /**
+     * Where the reader is, as a character offset: the last one shown in a
+     * spread (so a chapter starting on the right-hand page counts, as in the
+     * running head), else near the top of the screen. Null before layout.
+     */
+    var offset: () -> Int? = { null }
 }
 
 /**
@@ -1261,7 +1317,7 @@ private fun TextSpreadView(
     val text = reader.text
     val theme = prefs.theme
     val last = TEXT_POSITIONS - 1
-    val chapters = remember(reader) { chaptersOf(text) }
+    val chapters = reader.chapters
     // Where the reader is, as a character offset: stays put when the pages
     // are re-measured (text size, spacing, window size). Past the text = the end card.
     var anchor by remember(reader) {
@@ -1294,7 +1350,7 @@ private fun TextSpreadView(
                 top = layout::getLineTop,
                 bottom = layout::getLineBottom,
                 height = bodyPx,
-                blank = { text.substring(layout.getLineStart(it), layout.getLineEnd(it)).isBlank() },
+                blank = { text.text.substring(layout.getLineStart(it), layout.getLineEnd(it)).isBlank() },
             )
         }
         val pageCount = starts.size
@@ -1315,6 +1371,8 @@ private fun TextSpreadView(
         SideEffect {
             pager.turn = { delta -> anchor = startOf(spreads.turn(pageAt(anchor), delta)) }
             pager.jump = { toEnd -> anchor = if (toEnd) text.length else 0 }
+            pager.goTo = { offset -> anchor = offset.coerceIn(0, text.length) }
+            pager.offset = { (endOf(slots.filter { it < pageCount }.maxOrNull() ?: pageCount) - 1).coerceAtLeast(0) }
         }
         LaunchedEffect(slots, atEnd) {
             onPosition(if (atEnd) last else (startOf(slots.first()).toFloat() / text.length.coerceAtLeast(1) * last).roundToInt())
@@ -1387,7 +1445,7 @@ private fun TextSpreadView(
                         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
                             // Same width as the measured column, so lines break where they did there.
                             Text(
-                                text.substring(startOf(p), endOf(p)).trimEnd(),
+                                text.subSequence(startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
                                 style = style,
                                 modifier = Modifier.requiredWidth(with(density) { columnPx.toDp() }),
                             )
@@ -1425,6 +1483,48 @@ private fun TextSpreadView(
             }
         }
     }
+}
+
+/**
+ * The book's chapters, nested by depth, the one being read highlighted and
+ * scrolled into view. Picking one jumps there.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContentsSheet(chapters: List<Chapter>, current: Int, onPick: (Chapter) -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Text(
+            "Contents",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+        )
+        val list = rememberLazyListState(initialFirstVisibleItemIndex = (current - 2).coerceAtLeast(0))
+        LazyColumn(state = list, contentPadding = PaddingValues(bottom = 28.dp)) {
+            itemsIndexed(chapters) { i, chapter ->
+                val here = i == current
+                Text(
+                    chapter.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (here) FontWeight.SemiBold else null,
+                    color = if (here) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().clickable { onPick(chapter) }
+                        .padding(start = 24.dp + 16.dp * chapter.depth.coerceAtMost(3), end = 24.dp, top = 12.dp, bottom = 12.dp),
+                )
+            }
+        }
+    }
+}
+
+/** [end] moved back past trailing whitespace, not before [start]. */
+private fun trimEnd(text: String, start: Int, end: Int): Int {
+    var e = end
+    while (e > start && text[e - 1].isWhitespace()) e--
+    return e
 }
 
 /** A running head (small tracked caps) or foot: [start] and [end] at either side. */

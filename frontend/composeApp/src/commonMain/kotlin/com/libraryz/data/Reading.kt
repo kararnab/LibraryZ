@@ -24,12 +24,14 @@ const val TEXT_POSITIONS = 1000
 
 /**
  * The edition "Read" opens: the first one this build can render, PDF
- * before TXT (PDF keeps the book's own layout). Null when nothing is
- * readable here, e.g. EPUB-only works.
+ * first (it keeps the book's own layout), then EPUB (headings and emphasis
+ * survive), then TXT. Null when nothing is readable here.
  */
 fun pickReadableEdition(editions: List<Edition>): Edition? {
     val readable = editions.filter { it.isPreviewable }
-    return readable.firstOrNull { it.isPdf } ?: readable.firstOrNull()
+    return readable.firstOrNull { it.isPdf }
+        ?: readable.firstOrNull { it.format.equals("epub", ignoreCase = true) }
+        ?: readable.firstOrNull()
 }
 
 /**
@@ -140,8 +142,11 @@ fun pagesLabel(pages: List<Int>, pageCount: Int): String {
     }
 }
 
-/** A chapter heading found in plain text: where its line starts, and the heading. */
-data class Chapter(val offset: Int, val title: String)
+/**
+ * A chapter: where it starts in the text, its heading, and how deeply it's
+ * nested in the book's table of contents (0 = top level).
+ */
+data class Chapter(val offset: Int, val title: String, val depth: Int = 0)
 
 private val chapterLine = Regex(
     "^[ \\t]*((?:chapter|book|part|letter|canto|act)[ \\t]+" +

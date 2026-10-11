@@ -387,8 +387,11 @@ a surface-colored background + scrolling serif `Text` with no chevrons
 Adding a new format = a single branch in `openReader`. Adding a new
 *paged* format (DJVU, CBZ) needs a new `PagedReader` implementation per
 platform if rendering varies; adding a new *text-shaped* format (MD)
-mostly stays in commonMain. EPUB is its own slice (zipped HTML+CSS,
-needs a real HTML renderer per platform).
+mostly stays in commonMain. EPUB is the precedent: `parseEpub` (commonMain,
+its own zip/inflate and XHTML tokenizer) reduces the book to a styled
+`AnnotatedString` plus chapters, so it opens as a `TextReader` and gets
+reflow, themes and two-page spreads for free. Images and the book's CSS are
+dropped for now.
 
 A few non-obvious decisions worth knowing before you contribute:
 
