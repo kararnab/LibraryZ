@@ -1050,9 +1050,16 @@ Book detail's notes choice, and the reader's "You're on p. N on another
 device — Go there" (`LibraryState.resumePoint`, this device's own last
 spot kept per work).
 
-**Slice 8.4 — offline in the UI.** One connectivity signal from
-`isUnreachable`; a quiet "Offline — showing saved books" banner; Upload,
-Suggest edit and Review disabled with a reason instead of failing.
+**Slice 8.4 — offline in the UI (DONE 2026-10-11, in the 8.1 PR).**
+`ApiClient.reachable` (Compose state) is set by every request through an
+`HttpSend` interceptor: no answer (`isUnreachable`) → false, any answer →
+true; `ping()` asks `GET /health`. While offline the app pings every 15 s;
+when the server answers again it re-fetches the library (sending the queue
+first) and the catalog. One `OfflineStrip` above every framed screen says
+what still works and how many changes are waiting, with "Try again" (it
+replaced the per-screen Offline banners). `Navigator.guard` +
+`needsConnection` stop Upload / Add edition, Suggest edit, the Review queue
+and For You from opening offline, with a snackbar saying why.
 
 **Deferred: Web.** Starting offline needs a service worker caching the Wasm
 bundle and pdf.js (now from cdnjs), and books in OPFS / IndexedDB under the

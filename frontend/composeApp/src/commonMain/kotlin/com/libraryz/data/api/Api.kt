@@ -1,5 +1,10 @@
 package com.libraryz.data.api
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import io.ktor.client.plugins.plugin
+import io.ktor.client.plugins.HttpSend
 import com.libraryz.data.Contribution
 import com.libraryz.data.Edition
 import com.libraryz.data.Recommendation
@@ -258,11 +263,33 @@ class ApiClient(
         namingStrategy = JsonNamingStrategy.SnakeCase
     }
 
-    private val client: HttpClient = if (engine != null) {
+    private val client: HttpClient = (if (engine != null) {
         HttpClient(engine) { configure() }
     } else {
         HttpClient { configure() }
+    }).also { c ->
+        // Every request says whether the server is there: no answer at all
+        // means offline, any answer (even an error status) means back.
+        c.plugin(HttpSend).intercept { request ->
+            try {
+                execute(request).also { reachable = true }
+            } catch (e: Throwable) {
+                if (isUnreachable(e)) reachable = false
+                throw e
+            }
+        }
     }
+
+    /**
+     * False once a request got no answer from the server; true again after
+     * any answer. Compose state, so the app's offline strip and the actions
+     * that need a connection follow it.
+     */
+    var reachable: Boolean by mutableStateOf(true)
+        private set
+
+    /** Asks the server whether it's there (`GET /health`), updating [reachable]. */
+    suspend fun ping(): Boolean = runCatching { client.get("$baseUrl/health").status.isSuccess() }.getOrDefault(false)
 
     private fun HttpClientConfig<*>.configure() {
         expectSuccess = false

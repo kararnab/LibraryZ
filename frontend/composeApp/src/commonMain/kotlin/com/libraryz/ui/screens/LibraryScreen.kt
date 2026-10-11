@@ -55,7 +55,6 @@ import com.libraryz.data.authorsShort
 import com.libraryz.data.pickReadableEdition
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.LoadErrorState
-import com.libraryz.ui.components.OfflineBanner
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
@@ -151,13 +150,6 @@ fun LibraryScreen(
                 }
             }
 
-            if (state.offline) {
-                OfflineBanner(
-                    "Your library as of your last connection. Books on this device open as usual.",
-                    onRetry = { scope.launch { state.refresh() } },
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
-                )
-            }
             val items = state.items
             val err = state.error
             val phase = when {

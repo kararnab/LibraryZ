@@ -37,7 +37,7 @@ import com.libraryz.theme.LibraryZ
 import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.theme.Motion
 import com.libraryz.ui.components.LoadErrorState
-import com.libraryz.ui.components.OfflineBanner
+import com.libraryz.ui.components.OfflineStrip
 import com.libraryz.ui.components.LoadPhase
 import com.libraryz.ui.components.PhaseCrossfade
 import androidx.compose.animation.AnimatedContent
@@ -131,6 +131,7 @@ import com.libraryz.data.sanitizeFilename
 import com.libraryz.data.saveDownload
 import com.libraryz.nav.Navigator
 import com.libraryz.nav.Screen
+import com.libraryz.nav.needsConnection
 import com.libraryz.nav.rememberNavigator
 import com.libraryz.theme.LibraryZTheme
 import com.libraryz.ui.components.EmptyState
@@ -453,14 +454,35 @@ internal fun Root(
     LaunchedEffect(auth.isAuthenticated, library) {
         if (auth.isAuthenticated) library.refresh()
     }
-    // Changes wait in the library's queue until the server can be reached:
-    // retry every so often, and leave the saved copy once it answers again.
+    // Offline: ask the server every so often whether it's back. Changes
+    // wait in the library's queue meanwhile (and are retried when a send
+    // failed for a passing reason).
     LaunchedEffect(auth.isAuthenticated, library) {
         while (auth.isAuthenticated) {
-            delay(30_000)
+            delay(if (api.reachable) 30_000 else 15_000)
             when {
-                library.offline -> library.refresh()
+                !api.reachable -> api.ping()
                 library.pending.isNotEmpty() -> runCatching { library.sync() }
+            }
+        }
+    }
+    // Back online (any answer from the server): send what's waiting and
+    // swap saved copies for the server's.
+    LaunchedEffect(api.reachable, auth.isAuthenticated) {
+        if (api.reachable && auth.isAuthenticated) {
+            if (library.offline || library.pending.isNotEmpty()) library.refresh()
+            if (works.items == null && works.error != null) works.refresh()
+        }
+    }
+    // Screens that only work online explain themselves instead of failing.
+    remember(nav, api) {
+        nav.guard = { s ->
+            val why = needsConnection(s)
+            if (why != null && !api.reachable) {
+                scope.launch { snackbar.showSnackbar(why) }
+                false
+            } else {
+                true
             }
         }
     }
@@ -841,6 +863,13 @@ internal fun Root(
         ) { entry ->
             val s = entry.screen
             val pane = @Composable {
+                Column(Modifier.fillMaxSize()) {
+                OfflineStrip(
+                    visible = !api.reachable && auth.isAuthenticated,
+                    waiting = library.pending.size,
+                    onRetry = { scope.launch { api.ping() } },
+                )
+                Box(Modifier.weight(1f)) {
                 AnimatedContent(
                     targetState = s,
                     contentKey = { paneKey(it, entry.expanded) },
@@ -848,6 +877,8 @@ internal fun Root(
                     label = "pane",
                 ) { p ->
                     saved.SaveableStateProvider(paneKey(p, entry.expanded)) { screen(p, entry.expanded) }
+                }
+                }
                 }
             }
             // Upload is a destination of its own on the rail.
@@ -1031,13 +1062,8 @@ private fun DataDrivenBrowse(
             works = onDevice,
             onWorkClick = onWorkClick,
             onUploadClick = onUploadClick,
-            header = stackHeaders({
-                OfflineBanner(
-                    "Can’t reach the library. These books are on this device and open without it.",
-                    onRetry = { scope.launch { works.refresh() } },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-            }, header),
+            // The app's offline strip says why; the list is what's on the device.
+            header = header,
             onRefresh = { scope.launch { works.refresh() } },
             compact = compact,
             libraryWorkIds = libraryWorkIds,

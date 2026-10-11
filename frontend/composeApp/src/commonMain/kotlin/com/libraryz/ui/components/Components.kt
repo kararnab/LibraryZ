@@ -685,15 +685,39 @@ fun Banner(
     }
 }
 
-/** The server can't be reached and the screen shows what's on the device: [body] says what. */
+/**
+ * The strip across the top of the app while the server can't be reached:
+ * what still works, how many changes are waiting to be sent, and a retry.
+ */
 @Composable
-fun OfflineBanner(body: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Banner(
-        BannerTone.Plain,
-        Icons.Outlined.CloudOff,
-        title = "Offline",
-        body = body,
-        modifier = modifier,
-        action = { TextButton(onClick = onRetry) { Text("Try again") } },
-    )
+fun OfflineStrip(visible: Boolean, waiting: Int, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    val reduce = LocalReduceMotion.current
+    AnimatedVisibility(visible, modifier = modifier, enter = Motion.reveal(reduce), exit = Motion.conceal(reduce)) {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(Icons.Outlined.CloudOff, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    offlineMessage(waiting),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onRetry) { Text("Try again") }
+            }
+        }
+    }
+}
+
+/** "Offline. Books on this device still open; 2 changes will be sent when you're back." */
+fun offlineMessage(waiting: Int): String = buildString {
+    append("Offline. Books on this device still open")
+    when (waiting) {
+        0 -> append(".")
+        1 -> append("; 1 change will be sent when you’re back.")
+        else -> append("; $waiting changes will be sent when you’re back.")
+    }
 }

@@ -41,13 +41,20 @@ class Navigator(initial: Screen) {
     /** The whole stack, bottom first. */
     val entries: List<Screen> get() = stack
 
-    fun push(s: Screen) { stack.add(s) }
+    /**
+     * Asked before every [push] / [replace]; false keeps the app where it is
+     * (the guard says why, e.g. "Uploading needs a connection").
+     */
+    var guard: (Screen) -> Boolean = { true }
+
+    fun push(s: Screen) { if (guard(s)) stack.add(s) }
     fun pop(): Boolean {
         if (!canGoBack) return false
         stack.removeAt(stack.lastIndex)
         return true
     }
     fun replace(s: Screen) {
+        if (!guard(s)) return
         stack.clear()
         stack.add(s)
     }
@@ -55,3 +62,16 @@ class Navigator(initial: Screen) {
 
 @Composable
 fun rememberNavigator(initial: Screen): Navigator = remember { Navigator(initial) }
+
+/**
+ * Why [s] can't open offline, or null if it works offline. Those screens
+ * only make sense online: they send something, or show the server's live
+ * state.
+ */
+fun needsConnection(s: Screen): String? = when (s) {
+    is Screen.Upload -> "Uploading needs a connection to the library."
+    is Screen.EditWork -> "Suggesting an edit needs a connection to the library."
+    Screen.ContributionQueue -> "The review queue needs a connection to the library."
+    Screen.ForYou -> "For You needs a connection to the library."
+    else -> null
+}
