@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -101,9 +102,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("mail: %v", err)
 	}
+	var draining atomic.Bool
 	h, err := server.New(server.Deps{
 		DB:             dbConn,
 		Storage:        store,
+		Draining:       &draining,
 		MaxUploadBytes: cfg.MaxUploadBytes,
 		UploadQuota: catalog.UploadQuota{
 			Window:        cfg.UploadQuotaWindow,
@@ -159,7 +162,15 @@ func main() {
 	case err := <-serveErr:
 		log.Fatalf("serve: %v", err)
 	case <-ctx.Done():
-		log.Printf("shutdown signal received; draining (timeout %s)", cfg.ShutdownTimeout)
+		// Out of rotation first: /ready fails while we keep serving, so the
+		// LB stops routing here before the listener closes (a request sent
+		// to a closed listener isn't retried if it's a POST).
+		draining.Store(true)
+		if cfg.DrainDelay > 0 {
+			log.Printf("shutdown signal received; leaving rotation for %s", cfg.DrainDelay)
+			time.Sleep(cfg.DrainDelay)
+		}
+		log.Printf("draining in-flight requests (timeout %s)", cfg.ShutdownTimeout)
 		shutCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutCtx); err != nil {

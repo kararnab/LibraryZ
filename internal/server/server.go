@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -22,8 +23,12 @@ import (
 )
 
 type Deps struct {
-	DB             *gorm.DB
-	Storage        storage.Storage
+	DB      *gorm.DB
+	Storage storage.Storage
+	// Draining, once true, makes GET /ready answer 503 "draining" while
+	// every other route keeps working: the instance is on its way out (see
+	// config.DrainDelay). Nil means never.
+	Draining       *atomic.Bool
 	MaxUploadBytes int64
 	// UploadQuota is the per-account upload allowance; the zero value means
 	// none. See catalog.UploadQuota.
@@ -97,7 +102,7 @@ func New(d Deps) (http.Handler, error) {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", authH.HealthCheck).Methods(http.MethodGet)
-	r.HandleFunc("/ready", ready(d.DB, d.Storage)).Methods(http.MethodGet)
+	r.HandleFunc("/ready", ready(d.DB, d.Storage, d.Draining)).Methods(http.MethodGet)
 	r.HandleFunc("/auth/signup", authH.SignUp).Methods(http.MethodPost)
 	r.HandleFunc("/auth/login", authH.Login).Methods(http.MethodPost)
 	r.HandleFunc("/auth/refresh", authH.Refresh).Methods(http.MethodPost)

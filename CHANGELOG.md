@@ -12,6 +12,20 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+- **Two API instances behind Kong** in `docker compose up` (`libraryz-1`,
+  `libraryz-2`): Kong balances across them, ejects one that fails `/ready`
+  or stops answering, and retries a refused connection on the other; a
+  crashed instance restarts by itself. `scripts/rolling-deploy.sh` replaces
+  them one at a time without dropping requests.
+- `LIBRARYZ_DRAIN_DELAY`: after SIGTERM, keep serving with `/ready`
+  answering 503 `draining` this long, so a load balancer takes the instance
+  out before it stops accepting (compose: 15s; default 0).
+
+### Changed
+- The compose service `libraryz` is now `libraryz-1` and `libraryz-2`
+  (e.g. `docker compose logs libraryz-1`).
+
 ## [0.1.0] - 2026-10-11
 
 The first tagged release: the public-launch baseline. Everything from the

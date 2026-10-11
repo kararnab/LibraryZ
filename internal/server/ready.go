@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kararnab/libraryZ/internal/storage"
@@ -25,8 +26,8 @@ var readinessSentinelKey = strings.Repeat("0", 64)
 
 // ReadyResponse is the body of GET /ready.
 type ReadyResponse struct {
-	Status string            `json:"status"` // "ready" | "unavailable"
-	Checks map[string]string `json:"checks"` // dependency -> "ok" | "unavailable"
+	Status string            `json:"status"`           // "ready" | "unavailable" | "draining"
+	Checks map[string]string `json:"checks,omitempty"` // dependency -> "ok" | "unavailable"
 }
 
 // ready is the readiness probe: unlike /health (liveness — process is up),
@@ -37,8 +38,19 @@ type ReadyResponse struct {
 //
 // Failure details are logged, not returned — the endpoint is reachable
 // through the public edge.
-func ready(db *gorm.DB, store storage.Storage) http.HandlerFunc {
+//
+// Once draining is set (shutdown has begun), it answers 503 "draining"
+// without checking anything, so the LB takes the instance out of rotation
+// while it still serves what it's sent.
+func ready(db *gorm.DB, store storage.Storage, draining *atomic.Bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if draining != nil && draining.Load() {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(ReadyResponse{Status: "draining"})
+			return
+		}
 		checks := map[string]func(context.Context) error{
 			"database": func(ctx context.Context) error {
 				sqlDB, err := db.DB()

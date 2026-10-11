@@ -224,8 +224,15 @@ Worth knowing before you contribute:
 - **Kong is the front door** in `docker compose up`: per-IP rate limits on
   sign-in, sign-up, password reset and uploads (see
   [deploy/kong/kong.yml](deploy/kong/kong.yml)). The app adds per-account
-  login throttling and upload quotas on top. The API container itself
-  isn't published to the host.
+  login throttling and upload quotas on top. The API containers themselves
+  aren't published to the host.
+- **Two API instances** sit behind Kong (`libraryz-1`, `libraryz-2`). Every
+  instance is stateless, so either can serve any request; Kong health-checks
+  them on `/ready`, retries a refused connection on the other one, and a
+  crashed instance restarts by itself. `scripts/rolling-deploy.sh` replaces
+  them one at a time with no dropped requests: an instance leaving rotation
+  fails `/ready` first (`LIBRARYZ_DRAIN_DELAY`) and finishes what it's
+  serving.
 
 The deeper walkthrough (data model, storage interface, recommender
 pipeline, per-platform code) is in [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -262,6 +269,7 @@ All via environment variables. Defaults work for `docker compose up`.
 | `LIBRARYZ_PDF_SANITIZE_MEMORY_MB`         | `1024` — memory budget of each out-of-process PDF sanitizer        |
 | `LIBRARYZ_PDF_SANITIZE_TIMEOUT`           | `2m`                                                               |
 | `LIBRARYZ_PDF_SANITIZE_CONCURRENCY`       | `2` — worst case is concurrency × memory budget                    |
+| `LIBRARYZ_DRAIN_DELAY`                    | `0` (compose: `15s`) — after SIGTERM, keep serving with `/ready` failing this long so the load balancer drains the instance first |
 | `LIBRARYZ_REC_RETRAIN_INTERVAL`           | `6h`                                                               |
 | `LIBRARYZ_REC_FACTORS`                    | `32`                                                               |
 | `LIBRARYZ_REC_ALPHA`                      | `40`                                                               |
