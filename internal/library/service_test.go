@@ -228,13 +228,13 @@ func TestDeleteAndDeleteMissing(t *testing.T) {
 	wid := seedWork(t, db, "A", "")
 	mustUpsert(t, svc, 1, wid, library.UpsertRequest{Status: strptr("want")})
 
-	if err := svc.Delete(context.Background(), 1, wid); err != nil {
+	if err := svc.Delete(context.Background(), 1, wid, ""); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if _, err := svc.Get(context.Background(), 1, wid); !errors.Is(err, library.ErrNotFound) {
 		t.Fatalf("entry still present after delete: %v", err)
 	}
-	if err := svc.Delete(context.Background(), 1, wid); !errors.Is(err, library.ErrNotFound) {
+	if err := svc.Delete(context.Background(), 1, wid, ""); !errors.Is(err, library.ErrNotFound) {
 		t.Fatalf("delete-missing want ErrNotFound, got %v", err)
 	}
 }

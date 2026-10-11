@@ -20,7 +20,7 @@ var liveModels = []any{
 	&auth.Session{}, &auth.SessionRotation{}, &auth.OneTimeToken{}, &auth.AccountEmail{},
 	&catalog.Work{}, &catalog.Edition{}, &catalog.Tag{},
 	&contribution.Contribution{},
-	&library.UserBook{},
+	&library.UserBook{}, &library.Removal{},
 	&recommendation.WorkFactors{}, &recommendation.UserFactors{},
 	&recommendation.WorkNeighbor{}, &recommendation.Dismissal{},
 }

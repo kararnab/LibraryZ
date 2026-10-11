@@ -146,6 +146,7 @@ import com.libraryz.ui.screens.UploadSheet
 import com.libraryz.ui.screens.UploadSubmission
 import com.libraryz.ui.screens.WorkDetailScreen
 import com.libraryz.ui.screens.inferFormatFromName
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import com.libraryz.data.api.RemovalRequest
@@ -382,6 +383,7 @@ internal fun Root(
     // them (and the saved library's works) without the server.
     val onDevice = savedWorks(books.books) { id -> library.entryFor(id)?.work }
     remember(works, library, books) {
+        library.workLookup = { id -> works.find(id) }
         works.localWorks = {
             savedWorks(books.books) { id -> library.entryFor(id)?.work } + library.items.orEmpty().mapNotNull { it.work }
         }
@@ -451,6 +453,20 @@ internal fun Root(
     LaunchedEffect(auth.isAuthenticated, library) {
         if (auth.isAuthenticated) library.refresh()
     }
+    // Changes wait in the library's queue until the server can be reached:
+    // retry every so often, and leave the saved copy once it answers again.
+    LaunchedEffect(auth.isAuthenticated, library) {
+        while (auth.isAuthenticated) {
+            delay(30_000)
+            when {
+                library.offline -> library.refresh()
+                library.pending.isNotEmpty() -> runCatching { library.sync() }
+            }
+        }
+    }
+    // The queue is sent only for the user who made it.
+    val userId = auth.user?.id
+    LaunchedEffect(userId, library) { userId?.let { library.signedInAs(it) } }
 
     // System back (Android, predictive back): pop the stack; from another
     // top-level tab, go home to Browse first; only then leave the app.
@@ -676,6 +692,7 @@ internal fun Root(
                 onAuthenticated = { session ->
                     expiredNotice = false
                     passwordChanged = false
+                    library.signingIn()         // hold queued changes until we know who this is
                     auth.signIn(session)        // suspends until token persisted
                     works.refresh()             // pull initial list
                     nav.replace(Screen.Browse)
@@ -684,6 +701,8 @@ internal fun Root(
 
             s is Screen.Preview -> {
                 val entry = library.entryFor(s.workId)
+                // Opened once per book: later progress (ours) mustn't re-offer.
+                val (resumeAt, elsewhere) = remember(s.editionId) { library.resumePoint(s.workId) }
                 ReaderScreen(
                     api = api,
                     editionId = s.editionId,
@@ -691,7 +710,8 @@ internal fun Root(
                     format = s.format,
                     title = s.title,
                     authors = s.authors,
-                    resumeFrom = entry,
+                    resumeFrom = resumeAt,
+                    elsewhere = elsewhere,
                     finished = entry?.status == LibraryStatus.Read,
                     rating = entry?.rating,
                     prefs = readerPrefs,

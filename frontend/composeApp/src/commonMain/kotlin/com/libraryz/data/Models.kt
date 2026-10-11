@@ -96,6 +96,15 @@ data class UserBook(
     val createdAt: String? = null,
     val updatedAt: String? = null,
     val work: Work? = null,
+    // When each group of fields last changed (hybrid-logical-clock stamps,
+    // see `Hlc`); the server keeps the newest per group.
+    val statusStamp: String? = null,
+    val progressStamp: String? = null,
+    val ratingStamp: String? = null,
+    val shelfStamp: String? = null,
+    val notesStamp: String? = null,
+    /** The other text when the notes were changed on two devices at once. */
+    val notesOther: String? = null,
 )
 
 // The three reading-status values the backend's enum accepts.

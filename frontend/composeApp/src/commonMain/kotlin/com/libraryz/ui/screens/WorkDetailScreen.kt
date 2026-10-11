@@ -24,11 +24,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import com.libraryz.ui.components.Banner
+import com.libraryz.ui.components.BannerTone
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SyncProblem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -576,6 +580,17 @@ private fun LibraryCard(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             val note = entry?.notes?.takeIf { it.isNotBlank() }
+            val other = entry?.notesOther?.takeIf { it.isNotBlank() }
+            if (other != null && !editingNote) {
+                NotesConflict(
+                    other = other,
+                    onKeepThis = { onUpsert(UpsertLibraryRequest(resolveNotes = true)) },
+                    onUseOther = { onUpsert(UpsertLibraryRequest(notes = other, resolveNotes = true)) },
+                    onKeepBoth = {
+                        onUpsert(UpsertLibraryRequest(notes = listOfNotNull(note, other).joinToString("\n\n"), resolveNotes = true))
+                    },
+                )
+            }
             when {
                 editingNote -> NoteEditor(
                     initial = note.orEmpty(),
@@ -649,6 +664,28 @@ private fun NoteEditor(initial: String, onCancel: () -> Unit, onSave: (String) -
             TextButton(onClick = onCancel) { Text("Cancel") }
             Spacer(Modifier.width(8.dp))
             FilledTonalButton(onClick = { onSave(text.trim()) }) { Text("Save note") }
+        }
+    }
+}
+
+/**
+ * The notes were changed on another device while this one was offline (or
+ * the other way round): the newer text is shown as the note, [other] is the
+ * one that lost. The reader chooses; nothing is dropped until then.
+ */
+@Composable
+private fun NotesConflict(other: String, onKeepThis: () -> Unit, onUseOther: () -> Unit, onKeepBoth: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Banner(
+            BannerTone.Info,
+            Icons.Rounded.SyncProblem,
+            title = "Notes were also changed on another device",
+            body = "The other version: “$other”",
+        )
+        FlowRow(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = onKeepThis) { Text("Keep this") }
+            TextButton(onClick = onUseOther) { Text("Use other") }
+            TextButton(onClick = onKeepBoth) { Text("Keep both") }
         }
     }
 }

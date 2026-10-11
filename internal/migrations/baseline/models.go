@@ -139,6 +139,21 @@ type UserBook struct {
 	FinishedAt      *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	// Offline merge (PLAN.md 8.3): a hybrid-logical-clock stamp per field group.
+	StatusStamp   string `gorm:"size:64"`
+	ProgressStamp string `gorm:"size:64"`
+	RatingStamp   string `gorm:"size:64"`
+	ShelfStamp    string `gorm:"size:64"`
+	NotesStamp    string `gorm:"size:64"`
+	NotesOther    string
+}
+
+// LibraryRemoval remembers when a user took a work out of their library, so
+// an older change made offline can't put it back.
+type LibraryRemoval struct {
+	UserID uint      `gorm:"primaryKey"`
+	WorkID uuid.UUID `gorm:"type:uuid;primaryKey"`
+	Stamp  string    `gorm:"size:64;not null"`
 }
 
 type WorkFactors struct {
@@ -180,7 +195,7 @@ func All() []any {
 		&User{}, &UserRole{}, &Identity{}, &PasswordCredential{}, &Session{}, &SessionRotation{}, &OneTimeToken{}, &AccountEmail{},
 		&Work{}, &Edition{}, &Tag{},
 		&Contribution{},
-		&UserBook{},
+		&UserBook{}, &LibraryRemoval{},
 		&WorkFactors{}, &UserFactors{}, &WorkNeighbor{}, &Dismissal{},
 	}
 }

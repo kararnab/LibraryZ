@@ -72,7 +72,11 @@ func (h *Handler) Upsert(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrWorkNotFound):
 		http.Error(w, "work not found", http.StatusNotFound)
 		return
-	case errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrInvalidRating), errors.Is(err, ErrInvalidProgress):
+	case errors.Is(err, ErrNotFound):
+		// Removed after this change was made (on another device).
+		http.Error(w, "removed from your library", http.StatusNotFound)
+		return
+	case errors.Is(err, ErrInvalidStatus), errors.Is(err, ErrInvalidRating), errors.Is(err, ErrInvalidProgress), errors.Is(err, ErrInvalidStamp):
 		// These are sentinel validation errors with safe, user-facing text.
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -88,8 +92,11 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := h.service.Delete(r.Context(), userID, workID)
+	err := h.service.Delete(r.Context(), userID, workID, r.URL.Query().Get("stamp"))
 	switch {
+	case errors.Is(err, ErrInvalidStamp):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	case errors.Is(err, ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 		return

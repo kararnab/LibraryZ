@@ -105,6 +105,22 @@ data class UpsertLibraryRequest(
     val progressPercent: Int? = null,
     val rating: Int? = null,
     val notes: String? = null,
+    /** When each group changed; [LibraryState] fills these in. */
+    val stamps: LibraryStamps? = null,
+    /** The notes stamp the edit started from (conflicts keep both texts). */
+    val notesBase: String? = null,
+    /** Clears [UserBook.notesOther]: the reader chose. */
+    val resolveNotes: Boolean? = null,
+)
+
+/** Per-group stamps of an [UpsertLibraryRequest]. */
+@Serializable
+data class LibraryStamps(
+    val status: String? = null,
+    val progress: String? = null,
+    val rating: String? = null,
+    val shelf: String? = null,
+    val notes: String? = null,
 )
 
 /** [token] is the short-lived access token; [refreshToken] renews it. */
@@ -567,10 +583,15 @@ class ApiClient(
         return resp.body()
     }
 
-    /** Removes the work from the caller's library. */
-    suspend fun removeFromLibrary(workId: String) {
-        val resp = client.delete("$baseUrl/me/library/$workId")
-        if (!resp.status.isSuccess()) {
+    /**
+     * Removes the work from the caller's library, as of [stamp] (null = now).
+     * Not there any more counts as done.
+     */
+    suspend fun removeFromLibrary(workId: String, stamp: String? = null) {
+        val resp = client.delete("$baseUrl/me/library/$workId") {
+            if (stamp != null) parameter("stamp", stamp)
+        }
+        if (!resp.status.isSuccess() && resp.status != HttpStatusCode.NotFound) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "remove from library failed")
         }
     }

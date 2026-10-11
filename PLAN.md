@@ -1015,7 +1015,7 @@ so Book detail opens offline. Still to do: the last Browse / For You pages. The 
 says "A newer edition is available" when the work gains one; it never
 switches editions by itself (page positions differ).
 
-**Slice 8.3 — edits offline, merged per field.** Writes go through a saved
+**Slice 8.3 — edits offline, merged per field (DONE 2026-10-11, in the 8.1 PR).** Writes go through a saved
 queue (online it's just empty: one code path). Merging is a per-field
 **last-writer-wins map** (a state-based CRDT: merge is commutative and
 idempotent, so retries and out-of-order replay are safe). Not OT and not a
@@ -1035,6 +1035,20 @@ Use other / Keep both". Opening a book whose progress on another device is
 newer asks "You're on p. 212 on another device — go there?" rather than
 jumping. The queue belongs to its user and is sent only while that user is
 signed in.
+As built: backend `internal/library/stamp.go` (format
+`<ms 13>.<counter 4>.<device>`, string order = clock order; stamps > 5 min
+ahead are treated as now), per-group `*_stamp` columns + `notes_other` on
+`user_books`, `library_removals` (the entry row is still hard-deleted, so the
+recommender's raw `user_books` queries need no change), `Upsert`/`Delete`
+in a transaction with `FOR UPDATE` on Postgres (`merge_postgres_test.go`
+shows changes lost without it). App: `data/Hlc.kt`, `data/LibraryMerge.kt`
+(`stampRequest`, `applyLocally` mirroring the server, `coalesce`, `enqueue`),
+`LibraryState` queue (saved with the library copy; `sync` stops at
+no-connection / 401 / 408 / 429 / 5xx and drops a refused change; retried
+every 30 s and on refresh; `signingIn` / `signedInAs` guard the owner),
+Book detail's notes choice, and the reader's "You're on p. N on another
+device — Go there" (`LibraryState.resumePoint`, this device's own last
+spot kept per work).
 
 **Slice 8.4 — offline in the UI.** One connectivity signal from
 `isUnreachable`; a quiet "Offline — showing saved books" banner; Upload,

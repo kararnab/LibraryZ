@@ -121,7 +121,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (209 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (216 each;
 # desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -225,8 +225,8 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 153 backend + 187 frontend
-  tests** (+1 with `-tags=eval`, +17 with `-tags=postgres`, which CI runs
+  `FakeTokenStore`. **As of 2026-10-11: 159 backend + 216 frontend
+  tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
 - **Takedowns are soft deletes.** `Work`/`Edition` embed `catalog.Removal`
@@ -446,8 +446,16 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   check runs off the open path. Android + Desktop only (`createBookFiles` is
   null on Wasm/iOS). `LibraryState` keeps a saved copy of the library
   (`createLibraryStore`, cleared at sign-out) and shows it when the server is
-  unreachable; offline Browse lists the books on the device. Planned next:
-  per-field LWW writes with hybrid logical clocks (8.3), offline UI (8.4).
+  unreachable; offline Browse lists the books on the device. **Library
+  writes are stamped and queued (8.3):** every `LibraryState.upsert` /
+  `remove` applies on the device at once, waits in a saved queue, and is
+  sent by `sync`; the server merges per field group (status / progress /
+  rating / shelf / notes), newest hybrid-logical-clock stamp wins
+  (`internal/library/stamp.go`, `data/Hlc.kt`). Keep `applyLocally`
+  (LibraryMerge.kt) in step with `mergeInto` (service.go): the app shows
+  what the server will store. Removals are remembered in
+  `library_removals`, not by soft-deleting `user_books`. Planned next:
+  offline UI (8.4).
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

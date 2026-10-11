@@ -6,7 +6,17 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.libraryz.data.LibraryStatus
+import com.libraryz.data.Hlc
+import com.libraryz.data.PendingWrite
 import com.libraryz.data.UserBook
+import com.libraryz.data.Work
+import com.libraryz.data.applyLocally
+import com.libraryz.data.enqueue
+import com.libraryz.data.stampRequest
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -26,12 +36,20 @@ import kotlinx.serialization.json.Json
  * server at [server]). When the server can't be reached, [refresh] shows
  * that copy instead of an error and sets [offline]; resume positions and
  * "Continue reading" come from it too. [forget] drops it at sign-out.
+ *
+ * Changes ([upsert], [remove]) apply on the device at once and wait in a
+ * saved queue until [sync] delivers them, online or not, so one code path
+ * serves both. Each is stamped by an [Hlc] when made and merges per field
+ * group on the server (see LibraryMerge.kt). The queue belongs to the user
+ * who made it: [signingIn] holds it, and [signedInAs] sends it only if the
+ * same user signed in, else drops it.
  */
 @Stable
 class LibraryState(
     private val api: ApiClient,
     storeFactory: () -> TokenStore = { NoStore },
     private val server: String = "",
+    private val now: () -> Instant = { Clock.System.now() },
 ) {
     // Opened on first use, so building the app doesn't touch platform storage.
     private val store: TokenStore by lazy { runCatching(storeFactory).getOrElse { NoStore } }
@@ -56,64 +74,159 @@ class LibraryState(
     // "looked up, not in library" — distinct from "not yet looked up" (absent).
     private val cache = mutableStateMapOf<String, UserBook?>()
 
+    /** Changes made on this device that the server hasn't confirmed yet. */
+    var pending: List<PendingWrite> by mutableStateOf(emptyList())
+        private set
+
+    /** Finds a work for an entry made offline (the list shows its title). */
+    var workLookup: (String) -> Work? = { null }
+
+    private var owner: Long? = null
+    private var device: String? = null
+    // Where this device last was in each book (work id → entry's progress fields).
+    private var mine: Map<String, Position> = emptyMap()
+    private var clock: Hlc? = null
+    private var restored = false
+    private var paused = false
+    private var sending = false
+    private val lock = Mutex()
+    private val sendLock = Mutex()
+
     suspend fun refresh(status: String? = statusFilter) {
         error = null
         statusFilter = status
+        restore()
+        // Send what's waiting first, so the list includes it.
+        runCatching { sync() }
         try {
             val loaded = api.listLibrary(status = status)
+            loaded.firstOrNull()?.let { owner = owner ?: it.userId }
             if (status == null) {
                 // The full list: anything cached but absent was removed elsewhere.
                 cache.keys.filter { k -> loaded.none { it.workId == k } }.forEach { cache[it] = null }
             }
-            items = loaded
-            loaded.forEach { cache[it.workId] = it }
+            loaded.forEach {
+                observe(it)
+                cache[it.workId] = withPending(it.workId, it)
+            }
+            items = loaded.map { cache[it.workId] ?: it } + pendingNew(status, loaded)
             offline = false
             save()
         } catch (e: Throwable) {
-            val saved = if (isUnreachable(e)) load() else null
+            val saved = if (isUnreachable(e)) load()?.entries else null
             if (saved == null) {
                 error = api.describe(e)
             } else {
                 saved.forEach { if (cache[it.workId] == null) cache[it.workId] = it }
-                items = saved.filter { status == null || it.status == status }
-                    .sortedByDescending { it.updatedAt.orEmpty() }
+                items = cache.values.filterNotNull().filter { status == null || it.status == status }.newestFirst()
                 offline = true
             }
         }
     }
 
-    /** Drops the saved copy and what's in memory (sign-out). */
+    // Entries created on this device and not sent yet, which the server's list lacks.
+    private fun pendingNew(status: String?, loaded: List<UserBook>): List<UserBook> =
+        pending.map { it.workId }.distinct()
+            .filter { id -> loaded.none { it.workId == id } }
+            .mapNotNull { cache[it] }
+            .filter { status == null || it.status == status }
+
+    /** Drops the saved copy, the queue and what's in memory (sign-out). */
     suspend fun forget() {
-        cache.clear()
-        items = null
-        offline = false
-        runCatching { store.clear() }
+        lock.withLock {
+            cache.clear()
+            items = null
+            offline = false
+            pending = emptyList()
+            mine = emptyMap()
+            owner = null
+            restored = true
+            runCatching { store.clear() }
+        }
+    }
+
+    /** Someone is signing in: hold the queue until [signedInAs] says who. */
+    fun signingIn() {
+        paused = true
+    }
+
+    /**
+     * The signed-in user is [userId]. A queue someone else made is dropped,
+     * with the saved library; otherwise sending resumes.
+     */
+    suspend fun signedInAs(userId: Long) {
+        restore()
+        if (owner != null && owner != userId) forget()
+        owner = userId
+        paused = false
+        runCatching { sync() }
     }
 
     private suspend fun save() {
         val entries = cache.values.filterNotNull()
-        runCatching { store.save(json.encodeToString(Snapshot.serializer(), Snapshot(server, entries))) }
+        val snapshot = Snapshot(server, entries, pending, device, owner, mine)
+        runCatching { store.save(json.encodeToString(Snapshot.serializer(), snapshot)) }
     }
 
-    private suspend fun load(): List<UserBook>? = runCatching {
+    private suspend fun load(): Snapshot? = runCatching {
         store.load()?.let { json.decodeFromString(Snapshot.serializer(), it) }
-    }.getOrNull()?.takeIf { it.server == server }?.entries
+    }.getOrNull()?.takeIf { it.server == server }
+
+    // Reads the queue, device id and owner once per run.
+    private suspend fun restore() {
+        if (restored) return
+        restored = true
+        val snapshot = load()
+        if (snapshot != null) {
+            pending = snapshot.pending
+            owner = snapshot.owner
+            device = snapshot.device
+            mine = snapshot.mine
+            snapshot.entries.forEach { if (!cache.containsKey(it.workId)) cache[it.workId] = it }
+        }
+    }
+
+    private fun clock(): Hlc = clock ?: Hlc(device ?: Hlc.newDevice().also { device = it }) { now().toEpochMilliseconds() }
+        .also { c -> clock = c; cache.values.filterNotNull().forEach { observe(it, c) } }
+
+    private fun observe(ub: UserBook, c: Hlc? = clock) {
+        c ?: return
+        listOf(ub.statusStamp, ub.progressStamp, ub.ratingStamp, ub.shelfStamp, ub.notesStamp).forEach(c::observe)
+    }
+
+    /** [server] with this device's unsent changes to [workId] on top. */
+    private fun withPending(workId: String, server: UserBook?): UserBook? =
+        pending.filter { it.workId == workId }.fold(server) { ub, w ->
+            if (w.upsert != null) applyLocally(ub, workId, w.upsert, now().toString(), workLookup(workId), owner ?: 0) else null
+        }
 
     /** Cached entry for a work, or null if absent / not-in-library. */
     fun entryFor(workId: String): UserBook? = cache[workId]
 
     /**
+     * Where to open [workId] and, when another device has read on since this
+     * one last did, that device's spot to offer: (resume from, elsewhere).
+     */
+    fun resumePoint(workId: String): Pair<UserBook?, UserBook?> {
+        val entry = cache[workId] ?: return null to null
+        val own = mine[workId]
+        val fromElsewhere = own != null && Hlc.deviceOf(entry.progressStamp).let { it != null && it != device } &&
+            (own.currentPage != entry.currentPage || own.progressPercent != entry.progressPercent)
+        if (!fromElsewhere) return entry to null
+        return entry.copy(currentPage = own!!.currentPage, totalPages = own.totalPages, progressPercent = own.progressPercent) to entry
+    }
+
+    /**
      * The book to offer a one-tap resume for: the most recently touched
      * "Reading" entry with some progress. Read from the cache, so it holds
      * regardless of which status filter the My Library list is showing.
-     * `updated_at` is RFC 3339 in one server-wide offset, so string order
-     * is time order (to the second, which is plenty here).
      */
     val continueReading: UserBook?
         get() = cache.values
             .filterNotNull()
             .filter { it.status == LibraryStatus.Reading && it.progressPercent > 0 }
-            .maxByOrNull { it.updatedAt.orEmpty() }
+            .newestFirst()
+            .firstOrNull()
 
     /** Works known to be in the library (bookmarks in the catalog list). */
     val workIds: Set<String>
@@ -123,28 +236,110 @@ class LibraryState(
     fun isLoaded(workId: String): Boolean = cache.containsKey(workId)
 
     suspend fun loadEntry(workId: String) {
+        restore()
         try {
-            cache[workId] = api.getLibraryEntry(workId)
+            val ub = api.getLibraryEntry(workId)
+            ub?.let { observe(it) }
+            cache[workId] = withPending(workId, ub)
         } catch (e: Throwable) {
             // Offline, keep what we know (the saved copy) rather than "not in library".
             if (!isUnreachable(e) || !cache.containsKey(workId)) cache[workId] = null
         }
     }
 
+    /**
+     * Changes [workId]'s entry: at once on the device, then on the server
+     * when it can be reached. Throws only if the server refused the change
+     * (it's then dropped); offline it just waits.
+     */
     suspend fun upsert(workId: String, req: UpsertLibraryRequest): UserBook {
-        val updated = api.upsertLibraryEntry(workId, req)
-        cache[workId] = updated
-        mergeIntoList(updated)
-        save()
-        return updated
+        restore()
+        val updated = lock.withLock {
+            val stamped = stampRequest(req, cache[workId], clock())
+            if (req.currentPage != null || req.progressPercent != null) {
+                mine = mine + (workId to Position(req.currentPage ?: 0, req.totalPages ?: 0, req.progressPercent ?: 0))
+            }
+            val ub = applyLocally(cache[workId], workId, stamped, now().toString(), workLookup(workId), owner ?: 0)
+            cache[workId] = ub
+            mergeIntoList(ub)
+            queue(PendingWrite(workId, upsert = stamped))
+            save()
+            ub
+        }
+        sync()
+        return cache[workId] ?: updated
     }
 
+    /** Takes [workId] out of the library: at once on the device, then on the server. */
     suspend fun remove(workId: String) {
-        api.removeFromLibrary(workId)
-        cache[workId] = null
-        items = items?.filterNot { it.workId == workId }
-        save()
+        restore()
+        lock.withLock {
+            val at = clock().next()
+            cache[workId] = null
+            items = items?.filterNot { it.workId == workId }
+            queue(PendingWrite(workId, removedAt = at))
+            save()
+        }
+        sync()
     }
+
+    private fun queue(w: PendingWrite) {
+        // The change being sent can't absorb a newer one: it'd be marked done.
+        pending = if (sending && pending.firstOrNull()?.workId == w.workId && pending.count { it.workId == w.workId } == 1) {
+            pending + w
+        } else {
+            enqueue(pending, w)
+        }
+    }
+
+    /**
+     * Sends the queued changes in order. Stops at the first that can't get
+     * through for now (no connection, signed out, server trouble), keeping
+     * it and the rest. A change the server refuses is dropped, the entry
+     * reloaded, and the refusal thrown.
+     */
+    suspend fun sync() {
+        restore()
+        if (paused) return
+        sendLock.withLock {
+            while (true) {
+                val w = lock.withLock { pending.firstOrNull()?.also { sending = true } } ?: return
+                val result = try {
+                    if (w.upsert != null) api.upsertLibraryEntry(w.workId, w.upsert) else {
+                        api.removeFromLibrary(w.workId, w.removedAt)
+                        null
+                    }
+                } catch (e: Throwable) {
+                    lock.withLock { sending = false }
+                    if (isTransient(e)) return
+                    lock.withLock {
+                        pending = pending.drop(1)
+                        save()
+                    }
+                    loadEntry(w.workId)
+                    mergeLoaded(w.workId)
+                    throw e
+                }
+                lock.withLock {
+                    sending = false
+                    pending = pending.drop(1)
+                    result?.let { observe(it) }
+                    val ub = withPending(w.workId, result)
+                    cache[w.workId] = ub
+                    if (ub != null) mergeIntoList(ub) else items = items?.filterNot { it.workId == w.workId }
+                    save()
+                }
+            }
+        }
+    }
+
+    private fun mergeLoaded(workId: String) {
+        val ub = cache[workId]
+        if (ub != null) mergeIntoList(ub) else items = items?.filterNot { it.workId == workId }
+    }
+
+    private fun isTransient(e: Throwable): Boolean =
+        isUnreachable(e) || (e is ApiException && (e.status == 401 || e.status == 408 || e.status == 429 || e.status >= 500))
 
     private fun mergeIntoList(entry: UserBook) {
         val current = items ?: return
@@ -164,8 +359,22 @@ class LibraryState(
     }
 }
 
+/** Most recently updated first. Times may carry different offsets (server, device), so they're compared as instants. */
+private fun List<UserBook>.newestFirst(): List<UserBook> =
+    sortedByDescending { ub -> ub.updatedAt?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: Instant.DISTANT_PAST }
+
 @Serializable
-private class Snapshot(val server: String, val entries: List<UserBook>)
+private class Position(val currentPage: Int, val totalPages: Int, val progressPercent: Int)
+
+@Serializable
+private class Snapshot(
+    val server: String,
+    val entries: List<UserBook>,
+    val pending: List<PendingWrite> = emptyList(),
+    val device: String? = null,
+    val owner: Long? = null,
+    val mine: Map<String, Position> = emptyMap(),
+)
 
 private val json = Json { ignoreUnknownKeys = true }
 
