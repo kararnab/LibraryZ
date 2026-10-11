@@ -978,6 +978,129 @@ is a new numbered migration (#16).
 change to the storage backend or to Kong's per-IP rate-limit decision (item 93;
 uploads were since moved to a per-account quota, see the 2026-10-10 note there).
 
+### Phase 7.6 — app polish (DONE 2026-10-10 – 2026-10-11)
+
+What the app gained around v0.1.0. These notes were CLAUDE.md's
+"Conventions" until 2026-10-11; the rules an agent needs while editing
+stayed there, and the history moved here.
+
+**Status as of 2026-10-11.** Frontend ↔ backend wiring (Android +
+Desktop) has been functionally complete and under test since 2026-05-26:
+auth (sign-up / login + persistent JWT), all read endpoints, create work,
+multipart edition upload, edition download (saved to `~/Downloads` on
+Desktop, `getExternalFilesDir(DOWNLOADS)/` on Android), PDF preview via
+PDFBox / Android `PdfRenderer`. Phase 2's crowdsourcing UI (EditWorkSheet,
+ContributionQueueScreen, Browse search with match highlighting), Phase 3's
+personal library (`/me/library`, WorkDetail shelf controls, My Library) and
+Phase 4/5 discovery (`GET /me/recommendations`, dismiss / undo, the "For
+You" screen) are in. Counts that day: 169 backend + 230 frontend tests (+1
+with `-tags=eval`, +19 with `-tags=postgres`).
+
+**Password reset + email verification (2026-10-10)** run on iam's
+Recovery: `internal/auth/recovery.go` (handlers), `tokens.go`
+(`one_time_tokens`, an iam `onetime.Store`), `emails.go` + `templates/`
+(branded text + HTML, link **and** code). Mail goes through
+github.com/kararnab/onemailer (shared with CodeAtlas). The per-account cap
+is 2 min cooldown, 5/day (`account_emails`, row-locked on Postgres).
+Compose sends everything to Mailpit. The seed marks demo users verified. Of
+the "Future" board, password reset and email verification are built;
+notifications aren't.
+
+**App links (2026-10-10).** Platforms hand links to `DeepLinkInbox`
+(commonMain; `Root` collects it, so links work while the app is open).
+Android: `libraryz://` intent filter + `singleTask` + `onNewIntent`;
+verified https App Links only when built with `-Plibraryz.appLinkUrl=…` (a
+generated manifest in `androidApp/build.gradle.kts`), with
+`assetlinks.json` generated into the web bundle from
+`-Plibraryz.androidCertSha256=…`. Desktop: `DesktopLinks.kt`, single
+instance (file lock + loopback socket with an owner-only key file in
+`~/.libraryz`; `./gradlew run` uses a separate `instance-dev`), macOS
+`CFBundleURLTypes` + `setOpenURIHandler`, Linux/Windows register
+`libraryz://` on first launch of an installed (jpackage) app. Web: "Open in
+the LibraryZ app" on the reset page (`openInApp`). "Have a code?" still
+works everywhere.
+
+**Visual system (2026-10-10): "LibraryZ Visual Refresh" from Claude
+Design** (https://claude.ai/artifact/SvHwbXULQMdr7fr2E8XiEZ). M3 light/dark
+schemes (seed #2E5E4E), Literata (titles, reading text) + Figtree (UI)
+bundled as variable TTFs, generated covers (works have no cover images),
+reading themes independent of the app theme. Sign-in, Upload, Suggest edit
+and the Review queue follow the same canvas (second pass). Upload only
+offers what `sanitize.Validate` accepts (PDF/EPUB/TXT, 500 MB), and its
+"safety check" step is the wait between the last byte sent and the
+response.
+
+**Multiple authors.** The stored `;` string is shown per context: lists and
+the reader bar `authorsShort` (≤ 3 surnames, then "Aho et al."), Book
+detail "by A, B and C" with each name searching Browse (`authorsFull`;
+phone: one button → Authors sheet), covers `coverAuthors{M,L,XL}`; Upload
+and Suggest edit enter them as chips (`AuthorChipsField`).
+
+**Two-page reading.** `PageLayout` Auto/Single/Two + "Pair from page 1",
+saved per edition on the device (`BookLayouts`, `createReaderLayoutStore`).
+Auto = ≥ 840dp and ≥ 1.2× wider than tall, and for text also two 26 em
+columns at the current size. `Spreads` pairs like a printed book, landscape
+pages alone (`PagedReader.landscapePages`), end card in the empty
+right-hand slot. The text reader paginates only in two pages
+(`TextSpreadView`); single page still scrolls.
+
+**EPUB reader (2026-10-11)**, pure commonMain with no per-platform code:
+`data/Zip.kt` (zip + a puff-style DEFLATE decoder, checked against JDK zlib
+by `InflateJvmTest`), `data/Markup.kt` (lenient XHTML tokenizer), and
+`data/Epub.kt` / `EpubToc.kt` / `EpubBuilder.kt`, which flatten the spine
+into one `AnnotatedString` (headings, emphasis, lists, pictures, tables, a
+subset of the book's CSS) with chapters from the nav doc, else the NCX,
+else h1–h3, plus any spine document opening with a chapter heading the
+contents left out (`unlistedChapters`). So EPUB is a `TextReader` like TXT,
+with the same themes, spreads and per-mille position, and the Contents
+sheet (`TextPager.goTo` / `offset`) works for both.
+- *Pictures:* each `<img>` (and `<svg><image>`, e.g. covers) is one
+  `IMAGE_CHAR`; `BookImage` keeps the size read from the header
+  (`data/ImageSize.kt`: PNG/JPEG/GIF/WebP/BMP) and re-reads the bytes when
+  drawn. `ui/components/BookImages.kt` sizes placeholders per column (block:
+  full column width, picture centered, capped to the page / 85% of the
+  screen; ≤ 40 px high: inline, 1 em) and decodes only while on screen.
+- *Book CSS:* `data/Css.kt` parses linked sheets, `<style>` and `style=""`
+  (tag/.class/#id/*, descendant and child; pseudo, attribute, sibling and
+  `@media` are dropped). `BookBuilder` honours alignment (center/right;
+  left/justify stay the reader's), text-indent, margin/padding-left
+  (`TextIndent`), explicit 0 margins (no blank line), `display:
+  none|block`, colour, background, weight, style, decoration, small caps.
+  Colours are adapted per reading theme at render (`themed`: greys → ink,
+  hues kept at ≥ 4:1, highlights toned so ink reads at 4.5:1).
+- *Tables* (`BookTable`): `BookText.kt` lays out columns browser-style and
+  rows as a placeholder each.
+- *Second pass:* absolute font sizes (`Open.scale`, clamped 0.6–2.5,
+  `html`/`body` sizes ignored); block background/border → `BookBox`, drawn
+  by `Modifier.bookBoxes` behind the lines (text padded 0.6 em in);
+  `@font-face` fonts load per platform (`data/Fonts.kt` `loadFont`: Skia
+  from memory, Android from a cache file), IDPF/Adobe obfuscation undone
+  (`deobfuscate`, own `sha1`), only sfnt (TTF/OTF) accepted, DRM'd fonts
+  skipped; "Book's fonts" switch (`ReaderPrefs.bookFonts`). SVG pictures:
+  `svgSize` + `rasterizeSvg`. `DecodedImages` is a ~96 MB LRU; pictures
+  decode a screen ahead and the next spread's are prefetched.
+
+**Motion (2026-10-11).** Tokens in `theme/Motion.kt` after M3, and
+platform reduce-motion settings feeding `LocalReduceMotion`. Navigation in
+`Root` became one `AnimatedContent` over the stack's top.
+
+**App icon (2026-10-11).** `frontend/branding/generate_icons.py` draws the
+rail's "Lz" mark (Literata 600 from the bundled TTF, Theme.kt's
+primaryContainer tile) into every platform's icon: Android adaptive +
+monochrome vectors, desktop window PNG + jpackage png/ico/icns
+(`composeApp/icons/`), web favicons, and `branding/ios-AppIcon-1024.png`
+(there's no Xcode project yet).
+
+**Editable server address.** Triple-tap Settings › Server, or "Server: …"
+on sign-in, saved per device (`ServerUrlStore`). Between dev addresses the
+session carries over; otherwise the app signs out first.
+
+**Code-quality follow-ups (2026-10-11)** are tracked in
+[docs/code-quality-plan.md](docs/code-quality-plan.md): the explicit
+in-flight library write, shared Kotlin/Go merge cases, the request-field
+bounds audit, cancellation hygiene, splitting the largest app files, and
+this CLAUDE.md trim.
+
 ### Phase 8 — offline (Android + Desktop; planned 2026-10-11)
 
 Reading shouldn't need the server. What stays online: sign-up / sign-in /

@@ -159,6 +159,11 @@ to see the count", or keep only the date line.
 - [x] 1. Explicit in-flight write
 - [x] 2. Shared merge cases + notes parity
 - [x] 3. Validation audit
-- [ ] 4. Cancellation hygiene
-- [ ] 5. File splits
-- [ ] 6. CLAUDE.md upkeep
+- [x] 4. Cancellation hygiene: `rethrowIfCancelled` / `catchingNonCancel`
+  in every broad catch and request `runCatching`; `LibraryState.sync` also
+  requeues a send cancelled mid-flight.
+- [x] 5. File splits, as moves only. Two parts stay as they were, because
+  moving them would need a refactor: `Root`'s `when (top)` closes over
+  Root's state, and table layout is a member of `BookBuilder`.
+- [x] 6. CLAUDE.md upkeep: the narratives moved to PLAN.md Phase 7.6, and
+  CLAUDE.md no longer hand-keeps test counts.
