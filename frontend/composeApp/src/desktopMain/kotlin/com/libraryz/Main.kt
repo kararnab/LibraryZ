@@ -13,6 +13,7 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.theme.LocalSystemDarkTheme
 import com.libraryz.ui.Fullscreen
 import com.libraryz.ui.LocalFullscreen
@@ -43,6 +44,7 @@ fun main(args: Array<String>) {
             CompositionLocalProvider(
                 LocalFullscreen provides fullscreen,
                 LocalSystemDarkTheme provides systemDark,
+                LocalReduceMotion provides DesktopReduceMotion.enabled,
             ) { App() }
         }
     }

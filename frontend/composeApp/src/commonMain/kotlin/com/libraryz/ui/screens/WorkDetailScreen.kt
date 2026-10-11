@@ -90,6 +90,8 @@ import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EditionRow
 import com.libraryz.ui.components.RemoveDialog
 import com.libraryz.ui.components.StarRating
+import com.libraryz.theme.movementSpec
+import androidx.compose.animation.animateContentSize
 import com.libraryz.data.api.RemovalRequest
 
 private const val WIDE_DP = 640
@@ -498,7 +500,9 @@ private fun LibraryCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+            // Opening the note editor grows the card rather than snapping it.
+            modifier = Modifier.animateContentSize(movementSpec())
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("My Library", style = MaterialTheme.typography.titleMedium)

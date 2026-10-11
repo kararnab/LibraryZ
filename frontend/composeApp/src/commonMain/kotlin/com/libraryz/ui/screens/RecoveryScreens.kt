@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import com.libraryz.data.api.ApiClient
 import com.libraryz.data.api.ApiException
 import com.libraryz.ui.components.Banner
+import com.libraryz.ui.components.MessageSlot
 import com.libraryz.ui.components.BannerTone
 import kotlinx.coroutines.launch
 
@@ -118,8 +119,8 @@ private fun Outcome(
 }
 
 @Composable
-private fun ProblemBanner(problem: RecoveryProblem?, onRetry: () -> Unit) {
-    when (problem) {
+private fun ProblemBanner(problem: RecoveryProblem?, onRetry: () -> Unit) = MessageSlot(problem) { p ->
+    when (p) {
         RecoveryProblem.Throttled -> Banner(
             BannerTone.Calm,
             Icons.Rounded.HourglassTop,
@@ -133,7 +134,6 @@ private fun ProblemBanner(problem: RecoveryProblem?, onRetry: () -> Unit) {
             action = { TextButton(onClick = onRetry) { Text("Retry") } },
         )
         RecoveryProblem.Other, RecoveryProblem.InvalidLink -> Banner(BannerTone.Error, Icons.Rounded.Error, "Something went wrong. Please try again.")
-        null -> Unit
     }
 }
 
@@ -285,7 +285,7 @@ fun ResetPasswordScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         ProblemBanner(problem, ::save)
-        policyMessage?.let { Banner(BannerTone.Error, Icons.Rounded.Error, it) }
+        MessageSlot(policyMessage) { Banner(BannerTone.Error, Icons.Rounded.Error, it) }
         OutlinedTextField(
             value = password,
             onValueChange = { password = it; policyMessage = null },

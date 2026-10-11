@@ -51,6 +51,9 @@ import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.BookCover
 import com.libraryz.ui.components.CoverSize
 import com.libraryz.ui.components.EmptyState
+import com.libraryz.ui.components.LoadPhase
+import com.libraryz.ui.components.PhaseCrossfade
+import com.libraryz.theme.itemMotion
 import com.libraryz.ui.components.Skeleton
 import com.libraryz.ui.components.bylineOf
 import kotlinx.coroutines.launch
@@ -107,19 +110,25 @@ fun ForYouScreen(
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
                 )
             }
-            Box(Modifier.fillMaxSize()) {
-                when {
-                    state.loading -> ForYouSkeleton()
-                    err != null && items == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val phase = when {
+                state.loading -> LoadPhase.Loading
+                err != null && items == null -> LoadPhase.Error
+                items.isNullOrEmpty() -> LoadPhase.Empty
+                else -> LoadPhase.Content
+            }
+            PhaseCrossfade(phase, Modifier.fillMaxSize()) { p ->
+                when (p) {
+                    LoadPhase.Loading -> ForYouSkeleton()
+                    LoadPhase.Error -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         EmptyState(
                             title = "Couldn't load recommendations",
-                            body = err,
+                            body = err.orEmpty(),
                             action = {
                                 Button(onClick = { scope.launch { state.refresh() } }) { Text("Retry") }
                             },
                         )
                     }
-                    items.isNullOrEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    LoadPhase.Empty -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         EmptyState(
                             title = "Nothing to suggest yet",
                             body = "Rate a few books you’ve read and we’ll suggest what to read next.",
@@ -133,15 +142,16 @@ fun ForYouScreen(
                             },
                         )
                     }
-                    else -> LazyVerticalGrid(
+                    LoadPhase.Content -> LazyVerticalGrid(
                         columns = if (isWide) GridCells.Adaptive(380.dp) else GridCells.Fixed(1),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(items, key = { it.work.id }) { rec ->
-                            RecCard(rec, onOpenWork, onDismiss, onWantToRead, isInLibrary(rec.work.id))
+                        // A dismissed book fades out and the rest close the gap.
+                        items(items.orEmpty(), key = { it.work.id }) { rec ->
+                            Box(itemMotion()) { RecCard(rec, onOpenWork, onDismiss, onWantToRead, isInLibrary(rec.work.id)) }
                         }
                     }
                 }

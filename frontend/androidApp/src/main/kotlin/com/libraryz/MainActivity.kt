@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,6 +20,7 @@ import com.libraryz.data.DeepLinkInbox
 import com.libraryz.data.api.AndroidContextHolder
 import com.libraryz.data.api.DefaultBaseUrl
 import com.libraryz.data.api.isLocalNetworkUrl
+import com.libraryz.theme.LocalReduceMotion
 import com.libraryz.ui.Fullscreen
 import com.libraryz.ui.LocalFullscreen
 
@@ -63,8 +65,14 @@ class MainActivity : ComponentActivity() {
 
     private fun showApp() {
         val fullscreen = SystemBarsFullscreen()
+        // "Remove animations" sets the animator scale to 0. Compose already
+        // honours the scale; the flag also stills the loading pulse.
+        val reduceMotion = Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
         setContent {
-            CompositionLocalProvider(LocalFullscreen provides fullscreen) { App() }
+            CompositionLocalProvider(
+                LocalFullscreen provides fullscreen,
+                LocalReduceMotion provides reduceMotion,
+            ) { App() }
         }
     }
 

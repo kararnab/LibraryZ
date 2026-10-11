@@ -21,8 +21,20 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 - `LIBRARYZ_DRAIN_DELAY`: after SIGTERM, keep serving with `/ready`
   answering 503 `draining` this long, so a load balancer takes the instance
   out before it stops accepting (compose: 15s; default 0).
+- **Motion throughout the app.** Moving deeper and back slides along the
+  X axis; tabs, signing in and load states fade through while the
+  navigation bar or rail stays put; the wide layout's detail pane fades
+  between books. List items fade and slide into place (search results, a
+  dismissed recommendation, a decided review); banners, the sign-up name
+  field and the note editor open and close smoothly; skeletons pulse. In
+  the reader, pages turn with a slide (PDF and two-page text), the bars
+  slide or fade away, settings panels slide in, and a new reading theme
+  dissolves in. Every platform's "reduce motion" setting turns slides and
+  scales into short fades.
 
 ### Changed
+- Going back to a screen keeps its scroll position (Browse, My Library…).
+- Upload and Suggest edit open over the screen they were opened from.
 - The compose service `libraryz` is now `libraryz-1` and `libraryz-2`
   (e.g. `docker compose logs libraryz-1`).
 

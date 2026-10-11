@@ -411,6 +411,24 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   a paragraph break styles from after it (`Open.contentStart`). The text reader's Contents sheet
   (`TextPager.goTo` / `offset`) works for both. Of the "Future" board, password reset
   and email verification are built; notifications aren't.
+- **Motion (2026-10-11): tokens in `theme/Motion.kt`**, after M3
+  (`SHORT`/`MEDIUM`/`LONG`, emphasized and standard easing,
+  `sharedAxisX` / `fadeThrough` / `pageTurn` / `reveal` / `conceal`,
+  `itemMotion()` for lazy items, `loadingPulse`, `dissolveFrom`). Use
+  these rather than ad-hoc `tween`s. `LocalReduceMotion` comes from each
+  platform's entry point (Android animator scale 0, `prefers-reduced-motion`,
+  iOS Reduce Motion, GNOME `enable-animations` / macOS `reduceMotion`):
+  when on, nothing slides, scales or pulses; fades stay, shortened.
+  Navigation in `Root` is one `AnimatedContent` over the stack's top
+  (`NavEntry`: screen, depth, width class): deeper = forward, shallower =
+  back, same depth = fade through. Screens sharing the bar/rail have one
+  `windowKey`, so the frame stays still and only the pane animates; wide
+  Browse and Book detail share one `ListDetailLayout` (one call site, keep
+  it so). Sheets (Upload, Suggest edit) draw over the entry below them.
+  `rememberSaveableStateHolder` keeps each stacked screen's state (scroll)
+  until it's popped; top-level destinations keep theirs for good. In the
+  text reader don't animate anything that changes the text area's size
+  (bars only fade): it would re-page the whole book every frame.
 - **App version: `libraryz.version` in `frontend/gradle.properties`** is the
   single source: it generates `com.libraryz.AppVersion` (Settings › About)
   and is the Android `versionName`. The desktop installer's
