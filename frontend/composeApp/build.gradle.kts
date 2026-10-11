@@ -17,6 +17,10 @@ kotlin {
         namespace = "com.libraryz.shared"
         compileSdk = 37
         minSdk = 26
+        // Off by default for KMP libraries; without it composeResources
+        // (Literata, Figtree, licence texts) never reach the APK and Android
+        // silently falls back to Roboto.
+        androidResources { enable = true }
         withHostTest {}
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
