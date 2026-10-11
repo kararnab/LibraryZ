@@ -978,6 +978,68 @@ is a new numbered migration (#16).
 change to the storage backend or to Kong's per-IP rate-limit decision (item 93;
 uploads were since moved to a per-account quota, see the 2026-10-10 note there).
 
+### Phase 8 — offline (Android + Desktop; planned 2026-10-11)
+
+Reading shouldn't need the server. What stays online: sign-up / sign-in /
+password reset, searching the whole catalogue, upload (quota + safety
+check), Suggest edit and the Review queue, fresh recommendations (the
+model runs server-side). Everything else should work offline: reading saved
+books, My Library, Book detail for library works, and edits to
+progress / shelf / status / rating / notes, sent later.
+
+**Slice 8.1 — books on the device (DONE 2026-10-11).** `data/BookCache.kt`:
+books by edition id in a private folder (`createBookFiles`: Android
+`filesDir/books`, Desktop `~/.libraryz/books`; null on Wasm and iOS, where
+the cache does nothing). **A saved book opens from disk and is never
+fetched again, online or not**: an edition's file never changes (a new file
+is a new edition; storage is content-addressed), so a copy can't go stale.
+A downloaded book is kept only if it hashes (`sha256Hex`, pure Kotlin) to
+the server's `X-Content-SHA256`; the check runs in the background after the
+reader already has the bytes, so it never delays opening. Books you open are
+kept automatically; past the limit (Settings › Books on this device: 256 MB
+/ 1 GB default / 4 GB / no limit) the least recently opened go first, never
+the ones pinned with "Keep offline" on Book detail. Download exports the
+saved copy without the server. Device-scoped like reader layouts: books are
+public and stay across sign-out.
+
+**Slice 8.2 — the library on the device.** A saved copy of `/me/library`
+(with each entry's work and editions) and the last Browse / For You pages,
+one JSON file per user via the `TokenStore` pattern (hundreds of rows: no
+database; Room has no Wasm). `LibraryState` shows it at once, then
+refreshes. The sync also deletes saved books of editions removed for
+**content** (not technical removals), never while one is open. Book detail
+says "A newer edition is available" when the work gains one; it never
+switches editions by itself (page positions differ).
+
+**Slice 8.3 — edits offline, merged per field.** Writes go through a saved
+queue (online it's just empty: one code path). Merging is a per-field
+**last-writer-wins map** (a state-based CRDT: merge is commutative and
+idempotent, so retries and out-of-order replay are safe). Not OT and not a
+text CRDT library: the fields are scalar, and there's no mature KMP port.
+Field groups, each with its own stamp: `rating`; `shelf`; `status` +
+`started_at`/`finished_at`; `current_page`/`total_pages`/`progress_percent`
+(stamped when read, not when synced; newest wins, not furthest, because of
+re-reads); removal (a soft-delete marker with its own stamp, so an older
+offline update can't bring a book back); `notes`. Stamps are a **hybrid
+logical clock** (wall time raised to the newest stamp seen from the server,
+a counter, a device id); the server rejects stamps far in the future.
+Backend: per-group stamp columns on `user_books` (no Postgres-only types),
+soft-delete removal, `PUT` merges per field and returns the merged row;
+pre-alpha, so the baseline is edited in place. Notes changed on two devices:
+newest wins, but the other text is kept and Book detail offers "Keep this /
+Use other / Keep both". Opening a book whose progress on another device is
+newer asks "You're on p. 212 on another device — go there?" rather than
+jumping. The queue belongs to its user and is sent only while that user is
+signed in.
+
+**Slice 8.4 — offline in the UI.** One connectivity signal from
+`isUnreachable`; a quiet "Offline — showing saved books" banner; Upload,
+Suggest edit and Review disabled with a reason instead of failing.
+
+**Deferred: Web.** Starting offline needs a service worker caching the Wasm
+bundle and pdf.js (now from cdnjs), and books in OPFS / IndexedDB under the
+browser's quota. iOS waits for a Mac.
+
 ## Storage: do we need erasure coding?
 
 **No, not for any phase we've planned.** Erasure coding (Reed-Solomon etc.) is

@@ -121,8 +121,8 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (187 each;
-# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest and the opt-in ScreenshotsTest).
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (206 each;
+# desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
 ./gradlew :composeApp:allTests
@@ -439,6 +439,13 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   single source: it generates `com.libraryz.AppVersion` (Settings › About)
   and is the Android `versionName`. The desktop installer's
   `packageVersion` stays separate (jpackage requires MAJOR ≥ 1).
+- **Offline (Phase 8, PLAN.md).** Saved books (`data/BookCache.kt`, 8.1)
+  open from disk **without any request**, online or not: an edition's file
+  never changes, so don't add a freshness check in front of them. Books are
+  kept only after their bytes hash to the server's `X-Content-SHA256`; that
+  check runs off the open path. Android + Desktop only (`createBookFiles` is
+  null on Wasm/iOS). Planned next: library snapshot (8.2), per-field LWW
+  writes with hybrid logical clocks (8.3), offline UI (8.4).
 - **`TokenStore` is an interface now.** Production impls are
   `FileTokenStore` (Android/Desktop), `LocalStorageTokenStore` (Wasm),
   `UserDefaultsTokenStore` (iOS). Tests use `FakeTokenStore` in

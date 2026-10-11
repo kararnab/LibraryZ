@@ -24,9 +24,12 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadForOffline
+import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarOutline
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -234,6 +237,12 @@ fun EditionRow(
     modifier: Modifier = Modifier,
     // Moderator-only takedown; hidden when null.
     onRemove: (() -> Unit)? = null,
+    // On this device: [saved] opens offline; [pinned] is "Keep offline";
+    // [keeping] while it downloads for that. Null hides the toggle.
+    saved: Boolean = false,
+    pinned: Boolean = false,
+    keeping: Boolean = false,
+    onKeepOffline: ((Boolean) -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -248,13 +257,28 @@ fun EditionRow(
             Column(Modifier.weight(1f)) {
                 Text(formatName(edition.format), style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = edition.prettySize,
+                    text = if (saved) "${edition.prettySize} · On this device" else edition.prettySize,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (edition.isPreviewable) {
                 TextButton(onClick = onRead) { Text("Read") }
+            }
+            if (onKeepOffline != null) {
+                if (keeping) {
+                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    IconButton(onClick = { onKeepOffline(!pinned) }) {
+                        Icon(
+                            if (pinned) Icons.Rounded.OfflinePin else Icons.Rounded.DownloadForOffline,
+                            contentDescription = if (pinned) "Kept offline. Stop keeping it" else "Keep offline",
+                            tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
             IconButton(onClick = onDownload) {
                 Icon(

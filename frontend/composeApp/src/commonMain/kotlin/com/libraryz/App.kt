@@ -1,7 +1,10 @@
 package com.libraryz
 
 import androidx.compose.foundation.layout.Arrangement
+import com.libraryz.data.BookCache
+import com.libraryz.data.BookInfo
 import com.libraryz.data.BookLayouts
+import com.libraryz.data.createBookFiles
 import com.libraryz.data.api.describe
 import com.libraryz.data.api.createReaderLayoutStore
 import com.libraryz.data.api.createReaderPrefsStore
@@ -106,6 +109,7 @@ import com.libraryz.data.api.AuthState
 import com.libraryz.data.api.ContributionsState
 import com.libraryz.data.api.CreateWorkRequest
 import com.libraryz.data.api.DefaultBaseUrl
+import com.libraryz.data.api.DownloadedFile
 import com.libraryz.data.api.ServerUrlStore
 import com.libraryz.data.api.createServerUrlStore
 import com.libraryz.data.api.isDevServerUrl
@@ -366,6 +370,36 @@ internal fun Root(
         scope.launch { readerPrefsStore.save(p) }
     }
     val readerLayouts = remember { BookLayouts(::createReaderLayoutStore) }
+    // Books kept on this device: the reader opens these without the server.
+    val books = remember { BookCache(::createBookFiles) }
+    LaunchedEffect(books) { books.load() }
+    // Editions being fetched for "Keep offline", so their rows show progress.
+    var keeping by remember { mutableStateOf(emptySet<String>()) }
+    val keepOffline: (Work, Edition, Boolean) -> Unit = { work, ed, keep ->
+        scope.launch {
+            when {
+                !keep -> books.setPinned(ed.id, false)
+                books.isSaved(ed.id) -> books.setPinned(ed.id, true)
+                ed.id !in keeping -> {
+                    keeping = keeping + ed.id
+                    try {
+                        val file = api.downloadEditionFile(ed.id)
+                        val kept = file.sha256 != null && books.keep(
+                            ed.id, file.sha256, file.bytes,
+                            BookInfo(ed.format, work.id, work.title, work.authors), file.filename, pinned = true,
+                        )
+                        snackbar.showSnackbar(
+                            if (kept) "“${work.title}” is kept on this device." else "Couldn’t keep “${work.title}” on this device.",
+                        )
+                    } catch (e: Throwable) {
+                        snackbar.showSnackbar("Couldn’t download “${work.title}”. ${api.describe(e)}")
+                    } finally {
+                        keeping = keeping - ed.id
+                    }
+                }
+            }
+        }
+    }
 
     val dismissRec: (String) -> Unit = { workId ->
         scope.launch {
@@ -442,7 +476,11 @@ internal fun Root(
             scope.launch {
                 snackbar.showSnackbar("Downloading ${work.title}…")
                 val file = try {
-                    api.downloadEditionFile(ed.id)
+                    // A saved copy exports without the server.
+                    books.open(ed.id)?.let { bytes -> DownloadedFile(books.books[ed.id]?.filename, bytes) }
+                        ?: api.downloadEditionFile(ed.id).also { f ->
+                            books.keepLater(ed.id, f.sha256, f.bytes, BookInfo(ed.format, work.id, work.title, work.authors), f.filename)
+                        }
                 } catch (e: Throwable) {
                     snackbar.showSnackbar("Download failed. ${api.describe(e)}")
                     return@launch
@@ -556,6 +594,9 @@ internal fun Root(
                 onReadFromLibrary = readFromLibrary,
                 extraHeader = verifyBanner,
                 onDownload = downloadEdition,
+                books = books,
+                keeping = keeping,
+                onKeepOffline = keepOffline,
                 onLibraryUpsert = libraryUpsert,
                 onLibraryRemove = libraryRemove,
                 onRemoveWork = removeWork,
@@ -588,6 +629,9 @@ internal fun Root(
                         onAddEdition = { nav.push(Screen.Upload(workId = s.workId)) },
                         onRead = { ed -> readEdition(work, ed) },
                         onDownload = { ed -> downloadEdition(work, ed) },
+                        savedBooks = books.books,
+                        keeping = keeping,
+                        onKeepOffline = if (books.enabled) { ed, keep -> keepOffline(work, ed, keep) } else null,
                         onSuggestEdit = { nav.push(Screen.EditWork(s.workId)) },
                         onAuthorClick = searchAuthor,
                         libraryEnabled = auth.isAuthenticated,
@@ -621,6 +665,7 @@ internal fun Root(
                 ReaderScreen(
                     api = api,
                     editionId = s.editionId,
+                    workId = s.workId,
                     format = s.format,
                     title = s.title,
                     authors = s.authors,
@@ -643,6 +688,7 @@ internal fun Root(
                     },
                     onClose = { nav.pop() },
                     layouts = readerLayouts,
+                    books = books,
                 )
             }
 
@@ -720,6 +766,7 @@ internal fun Root(
                 onPrefsChange = setReaderPrefs,
                 onSignOut = logout,
                 onSignOutEverywhere = logoutEverywhere,
+                books = books,
                 onBack = null,
             )
 
@@ -1175,6 +1222,9 @@ private fun ListDetailLayout(
     onReadFromLibrary: (UserBook) -> Unit,
     extraHeader: (@Composable () -> Unit)?,
     onDownload: (Work, Edition) -> Unit,
+    books: BookCache,
+    keeping: Set<String>,
+    onKeepOffline: (Work, Edition, Boolean) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
     onRemoveWork: ((Work, RemovalRequest) -> Unit)? = null,
@@ -1229,6 +1279,9 @@ private fun ListDetailLayout(
                     onAddEdition = { nav.push(Screen.Upload(workId = work.id)) },
                     onRead = { ed -> onRead(work, ed) },
                     onDownload = { ed -> onDownload(work, ed) },
+                    savedBooks = books.books,
+                    keeping = keeping,
+                    onKeepOffline = if (books.enabled) { ed, keep -> onKeepOffline(work, ed, keep) } else null,
                     onSuggestEdit = { nav.push(Screen.EditWork(work.id)) },
                     onAuthorClick = onAuthorClick,
                     libraryEnabled = auth.isAuthenticated,

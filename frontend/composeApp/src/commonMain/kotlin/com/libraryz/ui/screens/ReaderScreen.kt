@@ -116,6 +116,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
+import com.libraryz.data.BookCache
+import com.libraryz.data.BookInfo
 import com.libraryz.data.BookLayout
 import com.libraryz.data.BookLayouts
 import com.libraryz.data.Chapter
@@ -217,11 +219,15 @@ data class ReaderPrefs(
  *
  * Both readers can show two pages side by side ([PageLayout], saved per
  * book in [layouts]); see [autoSpread] for when Auto does.
+ *
+ * A book saved in [books] opens from the device without asking the server;
+ * otherwise it's downloaded and then kept there in the background.
  */
 @Composable
 fun ReaderScreen(
     api: ApiClient,
     editionId: String,
+    workId: String,
     format: String,
     title: String,
     authors: String?,
@@ -236,6 +242,7 @@ fun ReaderScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     layouts: BookLayouts = remember { BookLayouts() },
+    books: BookCache = remember { BookCache() },
 ) {
     var bytes by remember(editionId) { mutableStateOf<ByteArray?>(null) }
     var loadError by remember(editionId) { mutableStateOf<String?>(null) }
@@ -245,7 +252,9 @@ fun ReaderScreen(
 
     LaunchedEffect(editionId, attempt) {
         try {
-            bytes = api.downloadEdition(editionId)
+            bytes = books.openOrDownload(editionId, BookInfo(format, workId, title, authors)) {
+                api.downloadEditionFile(editionId)
+            }
         } catch (e: Throwable) {
             loadError = api.describe(e)
             downloadFailed = true

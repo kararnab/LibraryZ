@@ -74,6 +74,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
+import com.libraryz.data.SavedBook
 import com.libraryz.data.LibraryStatus
 import com.libraryz.data.TEXT_POSITIONS
 import com.libraryz.data.UserBook
@@ -104,6 +105,10 @@ fun WorkDetailScreen(
     onAddEdition: () -> Unit,
     onRead: (Edition) -> Unit,
     onDownload: (Edition) -> Unit,
+    // Books kept on this device, by edition id; [onKeepOffline] null hides the pin.
+    savedBooks: Map<String, SavedBook> = emptyMap(),
+    keeping: Set<String> = emptySet(),
+    onKeepOffline: ((Edition, Boolean) -> Unit)? = null,
     onSuggestEdit: (() -> Unit)? = null,
     // Opens Browse searching for one author; null leaves the names as plain text.
     onAuthorClick: ((String) -> Unit)? = null,
@@ -222,6 +227,10 @@ fun WorkDetailScreen(
                             onDownload = { onDownload(ed) },
                             onRead = { onRead(ed) },
                             onRemove = onRemoveEdition?.let { { editionToRemove = ed } },
+                            saved = ed.id in savedBooks,
+                            pinned = savedBooks[ed.id]?.pinned == true,
+                            keeping = ed.id in keeping,
+                            onKeepOffline = onKeepOffline?.let { k -> { keep -> k(ed, keep) } },
                         )
                     }
                 }

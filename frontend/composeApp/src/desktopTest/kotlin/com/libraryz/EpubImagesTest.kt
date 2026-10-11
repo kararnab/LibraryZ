@@ -59,7 +59,7 @@ class EpubImagesTest {
         val scene = ImageComposeScene(width, height, Density(1f)) {
             LibraryZTheme {
                 ReaderScreen(
-                    api = api, editionId = "e1", format = "EPUB", title = "T", authors = null,
+                    api = api, editionId = "e1", workId = "w1", format = "EPUB", title = "T", authors = null,
                     resumeFrom = null, finished = false, rating = null,
                     prefs = prefs, onPrefsChange = {},
                     onProgress = {}, onMarkRead = {}, onRate = {}, onClose = {},

@@ -146,7 +146,8 @@ private val anonymousAuthPaths = listOf(
 )
 
 /** [filename] is null when the server didn't name the file. */
-class DownloadedFile(val filename: String?, val bytes: ByteArray)
+/** [sha256] is the server's `X-Content-SHA256`: what [bytes] must hash to. */
+class DownloadedFile(val filename: String?, val bytes: ByteArray, val sha256: String? = null)
 
 /**
  * Extracts the filename from a `Content-Disposition` header, preferring the
@@ -631,6 +632,7 @@ class ApiClient(
         return DownloadedFile(
             filename = resp.headers[HttpHeaders.ContentDisposition]?.let(::parseContentDispositionFilename),
             bytes = resp.body(),
+            sha256 = resp.headers["X-Content-SHA256"],
         )
     }
 
