@@ -22,6 +22,7 @@ class EpubBook(
     val chapters: List<Chapter>,
     val images: Map<String, BookImage>,
     val tables: List<BookTable>,
+    val boxes: List<BookBox>,
 )
 
 class EpubException(message: String) : RuntimeException(message)
@@ -30,9 +31,10 @@ class EpubException(message: String) : RuntimeException(message)
  * Reads an EPUB (2 or 3) as reflowable text: the spine's XHTML documents in
  * order, one after another, keeping headings, emphasis, lists, paragraph
  * breaks, pictures and tables, and the parts of the book's CSS that carry
- * meaning (alignment, indents, colours; see [BookBuilder]). The reader's own
- * typeface, size and themes then apply, as they do to TXT. Pictures are
- * [BookImage]s, read from the archive again when they're drawn.
+ * meaning (alignment, indents, colours, relative sizes, boxes, embedded
+ * fonts; see [BookBuilder]). The reader's own typeface, size and themes then
+ * apply to the rest, as they do to TXT. Pictures are [BookImage]s, read from
+ * the archive again when they're drawn.
  *
  * Chapters come from the EPUB 3 nav document, else the EPUB 2 NCX, else the
  * book's h1–h3 headings, each resolved to a character offset in [EpubBook.text].
@@ -54,9 +56,19 @@ fun parseEpub(bytes: ByteArray): EpubBook {
         val items = HashMap<String, ManifestItem>()
         val spine = ArrayList<String>()
         var ncxId: String? = null
+        var uniqueId: String? = null
+        val identifiers = LinkedHashMap<String, String>()
+        var identifierId: String? = null
         for (t in markupTokens(opf)) {
+            if (t is MarkupToken.Text) {
+                identifierId?.let { identifiers[it] = (identifiers[it].orEmpty() + t.text) }
+                continue
+            }
+            if (t is MarkupToken.End && t.name == "identifier") identifierId = null
             if (t !is MarkupToken.Start) continue
             when (t.name) {
+                "package" -> uniqueId = t.attrs["unique-identifier"]
+                "identifier" -> identifierId = t.attrs["id"] ?: "#${identifiers.size}"
                 "item" -> {
                     val id = t.attrs["id"] ?: continue
                     val href = t.attrs["href"] ?: continue
@@ -72,16 +84,23 @@ fun parseEpub(bytes: ByteArray): EpubBook {
         }
 
         val images = HashMap<String, BookImage?>()
-        val sheets = HashMap<String, List<CssRule>?>()
-        val sheetAt = { path: String -> sheets.getOrPut(path) { zip.readText(path)?.let { parseCss(it) } } }
-        val book = BookBuilder(sheetAt = sheetAt, imageAt = { path, alt ->
+        val sheets = HashMap<String, ParsedSheet?>()
+        val sheetAt = { path: String ->
+            sheets.getOrPut(path) {
+                zip.readText(path)?.let { css -> ParsedSheet(parseCss(css), parseFontFaces(css).map { it.resolved(dirOf(path)) }) }
+            }
+        }
+        val fontAt = embeddedFonts(zip, uniqueId?.let(identifiers::get) ?: identifiers.values.firstOrNull(), identifiers.values)
+        val book = BookBuilder(sheetAt = sheetAt, fontAt = fontAt, imageAt = { path, alt ->
             images.getOrPut(path) {
                 val entry = zip.find(path) ?: return@getOrPut null
-                val size = runCatching { imageSize(zip.read(entry)) }.getOrNull() ?: return@getOrPut null
+                val bytes = runCatching { zip.read(entry) }.getOrNull() ?: return@getOrPut null
+                val raster = imageSize(bytes)
+                val size = raster ?: svgSize(bytes) ?: return@getOrPut null
                 val (w, h) = size
                 // Small enough to be a glyph or an ornament in the line, not a figure.
                 val block = h > INLINE_IMAGE_MAX_HEIGHT || w > INLINE_IMAGE_MAX_HEIGHT * 4
-                BookImage(w, h, alt.collapseWhitespace(), block) { zip.read(entry) }
+                BookImage(w, h, alt.collapseWhitespace(), block, vector = raster == null) { zip.read(entry) }
             }
         })
         for (id in spine) {
@@ -97,9 +116,57 @@ fun parseEpub(bytes: ByteArray): EpubBook {
             .mapNotNull { e -> book.offsetOf(e.path, e.fragment)?.let { Chapter(it, e.title, e.depth) } }
             .distinct()
             .sortedBy { it.offset }
-        return EpubBook(text, toc.ifEmpty { book.headings }, images.filterValues { it != null }.mapValues { it.value!! }, book.tables)
+        return EpubBook(text, toc.ifEmpty { book.headings }, images.filterValues { it != null }.mapValues { it.value!! }, book.tables, book.boxes)
     } catch (e: ZipException) {
         throw EpubException("This EPUB is damaged (${e.message}).")
+    }
+}
+
+/** A stylesheet's rules and its `@font-face`s (font paths resolved in the archive). */
+private class ParsedSheet(val rules: List<CssRule>, val faces: List<ResolvedFace>)
+
+/** An `@font-face`'s font file in the archive. */
+private data class ResolvedFace(val family: String, val path: String, val weight: Int, val italic: Boolean)
+
+private fun CssFontFace.resolved(dir: String) = ResolvedFace(family, resolvePath(dir, src.substringBefore('#').substringBefore('?')), weight, italic)
+
+/**
+ * Loads the font families [BookBuilder] asks for, once each: each face's
+ * file read from [zip], un-obfuscated per `META-INF/encryption.xml` (keyed
+ * by [uniqueId], or for Adobe's scheme a `urn:uuid:` among [identifiers]),
+ * and kept only if it's a TrueType / OpenType font the platform can load.
+ * Fonts under real encryption (DRM) are skipped.
+ */
+private fun embeddedFonts(zip: ZipArchive, uniqueId: String?, identifiers: Collection<String>): (List<ResolvedFace>) -> FontFamily? {
+    val obfuscated = HashMap<String, FontObfuscation?>()
+    zip.readText("META-INF/encryption.xml")?.let { xml ->
+        var algorithm: String? = null
+        for (t in markupTokens(xml)) {
+            if (t !is MarkupToken.Start) continue
+            when (t.name) {
+                "encryptionmethod" -> algorithm = t.attrs["algorithm"]
+                "cipherreference" -> t.attrs["uri"]?.let { uri ->
+                    obfuscated[resolvePath("", uri)] = FontObfuscation.entries.firstOrNull { it.algorithm == algorithm }
+                }
+            }
+        }
+    }
+    val adobeKey = identifiers.firstOrNull { it.trim().startsWith("urn:uuid:") }
+    val families = HashMap<List<ResolvedFace>, FontFamily?>()
+    return { faces ->
+        families.getOrPut(faces) {
+            val fonts = faces.mapNotNull { face ->
+                val bytes = zip.find(face.path)?.let { runCatching { zip.read(it) }.getOrNull() } ?: return@mapNotNull null
+                if (face.path in obfuscated) {
+                    val scheme = obfuscated[face.path] ?: return@mapNotNull null
+                    val key = (if (scheme == FontObfuscation.Adobe) adobeKey else uniqueId) ?: return@mapNotNull null
+                    if (!deobfuscate(bytes, scheme, key)) return@mapNotNull null
+                }
+                if (!isSfnt(bytes)) return@mapNotNull null
+                loadFont(sha1(bytes).hex(), bytes, FontWeight(face.weight), if (face.italic) FontStyle.Italic else FontStyle.Normal)
+            }
+            if (fonts.isEmpty()) null else FontFamily(fonts)
+        }
     }
 }
 
@@ -196,8 +263,11 @@ private fun tocEntry(label: String, href: String, dir: String, depth: Int) = Toc
  */
 private class BookBuilder(
     private val imageAt: (path: String, alt: String) -> BookImage?,
-    private val sheetAt: (path: String) -> List<CssRule>?,
+    private val sheetAt: (path: String) -> ParsedSheet?,
+    // The book's embedded fonts, by the faces of one family.
+    private val fontAt: (List<ResolvedFace>) -> FontFamily? = { null },
     val tables: MutableList<BookTable> = ArrayList(),
+    val boxes: MutableList<BookBox> = ArrayList(),
     // Building one table cell: nested tables flatten to text.
     private val inCell: Boolean = false,
 ) {
@@ -222,6 +292,8 @@ private class BookBuilder(
     private val skipStack = ArrayList<String>()
 
     private var sheet = Stylesheet.EMPTY
+    // The document's @font-faces by family.
+    private var faces: Map<String, List<ResolvedFace>> = emptyMap()
     // The elements around this builder's content: a cell's table and row.
     private var basePath: List<CssElement> = emptyList()
 
@@ -233,7 +305,14 @@ private class BookBuilder(
         val block: Boolean,
         val css: Map<String, String>,
         val element: CssElement,
-    )
+        /** Font size against the reader's text size, this element's and its parents' factors multiplied. */
+        val scale: Float = 1f,
+        /** A block the book draws a box around. */
+        val box: Boolean = false,
+    ) {
+        // Where the element's content starts, if a paragraph break came after its start tag.
+        var contentStart = -1
+    }
     private val stack = ArrayList<Open>()
     private class Span(val style: SpanStyle, val start: Int, val end: Int, val depth: Int)
     private val spans = ArrayList<Span>()
@@ -275,8 +354,9 @@ private class BookBuilder(
     }
 
     /** One table cell's text: [tokens] from its start tag to its end, inside [ancestors]. */
-    fun cell(path: String, sheet: Stylesheet, ancestors: List<CssElement>, tokens: List<MarkupToken>): AnnotatedString {
+    fun cell(path: String, sheet: Stylesheet, faces: Map<String, List<ResolvedFace>>, ancestors: List<CssElement>, tokens: List<MarkupToken>): AnnotatedString {
         this.sheet = sheet
+        this.faces = faces
         basePath = ancestors
         block()
         run(path, tokens)
@@ -319,23 +399,45 @@ private class BookBuilder(
         }
     }
 
-    /** The document's `<link rel="stylesheet">`s and `<style>` blocks, in order. */
+    /** The document's `<link rel="stylesheet">`s and `<style>` blocks, in order; their @font-faces into [faces]. */
     private fun stylesheetOf(path: String, tokens: List<MarkupToken>): Stylesheet {
         val sources = ArrayList<List<CssRule>>()
+        val found = ArrayList<ResolvedFace>()
         var style: StringBuilder? = null
         for (t in tokens) {
             when {
                 t is MarkupToken.Start && t.name == "link" && "stylesheet" in t.attrs["rel"].orEmpty().lowercase() ->
-                    t.attrs["href"]?.let { sheetAt(resolvePath(dirOf(path), it.substringBefore('#')))?.let(sources::add) }
+                    t.attrs["href"]?.let { sheetAt(resolvePath(dirOf(path), it.substringBefore('#'))) }?.let {
+                        sources += it.rules
+                        found += it.faces
+                    }
                 t is MarkupToken.Start && t.name == "style" && !t.selfClosing -> style = StringBuilder()
                 t is MarkupToken.Text -> style?.append(t.text)
                 t is MarkupToken.End && t.name == "style" -> {
-                    style?.let { sources += parseCss(it.toString()) }
+                    style?.let {
+                        sources += parseCss(it.toString())
+                        found += parseFontFaces(it.toString()).map { f -> f.resolved(dirOf(path)) }
+                    }
                     style = null
                 }
             }
         }
+        faces = found.groupBy { it.family }
         return if (sources.isEmpty()) Stylesheet.EMPTY else Stylesheet(sources)
+    }
+
+    /**
+     * The font an element's `font-family` asks for: the first listed family
+     * the book embeds, or monospace (code); other generic families and fonts
+     * the book doesn't carry leave the reader's own.
+     */
+    private fun fontFamilyOf(css: Map<String, String>): FontFamily? {
+        val families = css["font-family"]?.let(::cssFontFamilies) ?: return null
+        for (f in families) {
+            faces[f]?.let { faceList -> fontAt(faceList)?.let { return it } }
+            if (f == "monospace") return FontFamily.Monospace
+        }
+        return null
     }
 
     private fun elementOf(t: MarkupToken.Start) = CssElement(
@@ -445,20 +547,31 @@ private class BookBuilder(
             write(" ")
             spacePending = false
         }
+        // A box draws its background behind its lines, so its text doesn't highlight it too.
+        val box = isBlock && name != "body" && name != "html" && (hasBorder(css) || background(css) != null)
+        // Font size: a heading inside a heading keeps the outer one's; the page's own size stays the reader's.
+        val parentScale = stack.lastOrNull()?.scale ?: 1f
+        val ownScale = when {
+            name == "html" || name == "body" -> null
+            level > 0 && !heading -> null
+            else -> css["font-size"]?.let(::cssFontScale) ?: TAG_SCALE[name]
+        }
+        val scale = ownScale?.let { (parentScale * it).coerceIn(0.6f, 2.5f) } ?: parentScale
         val styles = buildList {
-            // A heading inside a heading keeps only the outer one's size.
             if (!(level > 0 && !heading)) addAll(STYLES[name].orEmpty())
-            cssSpan(css)?.let(::add)
+            cssSpan(css, background = !box, fontFamily = fontFamilyOf(css))?.let(::add)
+            // As a factor of the reader's text size, not the parent's: the screen turns it into sp.
+            if (scale != parentScale) add(SpanStyle(fontSize = scale.em))
         }
         if (heading) {
             // Break before the heading with it open, so the break takes its paragraph style, but start it after.
-            stack += Open(name, out.length, emptyList(), level, true, css, element)
+            stack += Open(name, out.length, emptyList(), level, true, css, element, scale, box)
             startBlock()
             stack.removeAt(stack.lastIndex)
             headingOpen = true
             headingText.clear()
         }
-        stack += Open(name, out.length, styles, if (heading) level else 0, isBlock, css, element)
+        stack += Open(name, out.length, styles, if (heading) level else 0, isBlock, css, element, scale, box)
     }
 
     private fun close(name: String) {
@@ -480,7 +593,8 @@ private class BookBuilder(
     private fun closeTop(): Open {
         val top = stack.removeAt(stack.lastIndex)
         val end = out.length
-        if (end > top.start) top.styles.forEach { spans += Span(it, top.start, end, stack.size) }
+        val start = if (top.contentStart >= 0) top.contentStart else top.start
+        if (end > start) top.styles.forEach { spans += Span(it, start, end, stack.size) }
         if (top.heading > 0) {
             headingOpen = false
             val title = headingText.toString().collapseWhitespace()
@@ -491,6 +605,12 @@ private class BookBuilder(
         when (top.name) {
             "ul", "ol" -> lists.removeLastOrNull()
             "pre" -> preDepth--
+        }
+        if (top.box) {
+            if (end > start) {
+                val left = stack.filter { it.block }.sumOf { leftOf(it).toDouble() }.toFloat() + marginLeftOf(top)
+                boxes += BookBox(start, end, left.coerceIn(0f, 8f), background(top.css), hasBorder(top.css), borderColor(top.css))
+            }
         }
         if (top.block) {
             gap = maxOf(gap, margin(top.name, top.css, top = false))
@@ -564,8 +684,8 @@ private class BookBuilder(
             val path0 = rowPath()
             val cssCell = cssOf(s, path0 + elementOf(s))
             if (hasBorder(cssCell)) bordered = true
-            val text = BookBuilder(imageAt, sheetAt, tables, inCell = true)
-                .cell(path, sheet, path0, listOf(s) + buf + MarkupToken.End(s.name))
+            val text = BookBuilder(imageAt, sheetAt, fontAt, tables, boxes, inCell = true)
+                .cell(path, sheet, faces, path0, listOf(s) + buf + MarkupToken.End(s.name))
             if (rows.isEmpty()) rows.add(ArrayList())
             rows.last() += BookCell(
                 text = text,
@@ -686,6 +806,8 @@ private class BookBuilder(
      * styled differently from the last one starts a new region.
      */
     private fun startBlock() {
+        // Elements opened since the last character start after the break, not before it.
+        val atStart = stack.filter { it.contentStart < 0 && (it.block || it.start == out.length) }
         if (breakPending) {
             val style = paragraphStyle()
             val blank = gap > 0.05f
@@ -715,6 +837,7 @@ private class BookBuilder(
         blockEmpty = true
         gap = 0f
         afterTable = false
+        for (o in atStart) o.contentStart = out.length
         resolveAnchors()
     }
 
@@ -737,18 +860,15 @@ private class BookBuilder(
             o.css["text-align"]?.let(::alignOf) ?: DEFAULT_ALIGN[o.name]
         }?.takeUnless { it == TextAlign.Unspecified }
         val indent = (stack.asReversed().firstNotNullOfOrNull { it.css["text-indent"]?.let(::cssEm) } ?: 0f).coerceIn(-4f, 4f)
-        val left = stack.filter { it.block }.sumOf { o ->
-            val margin = o.css["margin-left"]?.let(::cssEm) ?: o.css["margin"]?.let(::cssBox)?.get(3)?.let(::cssEm)
-                ?: DEFAULT_INDENT[o.name] ?: 0f
-            val padding = o.css["padding-left"]?.let(::cssEm) ?: o.css["padding"]?.let(::cssBox)?.get(3)?.let(::cssEm) ?: 0f
-            (margin + padding).toDouble()
-        }.toFloat().coerceIn(0f, 8f)
+        val left = stack.filter { it.block }.sumOf { leftOf(it).toDouble() }.toFloat().coerceIn(0f, 8f)
         val heading = stack.lastOrNull { it.heading > 0 }?.heading ?: 0
-        if (align == null && indent == 0f && left == 0f && heading == 0) return null
+        // Large type (a heading, a book's display text) needs taller lines than the reader's spacing.
+        val scale = stack.lastOrNull { it.block }?.scale ?: 1f
+        if (align == null && indent == 0f && left == 0f && heading == 0 && scale <= 1.1f) return null
         return ParagraphStyle(
             textAlign = align ?: TextAlign.Unspecified,
             textIndent = if (indent != 0f || left != 0f) TextIndent((left + indent).coerceAtLeast(0f).em, left.em) else null,
-            lineHeight = if (heading > 0) (HEADING_SIZES[heading - 1] * 1.3f).em else TextUnit.Unspecified,
+            lineHeight = if (heading > 0 || scale > 1.1f) (scale * 1.3f).em else TextUnit.Unspecified,
         )
     }
 
@@ -769,7 +889,6 @@ private class BookBuilder(
         val SKIPPED = setOf("head", "script", "style", "svg", "math", "template", "title")
         val VOID = setOf("area", "base", "col", "embed", "img", "image", "input", "link", "meta", "param", "source", "track", "wbr", "br", "hr")
         val HEADINGS = listOf("h1", "h2", "h3", "h4", "h5", "h6")
-        val HEADING_SIZES = listOf(1.5f, 1.3f, 1.15f, 1f, 1f, 1f)
         val BLOCKS = setOf(
             "p", "div", "section", "article", "header", "footer", "aside", "nav", "main", "figure", "figcaption",
             "blockquote", "pre", "ul", "ol", "li", "dl", "dt", "dd", "table", "tr", "caption", "address", "center",
@@ -782,6 +901,27 @@ private class BookBuilder(
             "th" to TextAlign.Center,
         )
         val DEFAULT_INDENT = mapOf("blockquote" to 1.5f, "dd" to 1.5f)
+        // Space between a box's edge and its text, in ems.
+        const val BOX_PADDING = 0.6f
+        // Default sizes, as in a browser's stylesheet.
+        val TAG_SCALE = mapOf(
+            "h1" to 1.5f, "h2" to 1.3f, "h3" to 1.15f,
+            "sup" to 0.75f, "sub" to 0.75f, "small" to 0.85f, "figcaption" to 0.85f, "pre" to 0.85f,
+        )
+
+        private fun marginLeftOf(o: Open): Float =
+            o.css["margin-left"]?.let(::cssEm) ?: o.css["margin"]?.let(::cssBox)?.get(3)?.let(::cssEm) ?: DEFAULT_INDENT[o.name] ?: 0f
+
+        /** How far a block moves its text in: margin, padding, and a box's inner space. */
+        private fun leftOf(o: Open): Float {
+            val padding = o.css["padding-left"]?.let(::cssEm) ?: o.css["padding"]?.let(::cssBox)?.get(3)?.let(::cssEm) ?: 0f
+            return marginLeftOf(o) + padding + if (o.box) BOX_PADDING else 0f
+        }
+
+        /** The first colour any `border*` property names, if any. */
+        fun borderColor(css: Map<String, String>): Color? = css.entries.firstNotNullOfOrNull { (k, v) ->
+            if (k.startsWith("border") && !k.contains("collapse") && !k.contains("spacing") && !k.contains("radius")) cssBackground(v) else null
+        }
 
         /** A table row's paragraph: unlike any style a block gets, so rows never join a text region. */
         val TABLE_ROW = ParagraphStyle(
@@ -817,9 +957,9 @@ private class BookBuilder(
             (css["background-color"] ?: css["background"])?.let(::cssBackground)?.takeIf { it.alpha > 0f }
 
         /** The book's colours, weight, style, decoration and small caps for an element. */
-        fun cssSpan(css: Map<String, String>): SpanStyle? {
+        fun cssSpan(css: Map<String, String>, background: Boolean = true, fontFamily: FontFamily? = null): SpanStyle? {
             val color = css["color"]?.let(::cssColor)
-            val background = background(css)
+            val background = if (background) background(css) else null
             val fontStyle = when (css["font-style"]?.trim()?.lowercase()) {
                 "italic", "oblique" -> FontStyle.Italic
                 "normal" -> FontStyle.Normal
@@ -842,7 +982,7 @@ private class BookBuilder(
                 }
             }
             val smallCaps = (css["font-variant"] ?: css["font-variant-caps"])?.contains("small-caps") == true
-            if (color == null && background == null && fontStyle == null && weight == null && decoration == null && !smallCaps) return null
+            if (color == null && background == null && fontStyle == null && weight == null && decoration == null && !smallCaps && fontFamily == null) return null
             return SpanStyle(
                 color = color ?: Color.Unspecified,
                 background = background ?: Color.Unspecified,
@@ -850,12 +990,13 @@ private class BookBuilder(
                 fontWeight = weight,
                 textDecoration = decoration,
                 fontFeatureSettings = if (smallCaps) "smcp" else null,
+                fontFamily = fontFamily,
             )
         }
 
         private val italic = SpanStyle(fontStyle = FontStyle.Italic)
         private val bold = SpanStyle(fontWeight = FontWeight.Bold)
-        private fun heading(size: Float) = listOf(SpanStyle(fontWeight = FontWeight.SemiBold, fontSize = size.em))
+        private val heading = listOf(SpanStyle(fontWeight = FontWeight.SemiBold))
 
         val STYLES: Map<String, List<SpanStyle>> = mapOf(
             "em" to listOf(italic), "i" to listOf(italic), "cite" to listOf(italic), "dfn" to listOf(italic), "var" to listOf(italic),
@@ -866,17 +1007,14 @@ private class BookBuilder(
             "strike" to listOf(SpanStyle(textDecoration = TextDecoration.LineThrough)),
             "del" to listOf(SpanStyle(textDecoration = TextDecoration.LineThrough)),
             "mark" to listOf(SpanStyle(background = Color(0xFFFFF176))),
-            "sup" to listOf(SpanStyle(baselineShift = BaselineShift.Superscript, fontSize = 0.75.em)),
-            "sub" to listOf(SpanStyle(baselineShift = BaselineShift.Subscript, fontSize = 0.75.em)),
-            "small" to listOf(SpanStyle(fontSize = 0.85.em)),
-            "figcaption" to listOf(SpanStyle(fontSize = 0.85.em)),
+            "sup" to listOf(SpanStyle(baselineShift = BaselineShift.Superscript)),
+            "sub" to listOf(SpanStyle(baselineShift = BaselineShift.Subscript)),
             "code" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
             "tt" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
             "kbd" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
             "samp" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
-            "pre" to listOf(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.85.em)),
-            "h1" to heading(1.5f), "h2" to heading(1.3f), "h3" to heading(1.15f),
-            "h4" to heading(1f), "h5" to heading(1f), "h6" to heading(1f),
+            "pre" to listOf(SpanStyle(fontFamily = FontFamily.Monospace)),
+            "h1" to heading, "h2" to heading, "h3" to heading, "h4" to heading, "h5" to heading, "h6" to heading,
         )
     }
 }

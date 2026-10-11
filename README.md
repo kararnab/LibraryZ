@@ -481,7 +481,7 @@ LIBRARYZ_SCREENSHOTS_DIR=$PWD/../docs/screenshots \
 ## Roadmap
 
 - [ ] Notifications (edit approved, upload passed the safety check)
-- [ ] More of the EPUB's own CSS (fonts, sizes, borders and floats; alignment, indents, colours and tables are in)
+- [ ] More of the EPUB's own CSS (floats, `@media`, per-side borders; alignment, indents, colours, tables, sizes, boxes and embedded fonts are in)
 - [ ] iOS: run and verify on a device, then a macOS CI runner
 - [ ] OAuth / OIDC login
 - [ ] OPDS feed, so other reading apps can browse the library

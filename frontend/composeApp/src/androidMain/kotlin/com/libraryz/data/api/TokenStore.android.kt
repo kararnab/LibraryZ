@@ -39,3 +39,6 @@ actual fun createTokenStore(): TokenStore {
 
 actual fun createReaderLayoutStore(): TokenStore =
     FileTokenStore(File(AndroidContextHolder.appContext.filesDir, "reader_layouts.json"))
+
+actual fun createReaderPrefsStore(): TokenStore =
+    FileTokenStore(File(AndroidContextHolder.appContext.filesDir, "reader_prefs.json"))

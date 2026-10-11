@@ -3,6 +3,7 @@ package com.libraryz
 import androidx.compose.foundation.layout.Arrangement
 import com.libraryz.data.BookLayouts
 import com.libraryz.data.api.createReaderLayoutStore
+import com.libraryz.data.api.createReaderPrefsStore
 import com.libraryz.ui.screens.VerifyEmailBanner
 import com.libraryz.ui.screens.VerifyEmailScreen
 import com.libraryz.ui.screens.ResetPasswordScreen
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.screens.ReaderPrefs
+import com.libraryz.ui.screens.ReaderPrefsStore
 import com.libraryz.ui.screens.BrowseSkeleton
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.outlined.Settings
@@ -299,6 +301,12 @@ internal fun Root(
     // How flowing text is set, shared by the reader and Settings so it
     // carries from one book to the next.
     var readerPrefs by remember { mutableStateOf(ReaderPrefs()) }
+    val readerPrefsStore = remember { ReaderPrefsStore(::createReaderPrefsStore) }
+    LaunchedEffect(Unit) { readerPrefsStore.load()?.let { readerPrefs = it } }
+    val setReaderPrefs: (ReaderPrefs) -> Unit = { p ->
+        readerPrefs = p
+        scope.launch { readerPrefsStore.save(p) }
+    }
     val readerLayouts = remember { BookLayouts(::createReaderLayoutStore) }
 
     val dismissRec: (String) -> Unit = { workId ->
@@ -714,7 +722,7 @@ internal fun Root(
                     finished = entry?.status == LibraryStatus.Read,
                     rating = entry?.rating,
                     prefs = readerPrefs,
-                    onPrefsChange = { readerPrefs = it },
+                    onPrefsChange = setReaderPrefs,
                     onRate = { stars -> libraryUpsert(s.workId, UpsertLibraryRequest(rating = stars)) },
                     // Progress saves in the background; a failed save just
                     // means the next one carries it.
@@ -858,7 +866,7 @@ internal fun Root(
                         user = auth.user,
                         serverUrl = DefaultBaseUrl,
                         prefs = readerPrefs,
-                        onPrefsChange = { readerPrefs = it },
+                        onPrefsChange = setReaderPrefs,
                         onSignOut = logout,
                         onSignOutEverywhere = logoutEverywhere,
                         onBack = null,

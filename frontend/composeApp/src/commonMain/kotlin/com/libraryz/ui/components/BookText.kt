@@ -21,20 +21,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.LineHeightStyle
@@ -42,6 +48,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.min
@@ -92,11 +101,18 @@ class SizedText(
  * [style] is the reading text's: cells are measured in it.
  */
 @Composable
-fun rememberSizedText(reader: TextReader, maxWidth: Dp, maxHeight: Dp, style: TextStyle, theme: ReadingTheme): SizedText {
+fun rememberSizedText(
+    reader: TextReader,
+    maxWidth: Dp,
+    maxHeight: Dp,
+    style: TextStyle,
+    theme: ReadingTheme,
+    bookFonts: Boolean = true,
+): SizedText {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer(cacheSize = 0)
-    return remember(reader, maxWidth, maxHeight, density, style, theme) {
-        prepare(reader, maxWidth, maxHeight, style, theme, density, measurer)
+    return remember(reader, maxWidth, maxHeight, density, style, theme, bookFonts) {
+        prepare(reader, maxWidth, maxHeight, style, theme, density, measurer, bookFonts)
     }
 }
 
@@ -108,8 +124,9 @@ internal fun prepare(
     theme: ReadingTheme,
     density: Density,
     measurer: TextMeasurer,
+    bookFonts: Boolean = true,
 ): SizedText {
-    val text = themed(reader.text, theme)
+    val text = themed(reader.text, theme, fontSize = style.fontSize, bookFonts = bookFonts)
     if (reader.images.isEmpty() && reader.tables.isEmpty()) return SizedText(text, emptyMap(), emptyList(), null)
     val content = HashMap<String, InlineTextContent>()
     reader.images.forEach { (key, image) ->
@@ -118,7 +135,7 @@ internal fun prepare(
     // Cells start-aligned whatever the page does (a spread justifies), unless the book says otherwise.
     val cellStyle = style.copy(textAlign = TextAlign.Start, lineHeightStyle = MINIMUM)
     reader.tables.forEachIndexed { t, table ->
-        val layout = layoutTable(table, reader, maxWidth, maxHeight, cellStyle, theme, density, measurer)
+        val layout = layoutTable(table, reader, maxWidth, maxHeight, cellStyle, theme, density, measurer, bookFonts)
         layout.rows.forEachIndexed { r, row ->
             val placeholder = with(density) { Placeholder(maxWidth.toSp(), row.height.toSp(), PlaceholderVerticalAlign.Center) }
             content["$t:$r"] = InlineTextContent(placeholder) {
@@ -189,13 +206,16 @@ internal fun layoutTable(
     theme: ReadingTheme,
     density: Density,
     measurer: TextMeasurer,
+    bookFonts: Boolean = true,
 ): TableLayout = with(density) {
     val columns = table.rows.maxOf { row -> row.sumOf { it.span } }
     val available = maxWidth.toPx()
     val pad = CELL_PAD_H.toPx() * 2
     // Cell text made readable on its own cell's colour.
     val fills = table.rows.map { row -> row.map { c -> c.background?.let { highlight(it, theme) } } }
-    val texts = table.rows.mapIndexed { r, row -> row.mapIndexed { i, c -> themed(c.text, theme, fills[r][i] ?: theme.background) } }
+    val texts = table.rows.mapIndexed { r, row ->
+        row.mapIndexed { i, c -> themed(c.text, theme, fills[r][i] ?: theme.background, style.fontSize, bookFonts) }
+    }
 
     fun cellContent(text: AnnotatedString, width: Dp): Map<String, InlineTextContent> =
         text.getStringAnnotations(IMAGE_TAG, 0, text.length).associate { r ->
@@ -283,20 +303,40 @@ private fun TableRowView(row: RowLayout, header: Boolean, bordered: Boolean, sty
 }
 
 /**
- * [text] with the book's colours made readable on [theme]: greys and black
- * (body-text colours) give way to the theme's ink, other text colours keep
- * their hue at a lightness that reads on the background, and highlights are
- * toned to the background so the ink stays readable on them.
+ * [text]'s spans as this screen draws them:
+ * - The book's colours made readable on [theme]: greys and black (body-text
+ *   colours) give way to the theme's ink, other text colours keep their hue
+ *   at a lightness that reads on [background], and highlights are toned so
+ *   the ink stays readable on them.
+ * - Font sizes, which the book gives as factors of the reader's text size
+ *   (em), as absolute sizes against [fontSize], so nesting can't compound
+ *   them (Android multiplies nested relative sizes; Skia doesn't).
+ * - The book's own fonts dropped unless [bookFonts] (monospace stays).
  */
-internal fun themed(text: AnnotatedString, theme: ReadingTheme, background: Color = theme.background): AnnotatedString {
-    if (text.spanStyles.none { it.item.color.isSpecified || it.item.background.isSpecified }) return text
+internal fun themed(
+    text: AnnotatedString,
+    theme: ReadingTheme,
+    background: Color = theme.background,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    bookFonts: Boolean = true,
+): AnnotatedString {
+    fun bookFont(s: SpanStyle) = s.fontFamily != null && s.fontFamily != FontFamily.Monospace
+    if (text.spanStyles.none {
+            it.item.color.isSpecified || it.item.background.isSpecified ||
+                (it.item.fontSize.isEm && fontSize.isSp) || (!bookFonts && bookFont(it.item))
+        }
+    ) {
+        return text
+    }
     return buildAnnotatedString {
         append(AnnotatedString(text.text, paragraphStyles = text.paragraphStyles))
         for (r in text.spanStyles) {
             val s = r.item
             val color = if (s.color.isSpecified) readableInk(s.color, background) else Color.Unspecified
             val highlight = if (s.background.isSpecified) highlight(s.background, theme) ?: Color.Unspecified else Color.Unspecified
-            addStyle(s.copy(color = color, background = highlight), r.start, r.end)
+            val size = if (s.fontSize.isEm && fontSize.isSp) (fontSize.value * s.fontSize.value).sp else s.fontSize
+            val family = if (!bookFonts && bookFont(s)) null else s.fontFamily
+            addStyle(s.copy(color = color, background = highlight, fontSize = size, fontFamily = family), r.start, r.end)
         }
         for (a in text.getStringAnnotations(0, text.length)) addStringAnnotation(a.tag, a.item, a.start, a.end)
     }
@@ -374,25 +414,71 @@ private fun fromHsl(h: Float, s: Float, l: Float): Color {
 }
 
 /**
- * Decodes [image] while any of it is on screen and lets it go once it
- * scrolls away, so a long illustrated book holds only a few bitmaps. A file
- * the platform can't decode leaves its space empty.
+ * Decoded pictures, most recently used last, up to [BUDGET] pixels in all
+ * (about 96 MB), so going back a page shows its pictures at once. Keyed by
+ * picture, plus the drawn size for SVGs, which are rasterized to it. Only
+ * touched from the main thread; decoding itself runs on [Dispatchers.Default].
  */
-@OptIn(ExperimentalResourceApi::class)
+internal object DecodedImages {
+    private const val BUDGET = 24L * 1024 * 1024
+    private val cache = LinkedHashMap<Any, ImageBitmap>()
+    private var pixels = 0L
+
+    private fun key(image: BookImage, width: Int, height: Int): Any = if (image.vector) Triple(image, width, height) else image
+
+    fun peek(image: BookImage, width: Int = 0, height: Int = 0): ImageBitmap? {
+        val k = key(image, width, height)
+        val hit = cache.remove(k) ?: return null
+        cache[k] = hit
+        return hit
+    }
+
+    /** [image] decoded (an SVG drawn at [width] × [height] pixels), or null if it can't be. */
+    suspend fun get(image: BookImage, width: Int = 0, height: Int = 0): ImageBitmap? {
+        peek(image, width, height)?.let { return it }
+        if (image.vector && (width <= 0 || height <= 0)) return null
+        val bitmap = withContext(Dispatchers.Default) {
+            runCatching {
+                if (image.vector) {
+                    rasterizeSvg(image.bytes(), image.width, image.height, width.coerceAtMost(4096), height.coerceAtMost(4096))
+                } else {
+                    @OptIn(ExperimentalResourceApi::class)
+                    image.bytes().decodeToImageBitmap()
+                }
+            }.getOrNull()
+        } ?: return null
+        val k = key(image, width, height)
+        cache.remove(k)?.let { pixels -= it.width.toLong() * it.height }
+        cache[k] = bitmap
+        pixels += bitmap.width.toLong() * bitmap.height
+        while (pixels > BUDGET && cache.size > 1) {
+            val oldest = cache.keys.first()
+            cache.remove(oldest)?.let { pixels -= it.width.toLong() * it.height }
+        }
+        return bitmap
+    }
+}
+
+/**
+ * Decodes [image] once it's within a screen of being shown, so it's usually
+ * ready by the time it scrolls in, and lets go of it once it's that far
+ * away (the [DecodedImages] cache may keep it). A file the platform can't
+ * decode leaves its space empty.
+ */
 @Composable
 private fun BookImageView(image: BookImage) {
-    var visible by remember(image) { mutableStateOf(false) }
-    val bitmap by produceState<ImageBitmap?>(null, image, visible) {
-        value = if (visible) {
-            withContext(Dispatchers.Default) { runCatching { image.bytes().decodeToImageBitmap() }.getOrNull() }
-        } else {
-            null
-        }
+    var near by remember(image) { mutableStateOf(false) }
+    // An SVG is drawn at the size it shows: its box fitted to the placeholder, which may be the column's width.
+    var size by remember(image) { mutableStateOf(IntSize.Zero) }
+    val bitmap by produceState(DecodedImages.peek(image, size.width, size.height), image, near, size) {
+        value = if (near && size != IntSize.Zero) DecodedImages.get(image, size.width, size.height) else null
     }
     Box(
-        Modifier.fillMaxSize().onGloballyPositioned {
-            val bounds = it.boundsInWindow()
-            visible = bounds.width > 0f && bounds.height > 0f
+        Modifier.fillMaxSize().onGloballyPositioned { c ->
+            val screen = c.findRootCoordinates().size.height.toFloat()
+            val top = c.positionInRoot().y
+            near = top < screen * 2 && top + c.size.height > -screen
+            size = if (image.vector) fitted(image, c.size) else c.size
         },
     ) {
         bitmap?.let {
@@ -402,6 +488,59 @@ private fun BookImageView(image: BookImage) {
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+    }
+}
+
+/** [image]'s own proportions, as large as fits in [box]. */
+private fun fitted(image: BookImage, box: IntSize): IntSize {
+    val scale = minOf(box.width.toFloat() / image.width, box.height.toFloat() / image.height)
+    return IntSize((image.width * scale).roundToInt().coerceAtLeast(1), (image.height * scale).roundToInt().coerceAtLeast(1))
+}
+
+/**
+ * Decodes the bitmap pictures in [text]'s [start] until [end] ahead of
+ * time, e.g. the next spread's, so turning to it doesn't wait. SVGs are
+ * drawn at their placeholder's size, so they're left until shown.
+ */
+suspend fun prefetchImages(reader: TextReader, start: Int, end: Int) {
+    if (reader.images.isEmpty() || start >= end) return
+    for (r in reader.text.getStringAnnotations(IMAGE_TAG, start, end)) {
+        val image = reader.images[r.item] ?: continue
+        if (!image.vector) DecodedImages.get(image)
+    }
+}
+
+/**
+ * Draws [reader]'s boxes ([com.libraryz.data.BookBox]) behind the text laid
+ * out in [layout], which shows the reader's text from [from] (a spread page
+ * starts mid-book). A box spans its lines, from its left edge ([emPx] a
+ * em) to a little past the right of the column, its colours toned to [theme]
+ * like the text's.
+ */
+fun Modifier.bookBoxes(reader: TextReader, from: Int, layout: () -> TextLayoutResult?, emPx: Float, theme: ReadingTheme): Modifier {
+    if (reader.boxes.isEmpty()) return this
+    // Outer boxes first, so a box inside another is drawn over it.
+    val boxes = reader.boxes.sortedWith(compareBy({ it.start }, { -it.end }))
+    return drawBehind {
+        val l = layout() ?: return@drawBehind
+        val length = l.layoutInput.text.length
+        val pad = 6.dp.toPx()
+        for (b in boxes) {
+            val start = (b.start - from).coerceAtLeast(0)
+            val end = (b.end - from).coerceAtMost(length)
+            if (end <= start) continue
+            val top = l.getLineTop(l.getLineForOffset(start)) - pad / 2
+            val bottom = l.getLineBottom(l.getLineForOffset(end - 1)) + pad / 2
+            val left = b.left * emPx - pad
+            val right = size.width + pad
+            b.background?.let { highlight(it, theme) }?.let {
+                drawRect(it, Offset(left, top), Size(right - left, bottom - top))
+            }
+            if (b.border) {
+                val line = b.borderColor?.let { readableInk(it, theme.background).takeIf(Color::isSpecified) } ?: theme.muted
+                drawRect(line, Offset(left, top), Size(right - left, bottom - top), style = Stroke(1.dp.toPx()))
+            }
         }
     }
 }

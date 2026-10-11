@@ -68,6 +68,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -85,6 +86,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -132,9 +135,12 @@ import com.libraryz.data.pagesLabel
 import com.libraryz.data.pagesLeftLabel
 import com.libraryz.data.resumePage
 import com.libraryz.theme.LibraryZ
+import com.libraryz.theme.LibraryZTheme
 import com.libraryz.theme.ReadingTheme
 import com.libraryz.ui.LocalFullscreen
 import com.libraryz.ui.components.StarRating
+import com.libraryz.ui.components.bookBoxes
+import com.libraryz.ui.components.prefetchImages
 import com.libraryz.ui.components.rememberSizedText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -162,12 +168,17 @@ enum class ColumnWidth(val label: String, val max: Dp) {
     Wide("Wide", 760.dp),
 }
 
-/** How flowing text is set. Lives above the reader so it carries from book to book. */
+/**
+ * How flowing text is set. Lives above the reader so it carries from book to
+ * book, and is saved on the device ([ReaderPrefsStore]).
+ */
 data class ReaderPrefs(
     val textSize: Int = 18,
     val theme: ReadingTheme = ReadingTheme.Light,
     val spacing: LineSpacing = LineSpacing.Comfortable,
     val width: ColumnWidth = ColumnWidth.Medium,
+    /** Use the fonts an EPUB embeds (its @font-face rules) where it asks for them; off = the reader's serif throughout. */
+    val bookFonts: Boolean = true,
 )
 
 /**
@@ -281,15 +292,19 @@ fun ReaderScreen(
     LaunchedEffect(fullscreen.isOn) { chrome = !fullscreen.isOn }
 
     val end = @Composable {
-        EndCard(
-            title = title,
-            authors = authors,
-            finished = finished,
-            rating = rating,
-            onRate = onRate,
-            onMarkRead = onMarkRead,
-            onBack = onClose,
-        )
+        // On a text book the card sits on the reading theme's page, not the app's, so it follows that.
+        val dark = if (reader is TextReader) prefs.theme == ReadingTheme.Dark else LibraryZ.tokens.dark
+        LibraryZTheme(darkTheme = dark) {
+            EndCard(
+                title = title,
+                authors = authors,
+                finished = finished,
+                rating = rating,
+                onRate = onRate,
+                onMarkRead = onMarkRead,
+                onBack = onClose,
+            )
+        }
     }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -885,6 +900,7 @@ private fun TextReaderLayout(
             layout = layout.takeIf { wide },
             onLayoutChange = onLayoutChange,
             spread = spread,
+            showBookFonts = reader.hasBookFonts,
         )
     }
     Box(Modifier.fillMaxSize().background(theme.background)) {
@@ -1066,6 +1082,7 @@ private fun ReadingSettings(
     layout: PageLayout?,
     onLayoutChange: (PageLayout) -> Unit,
     spread: Boolean,
+    showBookFonts: Boolean,
 ) {
     if (layout != null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1091,6 +1108,22 @@ private fun ReadingSettings(
         }
     }
     TextSizeControl(prefs.textSize, onChange = { onChange(prefs.copy(textSize = it)) })
+    if (showBookFonts) {
+        Row(
+            Modifier.fillMaxWidth().clickable { onChange(prefs.copy(bookFonts = !prefs.bookFonts)) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Book's fonts", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Where this book uses fonts of its own. Off sets everything in the reader's serif.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = prefs.bookFonts, onCheckedChange = { onChange(prefs.copy(bookFonts = it)) })
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Theme", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1264,7 +1297,8 @@ private fun TextView(
             ),
         )
         // Pictures and tables fit the column, pictures most of the screen's height.
-        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme)
+        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts)
+        val emPx = with(density) { prefs.textSize.sp.toPx() }
         Box(
             modifier = Modifier.fillMaxSize().verticalScroll(scroll),
             contentAlignment = Alignment.TopCenter,
@@ -1283,6 +1317,7 @@ private fun TextView(
                     style = style.merge(TextStyle(lineHeightStyle = sized.lineHeightStyle)),
                     inlineContent = sized.inlineContent,
                     onTextLayout = { textLayout = it },
+                    modifier = Modifier.bookBoxes(reader, 0, { textLayout }, emPx, prefs.theme),
                 )
                 end()
             }
@@ -1352,7 +1387,8 @@ private fun TextSpreadView(
             textAlign = TextAlign.Justify,
         )
         // A picture or table row fits a page, a little under so rounding can't push it over.
-        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme)
+        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts)
+        val emPx = with(density) { prefs.textSize.sp.toPx() }
         val text = sized.text
         val style = baseStyle.copy(lineHeightStyle = sized.lineHeightStyle)
         val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -1395,6 +1431,11 @@ private fun TextSpreadView(
         }
         LaunchedEffect(slots, atEnd) {
             onPosition(if (atEnd) last else (startOf(slots.first()).toFloat() / text.length.coerceAtLeast(1) * last).roundToInt())
+        }
+        // The next spread's pictures, decoded while this one is read.
+        LaunchedEffect(slots, layout) {
+            val next = spreads.at(spreads.turn(slots.first(), 1)).filter { it < pageCount }
+            if (next.isNotEmpty() && next != slots) prefetchImages(reader, startOf(next.min()), endOf(next.max()))
         }
 
         Row(
@@ -1461,13 +1502,21 @@ private fun TextSpreadView(
                             color = theme.muted,
                             modifier = Modifier.height(36.dp),
                         )
-                        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+                        // Clipped above and below only, so a box's edge just past the column still shows.
+                        Box(
+                            Modifier.weight(1f).fillMaxWidth().drawWithContent {
+                                clipRect(left = -size.width, right = size.width * 2) { this@drawWithContent.drawContent() }
+                            },
+                        ) {
+                            var pageLayout by remember(p, text) { mutableStateOf<TextLayoutResult?>(null) }
                             // Same width as the measured column, so lines break where they did there.
                             Text(
                                 text.subSequence(startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
                                 style = style,
                                 inlineContent = sized.inlineContent,
-                                modifier = Modifier.requiredWidth(with(density) { columnPx.toDp() }),
+                                onTextLayout = { pageLayout = it },
+                                modifier = Modifier.requiredWidth(with(density) { columnPx.toDp() })
+                                    .bookBoxes(reader, startOf(p), { pageLayout }, emPx, theme),
                             )
                         }
                         val footEnd = if (left) {
