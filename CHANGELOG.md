@@ -37,6 +37,10 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   addresses (localhost, emulator, LAN) keeps you signed in; switching to or
   from a public server signs you out first. Debug Android builds allow
   plain http to any host.
+- **Load test** (`scripts/load/`, [docs/load-testing.md](docs/load-testing.md)):
+  k6 against a separate, CPU-pinned compose stack. On one core the API
+  keeps up with 400 requests/s at a p95 of 11 ms; the README's Raspberry Pi
+  section is now "How big a server do you need?" with these numbers.
 
 ### Changed
 - **Readable errors.** Screens and snackbars no longer show raw

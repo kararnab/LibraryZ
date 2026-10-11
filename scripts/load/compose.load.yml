@@ -1,0 +1,42 @@
+# Load-test overlay for docker-compose.yml (see docs/load-testing.md).
+#
+#   docker compose -p libraryz-load -f docker-compose.yml \
+#     -f scripts/load/compose.load.yml up -d
+#
+# A separate project (-p) gets its own network and volumes, so the dev stack
+# and its demo data are untouched. Nothing is published to the host: k6 joins
+# the project network and calls the API instances directly, past Kong, whose
+# per-IP limits would otherwise cap the test (every k6 request comes from one
+# address).
+#
+# Every server container is pinned to the same CPUs (LOAD_CPUSET), so they
+# compete for them as they would on a small machine with that many cores.
+
+x-pinned: &pinned
+  cpuset: "${LOAD_CPUSET:-8-9}"
+
+services:
+  postgres:
+    <<: *pinned
+    ports: !reset []
+  pgbouncer:
+    <<: *pinned
+  redis:
+    <<: *pinned
+  rustfs:
+    <<: *pinned
+    ports: !reset []
+  mailpit:
+    ports: !reset []
+  kong:
+    # Pinned too: it runs on the same box. nginx sizes its worker pool from
+    # the host's CPU count, not the pinned set (20 workers idled at 1.3 GB
+    # here), so match it to the cores being emulated.
+    <<: *pinned
+    environment:
+      KONG_NGINX_WORKER_PROCESSES: "${LOAD_CORES:-2}"
+    ports: !reset []
+  libraryz-1:
+    <<: *pinned
+  libraryz-2:
+    <<: *pinned

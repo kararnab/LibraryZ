@@ -160,15 +160,38 @@ curl -s localhost:8080/ready
 # {"status":"ready","checks":{"database":"ok","storage":"ok"}}
 ```
 
-### Will it run on a Raspberry Pi?
+### How big a server do you need?
 
-It should: the server builds as a single static Go binary, and every
-image in `docker-compose.yml` is published for 64-bit ARM. We haven't
-tested it on one yet, so please
-[tell us](https://github.com/kararnab/libraryZ/issues) how it goes. On a
-small board you probably want 4 GB of RAM or more, and to lower
-`LIBRARYZ_PDF_SANITIZE_CONCURRENCY` and `LIBRARYZ_PDF_SANITIZE_MEMORY_MB`:
-each PDF safety check may use up to 1 GB, and two can run at once.
+Smaller than you'd think. With the whole stack limited to a few CPU cores
+of a desktop, we measured
+([method and full results](docs/load-testing.md)):
+
+| Cores | Reading traffic it keeps up with | Sign-ins / s | Idle memory |
+|---:|---|---:|---:|
+| 1 | 400 requests/s, p95 11 ms | 40 | ~320 MB |
+| 2 | 800 requests/s, p95 16 ms | 80 | ~385 MB |
+| 4 | 1,400 requests/s, p95 19 ms | 160 | ~505 MB |
+
+A reader's app sends about two requests a minute, so even one core keeps
+thousands of people reading at once. For a small group, other things run
+out first:
+
+- **Memory for PDF uploads.** Each PDF is safety-checked in a process
+  allowed up to 1 GB, two at a time. **4 GB of RAM is comfortable**; on
+  1–2 GB, set `LIBRARYZ_PDF_SANITIZE_CONCURRENCY=1` and
+  `LIBRARYZ_PDF_SANITIZE_MEMORY_MB=512`.
+- **Kong's per-IP limit: 60 requests a minute per address.** Everyone behind
+  one public IP (a school or office network) shares it, so about 30 people
+  reading at once use it up. Raise the `minute` limits in
+  [deploy/kong/kong.yml](deploy/kong/kong.yml) for such a group.
+- **Your upload bandwidth.** Books are downloaded through the server.
+
+**Raspberry Pi:** the server is a single static Go binary, and every image
+in `docker-compose.yml` is published for 64-bit ARM. We haven't run it on a
+Pi yet. A Pi core is slower than the cores measured above, but even a third
+of the 1-core figure is far more than a small group needs. Please
+[tell us](https://github.com/kararnab/libraryZ/issues) how it goes.
+`scripts/load/run.sh` measures your own machine.
 
 ## How it works
 
