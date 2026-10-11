@@ -123,8 +123,11 @@ go test -tags=eval ./internal/recommendation/...       # offline MF eval
 cd frontend && ./gradlew :composeApp:allTests
 ```
 
-CI runs the default Go suite and a Compose Multiplatform compile sweep on
-every PR — see [.github/workflows/ci.yml](.github/workflows/ci.yml).
+CI runs the Go suites (sqlite and Postgres) when backend code changes
+(`go.mod`, `cmd/`, `internal/`, `pkg/`, `openapi/`), and the Compose
+Multiplatform compile sweep and tests when `frontend/` changes. A
+docs-only change runs neither; editing the workflow runs everything. See
+[.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 ## Commit + PR style
 
