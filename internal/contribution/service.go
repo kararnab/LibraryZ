@@ -286,7 +286,8 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Contribution, error
 // Approve applies the contribution's whitelisted patch fields to the
 // target Work and marks the contribution approved. Returns
 // ErrAlreadyDecided if the contribution isn't pending — including when
-// another moderator decides it concurrently (see transition).
+// another moderator decides it concurrently (see transition) — and
+// ErrWorkNotFound if the work was removed since (it then stays pending).
 func (s *Service) Approve(ctx context.Context, id uuid.UUID, reviewerID uint) (*Contribution, error) {
 	return s.decide(ctx, id, reviewerID, StatusApproved, func(tx *gorm.DB, c *Contribution) error {
 		var patch map[string]any
@@ -307,7 +308,16 @@ func (s *Service) Approve(ctx context.Context, id uuid.UUID, reviewerID uint) (*
 			return nil
 		}
 		updates["updated_at"] = time.Now()
-		return tx.Table("works").Where("id = ? AND deleted_at IS NULL", c.WorkID).Updates(updates).Error
+		res := tx.Table("works").Where("id = ? AND deleted_at IS NULL", c.WorkID).Updates(updates)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			// Taken down since it was suggested: nothing to apply. Rolls the
+			// approval back, so the suggestion stays pending for a reject.
+			return ErrWorkNotFound
+		}
+		return nil
 	})
 }
 

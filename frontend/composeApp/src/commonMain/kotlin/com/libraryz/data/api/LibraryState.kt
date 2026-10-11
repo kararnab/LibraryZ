@@ -109,7 +109,10 @@ class LibraryState(
                 observe(it)
                 cache[it.workId] = withPending(it.workId, it)
             }
-            items = loaded.map { cache[it.workId] ?: it } + pendingNew(status, loaded)
+            // As this device has it: queued removals stay out, and a queued
+            // status change can move an entry off this tab.
+            items = loaded.mapNotNull { cache[it.workId] }.filter { status == null || it.status == status } +
+                pendingNew(status, loaded)
             offline = false
             save()
         } catch (e: Throwable) {

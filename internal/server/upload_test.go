@@ -143,6 +143,27 @@ func TestUploadQuotaCheckAgreesWithUpload(t *testing.T) {
 	}
 }
 
+// The quota counts a file by the size the uploader sent, as GET
+// /me/upload-quota does: a sanitized PDF is stored a little bigger, and that
+// mustn't turn a "fits" into a 429.
+func TestUploadQuotaCountsPDFAsUploaded(t *testing.T) {
+	pdf := buildTestPDF(t)
+	deps, _ := newTestDeps(t)
+	deps.UploadQuota = catalog.UploadQuota{
+		Window:        24 * time.Hour,
+		Standard:      catalog.QuotaLimit{Files: 10, Bytes: 1 << 30},
+		NewAccount:    catalog.QuotaLimit{Files: 10, Bytes: int64(len(pdf))},
+		NewAccountAge: 7 * 24 * time.Hour,
+	}
+	ts := newServer(t, deps)
+	auth := signupLogin(t, ts.URL, "quota-pdf@b.com")
+	_, w := postWork(t, ts.URL, auth, map[string]any{"title": "Quota PDF"})
+
+	if resp := uploadEdition(t, ts.URL, auth, w["id"].(string), "pdf", "en", pdf); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PDF the size of the allowance: want 201, got %d %s", resp.StatusCode, readBody(resp))
+	}
+}
+
 // The per-account quota: GET /me/upload-quota reports it, an upload past it
 // is a 429 with Retry-After, and a moderator isn't limited.
 func TestUploadQuota(t *testing.T) {

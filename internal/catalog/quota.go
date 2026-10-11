@@ -91,7 +91,7 @@ func (s *Service) UploadQuotaStatus(ctx context.Context, userID uint) (QuotaStat
 // CheckUploadQuota returns a *QuotaExceededError if an upload of size bytes
 // (0 if unknown) would not fit in userID's quota right now. It's the cheap
 // check made before reading an upload's body; AddEdition re-checks with the
-// stored size when it records the edition.
+// uploaded size when it records the edition.
 func (s *Service) CheckUploadQuota(ctx context.Context, userID uint, size int64) error {
 	st, err := s.UploadQuotaStatus(ctx, userID)
 	if err != nil {

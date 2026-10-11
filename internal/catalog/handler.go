@@ -171,7 +171,7 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 	// little as possible. ContentLength includes the multipart framing
 	// (boundaries, part headers, the form fields), so take an allowance for
 	// it off: otherwise a file GET /me/upload-quota said fits could be
-	// refused here. AddEdition makes the exact check with the stored size.
+	// refused here. AddEdition makes the exact check with the file's size.
 	if err := h.service.CheckUploadQuota(r.Context(), userID, max(r.ContentLength-multipartOverhead, 0)); err != nil {
 		if !writeQuotaExceeded(w, err) {
 			httpx.ServerError(w, r, "upload quota", err)
@@ -251,7 +251,7 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clean.Close()
 
-	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, sourceSHA, clean)
+	ed, err := h.service.AddEdition(r.Context(), workID, format, language, userID, sourceSHA, header.Size, clean)
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "work not found", http.StatusNotFound)
 		return

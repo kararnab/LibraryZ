@@ -893,7 +893,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Contribution is not pending
+          description: Contribution is not pending, or its work was removed since (it stays pending; reject it)
           content:
             text/plain:
               schema: { type: string }

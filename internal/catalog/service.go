@@ -93,12 +93,13 @@ func (s *Service) GetEdition(ctx context.Context, id uuid.UUID) (*Edition, error
 
 // AddEdition streams r (the sanitized bytes) into storage, then records the
 // edition. sourceSHA is the sha256 of the bytes as uploaded, before
-// sanitization ("" if unknown). If either the uploaded bytes or the stored
-// bytes match an existing edition on any work, it returns a
-// *DuplicateEditionError carrying that edition and records nothing. An
-// upload that no longer fits uploadedBy's quota (see UploadQuota) gets a
-// *QuotaExceededError; its blob is left for CollectGarbage.
-func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, sourceSHA string, r io.Reader) (*Edition, error) {
+// sanitization ("" if unknown), and sourceSize their size (0 if unknown).
+// If either the uploaded bytes or the stored bytes match an existing
+// edition on any work, it returns a *DuplicateEditionError carrying that
+// edition and records nothing. An upload that no longer fits uploadedBy's
+// quota (see UploadQuota) gets a *QuotaExceededError; its blob is left for
+// CollectGarbage.
+func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, language string, uploadedBy uint, sourceSHA string, sourceSize int64, r io.Reader) (*Edition, error) {
 	if _, err := s.GetWork(ctx, workID); err != nil {
 		return nil, err
 	}
@@ -139,9 +140,11 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		UploadedByUserID: uploadedBy,
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// The quota was checked before the body was read; check again with
-		// the stored size, the user's row locked, so parallel uploads can't
-		// all slip under it.
+		// The quota was checked before the body was read; check again, the
+		// user's row locked, so parallel uploads can't all slip under it.
+		// The file counts at the size it was sent, as GET /me/upload-quota
+		// was asked: a sanitized PDF is stored a few bytes bigger, and that
+		// mustn't turn its "fits" into a 429.
 		if err := lockUser(tx, uploadedBy); err != nil {
 			return err
 		}
@@ -150,7 +153,11 @@ func (s *Service) AddEdition(ctx context.Context, workID uuid.UUID, format, lang
 		if err != nil {
 			return err
 		}
-		if err := st.Admit(obj.Size); err != nil {
+		size := sourceSize
+		if size <= 0 {
+			size = obj.Size
+		}
+		if err := st.Admit(size); err != nil {
 			return err
 		}
 		ed.CreatedAt = now

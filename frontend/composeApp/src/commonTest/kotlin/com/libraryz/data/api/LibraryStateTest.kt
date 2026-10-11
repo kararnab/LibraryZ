@@ -460,6 +460,35 @@ class LibraryQueueTest {
     }
 
     @Test
+    fun theListShowsChangesStillWaitingToBeSent() = runTest {
+        val disk = Memory()
+        // The server lists both books but can't take changes right now.
+        val engine = MockEngine { req ->
+            when (req.method) {
+                HttpMethod.Get -> {
+                    val (s, b, h) = jsonBody("[${entryJson("w1", "want")},${entryJson("w2", "want")}]")
+                    respond(b, s, h)
+                }
+                else -> respondError(HttpStatusCode.ServiceUnavailable, "busy")
+            }
+        }
+        val state = LibraryState(ApiClient(BASE, tokenProvider = { "t" }, engine = engine), storeFactory = { disk }, server = BASE)
+        state.signedInAs(1)
+        state.refresh()
+        state.remove("w1")
+        state.upsert("w2", UpsertLibraryRequest(status = "read"))
+        assertEquals(2, state.pending.size)
+
+        state.refresh()
+        assertEquals(listOf("w2"), state.items?.map { it.workId }, "w1 is waiting to be removed")
+        assertEquals("read", state.items?.single()?.status)
+
+        // The "Want" tab: w2 is "read" on this device now.
+        state.refresh("want")
+        assertEquals(emptyList(), state.items?.map { it.workId })
+    }
+
+    @Test
     fun newerProgressFromAnotherDeviceIsOfferedNotJumpedTo() = runTest {
         val disk = Memory()
         var page = 0
