@@ -38,6 +38,11 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 - The compose service `libraryz` is now `libraryz-1` and `libraryz-2`
   (e.g. `docker compose logs libraryz-1`).
 
+### Fixed
+- Two-page text no longer clips a table at the foot of a page: rows that
+  should have started the next page were taken for blank lines, drawn cut
+  off at the bottom of the page before, and the rows after them never shown.
+
 ## [0.1.0] - 2026-10-11
 
 The first tagged release: the public-launch baseline. Everything from the
