@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -52,6 +53,10 @@ func (h *Handler) SearchWorks(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
 		http.Error(w, "q is required", http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(q) > MaxQueryRunes {
+		http.Error(w, fmt.Sprintf("q must be at most %d characters", MaxQueryRunes), http.StatusBadRequest)
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -198,6 +203,10 @@ func (h *Handler) UploadEdition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	language := r.FormValue("language")
+	if err := CheckWorkField("language", language); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {

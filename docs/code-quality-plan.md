@@ -158,7 +158,7 @@ to see the count", or keep only the date line.
 
 - [x] 1. Explicit in-flight write
 - [x] 2. Shared merge cases + notes parity
-- [ ] 3. Validation audit
+- [x] 3. Validation audit
 - [ ] 4. Cancellation hygiene
 - [ ] 5. File splits
 - [ ] 6. CLAUDE.md upkeep

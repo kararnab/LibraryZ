@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/mux"
 	"github.com/kararnab/iam/v2"
@@ -42,6 +43,14 @@ var (
 	errMsgWeakPassword = fmt.Sprintf("password must be at least %d characters", PasswordPolicy.MinLength)
 	errMsgLongPassword = "password is too long"
 	errMsgEmailExists  = "email already registered"
+	errMsgLongName     = fmt.Sprintf("name must be at most %d characters", MaxNameRunes)
+)
+
+// MaxNameRunes bounds the sign-up name; MaxEmailBytes is the longest
+// address SMTP carries (RFC 5321's 256-octet path less the brackets).
+const (
+	MaxNameRunes  = 200
+	MaxEmailBytes = 254
 )
 
 type credentials struct {
@@ -69,6 +78,10 @@ func (h *Handler) SignUp(w http.ResponseWriter, r *http.Request) {
 	email := password.NormalizeLogin(c.Email)
 	if !validEmail(email) {
 		http.Error(w, errMsgInvalidEmail, http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(c.Name)) > MaxNameRunes {
+		http.Error(w, errMsgLongName, http.StatusBadRequest)
 		return
 	}
 
@@ -341,7 +354,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 // with text on both sides, no spaces) — not RFC 5322. Real deliverability is
 // proven by a confirmation email, which is out of scope here.
 func validEmail(email string) bool {
-	if email == "" || strings.ContainsAny(email, " \t\r\n") {
+	if email == "" || len(email) > MaxEmailBytes || strings.ContainsAny(email, " \t\r\n") {
 		return false
 	}
 	at := strings.IndexByte(email, '@')

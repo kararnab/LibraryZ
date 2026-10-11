@@ -3,7 +3,9 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/kararnab/libraryZ/internal/catalog"
@@ -17,6 +19,17 @@ var (
 	ErrInvalidStatus   = errors.New("invalid status")
 	ErrInvalidRating   = errors.New("invalid rating")
 	ErrInvalidProgress = errors.New("invalid progress percent")
+	ErrNotesTooLong    = fmt.Errorf("notes must be at most %d characters", MaxNotesRunes)
+	ErrShelfTooLong    = fmt.Errorf("shelf must be at most %d characters", MaxShelfRunes)
+	ErrInvalidPages    = fmt.Errorf("pages must be between 0 and %d", MaxPages)
+)
+
+// Bounds on an entry's free-form fields. Generous: they stop abuse, not
+// readers (notes match a work's description).
+const (
+	MaxNotesRunes = 20000
+	MaxShelfRunes = 100
+	MaxPages      = 1_000_000
 )
 
 type Service struct {
@@ -72,6 +85,21 @@ func (r UpsertRequest) validate() error {
 	}
 	if r.Rating != nil && (*r.Rating < 1 || *r.Rating > 5) {
 		return ErrInvalidRating
+	}
+	for _, p := range []*int{r.CurrentPage, r.TotalPages} {
+		if p != nil && (*p < 0 || *p > MaxPages) {
+			return ErrInvalidPages
+		}
+	}
+	if r.Notes != nil && utf8.RuneCountInString(*r.Notes) > MaxNotesRunes {
+		return ErrNotesTooLong
+	}
+	if r.Shelf != nil && utf8.RuneCountInString(*r.Shelf) > MaxShelfRunes {
+		return ErrShelfTooLong
+	}
+	// Only ever compared, but stored nowhere else to bound it.
+	if r.NotesBase != nil && *r.NotesBase != "" && !stampRe.MatchString(*r.NotesBase) {
+		return ErrInvalidStamp
 	}
 	return nil
 }

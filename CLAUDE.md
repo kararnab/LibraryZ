@@ -121,7 +121,7 @@ Then any of:
           :composeApp:compileKotlinWasmJs \
           :composeApp:compileKotlinIosSimulatorArm64
 
-# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (229 each;
+# Tests: desktopTest + testAndroidHostTest + wasmJsBrowserTest (230 each;
 # desktop also has DesktopLinksTest, InflateJvmTest, EpubImagesTest, EmbeddedFontsTest, SavedBooksJvmTest and the opt-in ScreenshotsTest).
 # wasm needs a headless Chrome; on Ubuntu point CHROME_BIN at a wrapper
 # that adds --no-sandbox (the AppArmor userns restriction crashes Karma's).
@@ -225,7 +225,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 165 backend + 229 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 169 backend + 230 frontend
   tests** (+1 with `-tags=eval`, +19 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.
@@ -493,6 +493,14 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   (`androidApp/src/debug/res/xml/network_security_config.xml`); release
   keeps `src/main`'s list (`10.0.2.2`, `localhost`, `127.0.0.1`,
   `192.168.29.234`).
+- **Every request field has a bound (400 past it).** The rules sit next to
+  each model: `catalog.CheckWorkField` / `MaxFieldRunes` (works, edit
+  suggestions, upload `language`), `catalog.MaxQueryRunes` (search),
+  `library.Max{Notes,Shelf}Runes` / `MaxPages` (`UpsertRequest.validate`),
+  `auth.MaxNameRunes` / `MaxEmailBytes` (sign-up). The app mirrors the ones a
+  reader types in `data/Limits.kt` and caps those fields: a queued library
+  change the server refuses is dropped. New fields get a bound and a 400
+  test (`internal/server/limits_test.go`).
 - **Errors shown to readers go through `describeError` / `api.describe(e)`**
   (`data/api/Errors.kt`), never `e.message`: engine text carries URLs and
   timeouts. No answer (`isUnreachable`: an `IOException` in the cause chain,
