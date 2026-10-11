@@ -1,5 +1,6 @@
 package com.libraryz.data
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.AnnotatedString
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,8 @@ class TextReader(
     val chapters: List<Chapter>,
     /** The pictures in [text], by the key of their [IMAGE_TAG] annotation. */
     val images: Map<String, BookImage> = emptyMap(),
+    /** The tables in [text]; each row is one [TABLE_TAG] placeholder (see [BookTable]). */
+    val tables: List<BookTable> = emptyList(),
 ) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
@@ -71,7 +74,20 @@ class BookImage(
     fun bytes(): ByteArray = load()
 }
 
+/**
+ * A table in a [TextReader]'s text, drawn as a grid. Each row is one
+ * [IMAGE_CHAR] on a line of its own, annotated with [TABLE_TAG] =
+ * "<table index>:<row index>" and marked as inline content under the same
+ * key, so a long table breaks between rows across pages. The screen sizes
+ * the columns and rows for the column it has.
+ */
+class BookTable(val rows: List<List<BookCell>>, val bordered: Boolean)
+
+/** One cell: its text (styled like the book's, pictures included), spanning [span] columns. */
+class BookCell(val text: AnnotatedString, val header: Boolean, val span: Int, val background: Color?)
+
 const val IMAGE_TAG = "libraryz.image"
+const val TABLE_TAG = "libraryz.table"
 const val IMAGE_CHAR = "\uFFFC"
 
 class UnsupportedFormatException(format: String) :
@@ -98,7 +114,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables) }
         }
         else -> throw UnsupportedFormatException(format)
     }
