@@ -103,11 +103,13 @@ fun parseEpub(bytes: ByteArray): EpubBook {
                 BookImage(w, h, alt.collapseWhitespace(), block, vector = raster == null) { zip.read(entry) }
             }
         })
+        val documents = ArrayList<String>()
         for (id in spine) {
             val item = items[id] ?: continue
             if (!item.isDocument) continue
             val xhtml = zip.readText(item.path) ?: continue
             book.addDocument(item.path, xhtml)
+            documents += item.path
         }
         val text = book.build()
         if (text.text.isBlank()) throw EpubException("This EPUB has nothing this reader can show.")
@@ -116,11 +118,30 @@ fun parseEpub(bytes: ByteArray): EpubBook {
             .mapNotNull { e -> book.offsetOf(e.path, e.fragment)?.let { Chapter(it, e.title, e.depth) } }
             .distinct()
             .sortedBy { it.offset }
-        return EpubBook(text, toc.ifEmpty { book.headings }, images.filterValues { it != null }.mapValues { it.value!! }, book.tables, book.boxes)
+        val listed = toc.ifEmpty { book.headings }
+        val chapters = (listed + unlistedChapters(text.text, documents.mapNotNull { book.offsetOf(it, "") }, listed))
+            .sortedBy { it.offset }
+        return EpubBook(text, chapters, images.filterValues { it != null }.mapValues { it.value!! }, book.tables, book.boxes)
     } catch (e: ZipException) {
         throw EpubException("This EPUB is damaged (${e.message}).")
     }
 }
+
+/**
+ * Chapters the book's table of contents leaves out: a spine document that
+ * opens with a chapter heading ("CHAPTER II") no listed chapter starts at.
+ * Some converters (Project Gutenberg's, for one) list only the front and
+ * back matter, so without these a whole novel reads as its "List of the
+ * Plates" in the running head and the Contents sheet.
+ */
+internal fun unlistedChapters(text: String, documentStarts: List<Int>, listed: List<Chapter>): List<Chapter> =
+    documentStarts.distinct().mapNotNull { start ->
+        // The document's first line of text.
+        val lineStart = (start until text.length).firstOrNull { !text[it].isWhitespace() } ?: return@mapNotNull null
+        val lineEnd = text.indexOf('\n', lineStart).let { if (it < 0) text.length else it }
+        val title = chapterHeading(text.substring(lineStart, lineEnd)) ?: return@mapNotNull null
+        if (listed.any { it.offset in start..lineEnd }) null else Chapter(lineStart, title)
+    }
 
 /** A stylesheet's rules and its `@font-face`s (font paths resolved in the archive). */
 private class ParsedSheet(val rules: List<CssRule>, val faces: List<ResolvedFace>)

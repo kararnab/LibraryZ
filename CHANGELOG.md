@@ -44,6 +44,11 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
   drawn cut off at the bottom of the page before, and the rows after them
   never shown; and a row taller than its line (a plate beside its caption)
   could run past the foot, or push the page's last line past it.
+- EPUB chapters the book's table of contents leaves out are found from
+  documents that open with a chapter heading ("CHAPTER II"), so the running
+  head, "pages left in chapter" and the Contents sheet follow the story in
+  books (like Project Gutenberg's) whose contents list only front and back
+  matter.
 
 ## [0.1.0] - 2026-10-11
 

@@ -67,6 +67,48 @@ class EpubTest {
     }
 
     @Test
+    fun addsChaptersTheContentsLeaveOut() {
+        // Like Project Gutenberg's Alice: the nav lists front and back matter
+        // only, and each chapter's document opens with "CHAPTER n".
+        val nav = """<html><body><nav epub:type="toc"><ol>
+            <li><a href="front.xhtml#plates">List of the Plates</a></li>
+            <li><a href="end.xhtml#end">The End</a></li>
+            </ol></nav></body></html>"""
+        fun doc(body: String) = "<html><body>$body</body></html>"
+        val book = parseEpub(
+            epub(
+                opf(
+                    item("nav", "nav.xhtml", props = "nav") + item("f", "front.xhtml") + item("c1", "one.xhtml") +
+                        item("c2", "two.xhtml") + item("split", "two-b.xhtml") + item("e", "end.xhtml"),
+                    """<itemref idref="f"/><itemref idref="c1"/><itemref idref="c2"/><itemref idref="split"/><itemref idref="e"/>""",
+                ),
+                "book/nav.xhtml" to nav,
+                "book/front.xhtml" to doc("""<h2 id="plates">List of the Plates</h2><p>Alice</p>"""),
+                "book/one.xhtml" to doc("""<div class="chapter">CHAPTER I</div><p>Down the rabbit-hole.</p>"""),
+                "book/two.xhtml" to doc("""<div class="chapter">Chapter II.</div><p>Curiouser and curiouser.</p>"""),
+                // A chapter split across documents: its second half isn't a chapter.
+                "book/two-b.xhtml" to doc("<p>Chapter two, continued, goes on and on about the pool of tears.</p>"),
+                "book/end.xhtml" to doc("""<p>CHAPTER XII</p><p>Alice's evidence.</p><p id="end">THE END</p>"""),
+            ),
+        )
+        val text = book.text.text
+        assertEquals(
+            listOf("List of the Plates", "CHAPTER I", "Chapter II", "CHAPTER XII", "The End"),
+            book.chapters.map { it.title },
+        )
+        assertEquals(text.indexOf("CHAPTER I"), book.chapters[1].offset)
+        assertEquals(text.indexOf("CHAPTER XII"), book.chapters[3].offset)
+    }
+
+    @Test
+    fun doesNotRepeatChaptersTheContentsList() {
+        val listed = listOf(Chapter(0, "Chapter One"))
+        val text = "CHAPTER I\nIt begins."
+        assertEquals(emptyList(), unlistedChapters(text, listOf(0), listed))
+        assertEquals(listOf(Chapter(0, "CHAPTER I")), unlistedChapters(text, listOf(0), emptyList()))
+    }
+
+    @Test
     fun keepsInlineStylesAndCentersHeadings() {
         val book = parseEpub(FIXTURE)
         val text = book.text
