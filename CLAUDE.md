@@ -63,9 +63,16 @@ DATABASE_URL='postgres://user:password@localhost:5432/libraryz?sslmode=disable' 
 go test -tags=eval ./internal/recommendation/...
 
 # Run the whole backend stack (Postgres + API) in one command:
-docker compose up --build          # API on :8080, Postgres on :5432
+docker compose up --build          # API (2 instances behind Kong) on :8080, Postgres on :5432
 # The frontend is a client, not a service — run it on the host (see below)
 # pointed at http://localhost:8080. Storage lives in the `blobs` volume.
+
+# Replace the API instances one at a time (builds first; --no-build to skip):
+scripts/rolling-deploy.sh
+# The services are libraryz-1 / libraryz-2 (one `x-libraryz` template), e.g.
+#   docker compose logs -f libraryz-1
+# Kong bind-mounts deploy/kong/kong.yml from the working tree: switching to a
+# branch with different targets changes what a restarted Kong routes to.
 
 # Or, backend on the host against just a Postgres container:
 docker run -d --name libraryz-pg \
@@ -213,7 +220,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Phase 4 content+popularity logic retained as the cold-start fallback;
   `GET /me/recommendations`, `POST`/`DELETE /me/recommendations/{id}/dismiss` (dismiss / undo), and a
   "For You" screen + nav entry. Tests use commonTest via Ktor `MockEngine` +
-  `FakeTokenStore`. **As of 2026-10-11: 152 backend + 187 frontend
+  `FakeTokenStore`. **As of 2026-10-11: 153 backend + 187 frontend
   tests** (+1 with `-tags=eval`, +17 with `-tags=postgres`, which CI runs
   against a Postgres service container). See [PLAN.md](PLAN.md) for the
   endpoint surface.

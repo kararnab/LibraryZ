@@ -100,6 +100,11 @@ type Config struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
+	// DrainDelay is how long the server keeps serving after SIGTERM with
+	// GET /ready answering 503, so a load balancer stops sending it requests
+	// before it stops accepting them. Set it above the LB's time to notice
+	// (Kong: unhealthy after 2 failed checks 5s apart). 0 = shut down at once.
+	DrainDelay time.Duration
 	// DB connection pool. MaxOpenConns must be sized so
 	// instances × MaxOpenConns < Postgres max_connections (default 100) —
 	// see PLAN.md Phase 6.1. MaxIdleConns is clamped to MaxOpenConns in db.
@@ -160,6 +165,7 @@ func Load() *Config {
 		WriteTimeout:             getDurationEnv("LIBRARYZ_WRITE_TIMEOUT", 60*time.Second),
 		IdleTimeout:              getDurationEnv("LIBRARYZ_IDLE_TIMEOUT", 120*time.Second),
 		ShutdownTimeout:          getDurationEnv("LIBRARYZ_SHUTDOWN_TIMEOUT", 20*time.Second),
+		DrainDelay:               getDurationEnv("LIBRARYZ_DRAIN_DELAY", 0),
 		PDFSanitizeMemoryMB:      getIntEnv("LIBRARYZ_PDF_SANITIZE_MEMORY_MB", 1024),
 		PDFSanitizeTimeout:       getDurationEnv("LIBRARYZ_PDF_SANITIZE_TIMEOUT", 2*time.Minute),
 		PDFSanitizeConcurrency:   getIntEnv("LIBRARYZ_PDF_SANITIZE_CONCURRENCY", 2),

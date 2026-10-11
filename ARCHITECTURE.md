@@ -421,6 +421,42 @@ A few non-obvious decisions worth knowing before you contribute:
   This is fine; the actuals are type-checked when someone builds on a
   Mac.
 
+## Running more than one instance
+
+The API holds no state of its own between requests, so instances are
+interchangeable:
+
+- **Shared state** lives in Postgres (sessions, quotas, the recommendation
+  model, email caps), Redis (login throttling, Kong's rate-limit counters)
+  and S3 (files). Nothing is cached in a process that another one needs.
+- **Background jobs** run in every instance but take a lock first:
+  migrations a session advisory lock (over a direct connection, since
+  pgbouncer's transaction pooling can't hold one), recommendation training
+  and blob GC `pg_try_advisory_xact_lock` (`internal/runlock`), and the
+  session purge is an idempotent delete.
+- **Kong** (`deploy/kong/kong.yml`) round-robins over the targets, takes one
+  out on failed `/ready` checks (active) or on connection failures and
+  timeouts from real traffic (passive), and retries a refused connection on
+  the next target. Only connection errors are retried, so a write is never
+  sent twice.
+- **Leaving rotation.** On SIGTERM an instance makes `/ready` answer 503
+  `draining` while it keeps serving for `LIBRARYZ_DRAIN_DELAY`, then stops
+  accepting and gives in-flight requests up to `LIBRARYZ_SHUTDOWN_TIMEOUT`.
+  Kong has stopped sending it requests by the time its listener closes.
+  compose's `stop_grace_period` (45s) covers both, and `restart:
+  unless-stopped` brings back an instance that crashed.
+- **Rolling deploys** (`scripts/rolling-deploy.sh`) replace one instance at a
+  time and wait for Kong, not just Docker, to report the new one healthy
+  before touching the next. A schema migration runs on the first new
+  instance while the old one still serves, so migrations must stay
+  compatible with the previous release (expand, then contract).
+
+Measured on the compose stack (2026-10-11), with ~25 requests/s through Kong
+(a quarter of them authenticated writes): a rolling deploy dropped 0 of 3,728
+requests, a `SIGKILL` of one instance 0 of 1,044. On one machine this is
+deploy and crash resilience, not machine-level HA: Postgres, Redis and S3
+are still single.
+
 ## What we deliberately didn't build
 
 In the spirit of being honest about the design space:

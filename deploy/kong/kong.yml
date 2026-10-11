@@ -3,8 +3,8 @@ _transform: true
 
 # Declarative config for Kong's DB-less mode (PLAN.md Slice 6.2). Kong is the
 # edge gateway: all client traffic enters here, gets rate-limited / size-checked,
-# and is proxied to the libraryz service on the compose network. The libraryz
-# container is no longer exposed on the host.
+# and is proxied to the libraryz replicas on the compose network. They aren't
+# exposed on the host.
 #
 # Rate-limit policy is `redis` so counters are shared across libraryz instances
 # (a `local` policy would reset per replica). All limits here are per-IP. Per-
@@ -16,20 +16,27 @@ _transform: true
 # request-size-limiting config overrides the service-wide 5 MB ceiling, and
 # per-route rate limits override the service-wide 60/min fallback.
 
-# The upstream lets Kong load-balance across libraryz replicas and eject any
-# replica whose /ready probe fails (DB or blob storage unreachable) until it
-# recovers. Add one target per replica.
+# The upstream load-balances across the libraryz replicas (round-robin) and
+# takes one out of rotation when it can't serve:
+#  - actively: /ready fails while its DB or blob storage is unreachable, and
+#    while it drains on shutdown (LIBRARYZ_DRAIN_DELAY), so a rolling deploy
+#    moves traffic off an instance before its listener closes;
+#  - passively: connection failures and timeouts on real requests eject a
+#    replica that died outright (kill -9, OOM) without waiting for a probe.
+# A replica comes back after two good /ready checks. Add one target per
+# replica.
 upstreams:
   - name: libraryz-upstream
     targets:
-      - target: libraryz:8080
+      - target: libraryz-1:8080
+      - target: libraryz-2:8080
     healthchecks:
       active:
         type: http
         http_path: /ready
         timeout: 3
         healthy:
-          interval: 10
+          interval: 5
           successes: 2
         unhealthy:
           interval: 5
@@ -37,12 +44,27 @@ upstreams:
           tcp_failures: 2
           timeouts: 2
           http_statuses: [500, 502, 503, 504]
+      passive:
+        healthy:
+          successes: 0 # only active checks bring a replica back
+        unhealthy:
+          tcp_failures: 2
+          timeouts: 3
+          # Gateway-style failures only: an app 500 on one route shouldn't
+          # eject a replica (both would flap on the same bug).
+          http_statuses: [502, 503, 504]
+          http_failures: 5
 
 services:
   - name: libraryz
     host: libraryz-upstream
     port: 8080
     protocol: http
+    # A request that can't connect to one replica is retried on the other
+    # (connection errors only, so nothing is ever sent twice). A short connect
+    # timeout keeps a stopped replica's address from stalling it.
+    retries: 3
+    connect_timeout: 2000
     # Service-level fallbacks. Anything not matched by a more specific route
     # below still goes through these.
     plugins:

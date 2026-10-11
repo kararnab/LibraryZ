@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -250,6 +251,29 @@ func TestReadyReturns503WhenADependencyIsDown(t *testing.T) {
 	resp, _ = http.Get(ts.URL + "/ready")
 	if body := readBody(resp); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"database":"unavailable"`) {
 		t.Fatalf("db down: got %d %s", resp.StatusCode, body)
+	}
+}
+
+// Draining (shutdown begun): /ready says so with a 503 so the LB stops
+// routing here, while every other route keeps serving.
+func TestReadyReportsDraining(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	var draining atomic.Bool
+	deps.Draining = &draining
+	ts := newServer(t, deps)
+
+	if r, _ := http.Get(ts.URL + "/ready"); r.StatusCode != http.StatusOK {
+		t.Fatalf("before draining: want 200, got %d", r.StatusCode)
+	}
+	draining.Store(true)
+	resp, _ := http.Get(ts.URL + "/ready")
+	if body := readBody(resp); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"status":"draining"`) {
+		t.Fatalf("draining: got %d %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/health", "/works"} {
+		if r, _ := http.Get(ts.URL + path); r.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s while draining: want 200, got %d", path, r.StatusCode)
+		}
 	}
 }
 

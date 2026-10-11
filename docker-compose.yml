@@ -4,6 +4,149 @@
 # service — run it on the host (frontend/gradlew :composeApp:run) pointed at
 # http://localhost:8080. Blobs live in RustFS (S3-compatible object storage);
 # console at http://localhost:9101 (rustfsadmin / rustfsadmin).
+# The API runs as two instances behind Kong (libraryz-1, libraryz-2), both
+# from this template. Every replica is stateless (sessions, quotas, locks and
+# rate limits live in Postgres and Redis, files in S3), so either can serve
+# any request; scripts/rolling-deploy.sh replaces them one at a time.
+x-libraryz: &libraryz
+  build: .
+  # One image for both instances, so a rolling deploy builds once.
+  image: libraryz-api:dev
+  depends_on:
+    postgres:
+      condition: service_healthy
+    pgbouncer:
+      condition: service_started
+    rustfs:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    mailpit:
+      condition: service_started
+  environment:
+    # `pgbouncer` / `postgres` / `rustfs` are the service hostnames on the
+    # compose network. libraryz talks to Postgres through pgbouncer
+    # (Slice 6.3); default_query_exec_mode=exec disables pgx's per-conn
+    # prepared-statement cache so transaction-mode pooling is safe.
+    DATABASE_URL: "postgres://user:password@pgbouncer:6432/libraryz?sslmode=disable&default_query_exec_mode=exec"
+    # Schema migrations bypass pgbouncer: they hold a session-level advisory
+    # lock (so replicas starting together don't race DDL), which transaction
+    # pooling would break. Migrations run on startup; to run them as a
+    # one-shot step instead, set LIBRARYZ_AUTO_MIGRATE=false here and run
+    #   docker compose run --rm libraryz-1 migrate
+    LIBRARYZ_MIGRATE_DATABASE_URL: "postgres://user:password@postgres:5432/libraryz?sslmode=disable"
+    LIBRARYZ_LISTEN_ADDR: ":8080"
+    # On SIGTERM, keep serving with /ready failing for this long, so Kong
+    # takes the instance out of rotation (2 failed checks 5s apart) before
+    # its listener closes; then up to LIBRARYZ_SHUTDOWN_TIMEOUT (20s) to
+    # finish in-flight requests.
+    LIBRARYZ_DRAIN_DELAY: "15s"
+    # The backend refuses to start without a real JWT_SECRET (>=32 bytes, not
+    # the built-in default). This dev value keeps `docker compose up` one-command;
+    # override it for anything real:  JWT_SECRET=... docker compose up
+    JWT_SECRET: "${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please-0123456789}"
+    # Zero-downtime secret rotation: set the new JWT_SECRET and move the old
+    # value here; tokens signed with either verify. Drop it once old access
+    # tokens have expired (LIBRARYZ_ACCESS_TOKEN_TTL, default 15m).
+    # JWT_SECRET_PREVIOUS: ""
+    # Token lifetimes (Go durations; defaults shown). A session ends after
+    # LIBRARYZ_REFRESH_TOKEN_TTL unused (each refresh restarts it), and at
+    # LIBRARYZ_SESSION_MAX_AGE regardless.
+    # LIBRARYZ_ACCESS_TOKEN_TTL: "15m"
+    # LIBRARYZ_REFRESH_TOKEN_TTL: "720h"
+    # LIBRARYZ_SESSION_MAX_AGE: "8760h"
+    # Access tokens are stateless by default: logout / revocation stops
+    # refreshing at once, but an issued access token works until it expires.
+    # "true" checks the session on every request (one DB lookup) instead.
+    # LIBRARYZ_VERIFY_SESSION_ON_ACCESS: "true"
+    # Roles and disabled accounts are re-read on every request (two small
+    # lookups); "false" uses the access token's roles (≤15 min stale).
+    # LIBRARYZ_LOAD_SUBJECT_ON_ACCESS: "true"
+    # Login throttling (5 failures per account, 100 per IP, per 15 minutes,
+    # then back-off) shared across replicas. Unset = per-process memory.
+    LIBRARYZ_REDIS_ADDR: "redis:6379"
+    # Kong (and anything else on the compose network) is a trusted proxy:
+    # its X-Forwarded-For names the real client IP for per-IP throttling.
+    # Without this every client would share Kong's IP. In production, list
+    # only your gateway / load-balancer networks.
+    LIBRARYZ_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # libraryz uses S3 when LIBRARYZ_S3_ENDPOINT is set, otherwise
+    # falls back to a local-filesystem store under LIBRARYZ_STORAGE_DIR.
+    # Setting the endpoint here is the entire signal — there is no separate
+    # LIBRARYZ_STORAGE_BACKEND knob.
+    LIBRARYZ_S3_ENDPOINT: "rustfs:9000"
+    LIBRARYZ_S3_ACCESS_KEY: "rustfsadmin"
+    LIBRARYZ_S3_SECRET_KEY: "rustfsadmin"
+    LIBRARYZ_S3_BUCKET: "libraryz"
+    LIBRARYZ_S3_USE_SSL: "false"
+    # Email (password reset, verification) through github.com/kararnab/onemailer.
+    # Dev: plain SMTP to Mailpit, allowed only because SMTP_ALLOW_PLAIN_HOST
+    # names it. Links point at the web client's dev server (port 8081).
+    # Production: see "Email" in README.md (SMTP provider, https URL,
+    # LIBRARYZ_SMTP_PASSWORD_FILE, SPF/DKIM/DMARC).
+    LIBRARYZ_MAIL_PROVIDER: smtp
+    LIBRARYZ_PUBLIC_URL: "http://localhost:8081"
+    LIBRARYZ_MAIL_FROM: "LibraryZ <accounts@libraryz.localhost>"
+    LIBRARYZ_SMTP_HOST: mailpit
+    LIBRARYZ_SMTP_PORT: "1025"
+    LIBRARYZ_SMTP_TLS: none
+    LIBRARYZ_SMTP_ALLOW_PLAIN_HOST: mailpit
+    # CORS allowlist for the browser (Wasm) client — exact-match, comma-separated.
+    # Only matters for the web target; native (Android/Desktop/iOS) clients don't
+    # use CORS. When unset, the backend allows only localhost / 127.0.0.1 origins,
+    # so a web app served from a LAN IP is blocked until you list it here.
+    # This host's dev LAN IP is 192.168.29.234 (same one in the Android cleartext
+    # config). Adjust the ports to wherever the web bundle is actually served from:
+    # LIBRARYZ_ALLOWED_ORIGINS: "http://192.168.29.234:8080,http://localhost:8080"
+    # Convenience for LAN dev only: instead of listing each IP above, allow ALL
+    # RFC-1918 private-IP origins (192.168/16, 10/8, 172.16/12) on any port.
+    # Dev mode only — ignored once LIBRARYZ_ALLOWED_ORIGINS is set. Don't enable
+    # in production; it trusts every host on the local network.
+    # LIBRARYZ_CORS_ALLOW_PRIVATE_LAN: "true"
+    # DB connection pool (Phase 6.1). Keep instances × MaxOpenConns under
+    # Postgres max_connections (default 100). Default 25 fits 2 instances with
+    # headroom; raise/lower per replica count.
+    # LIBRARYZ_DB_MAX_OPEN_CONNS: "25"
+    # LIBRARYZ_DB_MAX_IDLE_CONNS: "10"
+    # HTTP server timeouts (Go duration strings; defaults shown). ReadHeaderTimeout
+    # is the main Slowloris guard; upload/download handlers opt out per-request so
+    # large transfers aren't truncated. SHUTDOWN_TIMEOUT bounds the rolling-deploy drain.
+    # LIBRARYZ_READ_HEADER_TIMEOUT: "10s"
+    # LIBRARYZ_READ_TIMEOUT: "30s"
+    # LIBRARYZ_WRITE_TIMEOUT: "60s"
+    # LIBRARYZ_IDLE_TIMEOUT: "120s"
+    # LIBRARYZ_SHUTDOWN_TIMEOUT: "20s"
+    # PDF uploads are sanitized in a memory-capped child process. Worst case is
+    # CONCURRENCY × MEMORY_MB; the default budget fits a 500 MiB upload.
+    # LIBRARYZ_PDF_SANITIZE_MEMORY_MB: "1024"
+    # LIBRARYZ_PDF_SANITIZE_TIMEOUT: "2m"
+    # LIBRARYZ_PDF_SANITIZE_CONCURRENCY: "2"
+    # Blob GC (Go durations; defaults shown): how often to sweep storage for
+    # orphaned blobs, and how long a moderator-removed edition's file is kept
+    # (so the takedown can still be reverted) before it's purged.
+    # LIBRARYZ_BLOB_GC_INTERVAL: "24h"
+    # LIBRARYZ_BLOB_GC_RETENTION: "720h"
+    # Recommendation retrain interval (optional; default 6h):
+    # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
+  # /ready checks Postgres + the S3 store (503 if either is unreachable); /health is
+  # liveness only. busybox wget ships in the alpine runtime image.
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+    interval: 10s
+    timeout: 3s
+    retries: 3
+    start_period: 15s
+  # libraryz is intentionally NOT published to the host — Kong is the edge
+  # (Slice 6.2). For direct debugging without going through Kong:
+  #   docker compose exec libraryz-1 wget -qO- http://localhost:8080/health
+  # or temporarily add a `ports: ["8081:8080"]` mapping for that session.
+  # Docker's default is 10s before SIGKILL: shorter than the drain (15s)
+  # plus the shutdown budget (20s).
+  stop_grace_period: 45s
+  # A replica that crashes (OOM, panic) comes back by itself; Kong routes
+  # around it meanwhile. `docker compose stop` still stops it for good.
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -76,7 +219,9 @@ services:
   kong:
     image: kong:3.9.1
     depends_on:
-      libraryz:
+      libraryz-1:
+        condition: service_healthy
+      libraryz-2:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -130,131 +275,10 @@ services:
       timeout: 3s
       retries: 10
 
-  libraryz:
-    build: .
-    depends_on:
-      postgres:
-        condition: service_healthy
-      pgbouncer:
-        condition: service_started
-      rustfs:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      mailpit:
-        condition: service_started
-    environment:
-      # `pgbouncer` / `postgres` / `rustfs` are the service hostnames on the
-      # compose network. libraryz talks to Postgres through pgbouncer
-      # (Slice 6.3); default_query_exec_mode=exec disables pgx's per-conn
-      # prepared-statement cache so transaction-mode pooling is safe.
-      DATABASE_URL: "postgres://user:password@pgbouncer:6432/libraryz?sslmode=disable&default_query_exec_mode=exec"
-      # Schema migrations bypass pgbouncer: they hold a session-level advisory
-      # lock (so replicas starting together don't race DDL), which transaction
-      # pooling would break. Migrations run on startup; to run them as a
-      # one-shot step instead, set LIBRARYZ_AUTO_MIGRATE=false here and run
-      #   docker compose run --rm libraryz migrate
-      LIBRARYZ_MIGRATE_DATABASE_URL: "postgres://user:password@postgres:5432/libraryz?sslmode=disable"
-      LIBRARYZ_LISTEN_ADDR: ":8080"
-      # The backend refuses to start without a real JWT_SECRET (>=32 bytes, not
-      # the built-in default). This dev value keeps `docker compose up` one-command;
-      # override it for anything real:  JWT_SECRET=... docker compose up
-      JWT_SECRET: "${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please-0123456789}"
-      # Zero-downtime secret rotation: set the new JWT_SECRET and move the old
-      # value here; tokens signed with either verify. Drop it once old access
-      # tokens have expired (LIBRARYZ_ACCESS_TOKEN_TTL, default 15m).
-      # JWT_SECRET_PREVIOUS: ""
-      # Token lifetimes (Go durations; defaults shown). A session ends after
-      # LIBRARYZ_REFRESH_TOKEN_TTL unused (each refresh restarts it), and at
-      # LIBRARYZ_SESSION_MAX_AGE regardless.
-      # LIBRARYZ_ACCESS_TOKEN_TTL: "15m"
-      # LIBRARYZ_REFRESH_TOKEN_TTL: "720h"
-      # LIBRARYZ_SESSION_MAX_AGE: "8760h"
-      # Access tokens are stateless by default: logout / revocation stops
-      # refreshing at once, but an issued access token works until it expires.
-      # "true" checks the session on every request (one DB lookup) instead.
-      # LIBRARYZ_VERIFY_SESSION_ON_ACCESS: "true"
-      # Roles and disabled accounts are re-read on every request (two small
-      # lookups); "false" uses the access token's roles (≤15 min stale).
-      # LIBRARYZ_LOAD_SUBJECT_ON_ACCESS: "true"
-      # Login throttling (5 failures per account, 100 per IP, per 15 minutes,
-      # then back-off) shared across replicas. Unset = per-process memory.
-      LIBRARYZ_REDIS_ADDR: "redis:6379"
-      # Kong (and anything else on the compose network) is a trusted proxy:
-      # its X-Forwarded-For names the real client IP for per-IP throttling.
-      # Without this every client would share Kong's IP. In production, list
-      # only your gateway / load-balancer networks.
-      LIBRARYZ_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-      # libraryz uses S3 when LIBRARYZ_S3_ENDPOINT is set, otherwise
-      # falls back to a local-filesystem store under LIBRARYZ_STORAGE_DIR.
-      # Setting the endpoint here is the entire signal — there is no separate
-      # LIBRARYZ_STORAGE_BACKEND knob.
-      LIBRARYZ_S3_ENDPOINT: "rustfs:9000"
-      LIBRARYZ_S3_ACCESS_KEY: "rustfsadmin"
-      LIBRARYZ_S3_SECRET_KEY: "rustfsadmin"
-      LIBRARYZ_S3_BUCKET: "libraryz"
-      LIBRARYZ_S3_USE_SSL: "false"
-      # Email (password reset, verification) through github.com/kararnab/onemailer.
-      # Dev: plain SMTP to Mailpit, allowed only because SMTP_ALLOW_PLAIN_HOST
-      # names it. Links point at the web client's dev server (port 8081).
-      # Production: see "Email" in README.md (SMTP provider, https URL,
-      # LIBRARYZ_SMTP_PASSWORD_FILE, SPF/DKIM/DMARC).
-      LIBRARYZ_MAIL_PROVIDER: smtp
-      LIBRARYZ_PUBLIC_URL: "http://localhost:8081"
-      LIBRARYZ_MAIL_FROM: "LibraryZ <accounts@libraryz.localhost>"
-      LIBRARYZ_SMTP_HOST: mailpit
-      LIBRARYZ_SMTP_PORT: "1025"
-      LIBRARYZ_SMTP_TLS: none
-      LIBRARYZ_SMTP_ALLOW_PLAIN_HOST: mailpit
-      # CORS allowlist for the browser (Wasm) client — exact-match, comma-separated.
-      # Only matters for the web target; native (Android/Desktop/iOS) clients don't
-      # use CORS. When unset, the backend allows only localhost / 127.0.0.1 origins,
-      # so a web app served from a LAN IP is blocked until you list it here.
-      # This host's dev LAN IP is 192.168.29.234 (same one in the Android cleartext
-      # config). Adjust the ports to wherever the web bundle is actually served from:
-      # LIBRARYZ_ALLOWED_ORIGINS: "http://192.168.29.234:8080,http://localhost:8080"
-      # Convenience for LAN dev only: instead of listing each IP above, allow ALL
-      # RFC-1918 private-IP origins (192.168/16, 10/8, 172.16/12) on any port.
-      # Dev mode only — ignored once LIBRARYZ_ALLOWED_ORIGINS is set. Don't enable
-      # in production; it trusts every host on the local network.
-      # LIBRARYZ_CORS_ALLOW_PRIVATE_LAN: "true"
-      # DB connection pool (Phase 6.1). Keep instances × MaxOpenConns under
-      # Postgres max_connections (default 100). Default 25 fits 2 instances with
-      # headroom; raise/lower per replica count.
-      # LIBRARYZ_DB_MAX_OPEN_CONNS: "25"
-      # LIBRARYZ_DB_MAX_IDLE_CONNS: "10"
-      # HTTP server timeouts (Go duration strings; defaults shown). ReadHeaderTimeout
-      # is the main Slowloris guard; upload/download handlers opt out per-request so
-      # large transfers aren't truncated. SHUTDOWN_TIMEOUT bounds the rolling-deploy drain.
-      # LIBRARYZ_READ_HEADER_TIMEOUT: "10s"
-      # LIBRARYZ_READ_TIMEOUT: "30s"
-      # LIBRARYZ_WRITE_TIMEOUT: "60s"
-      # LIBRARYZ_IDLE_TIMEOUT: "120s"
-      # LIBRARYZ_SHUTDOWN_TIMEOUT: "20s"
-      # PDF uploads are sanitized in a memory-capped child process. Worst case is
-      # CONCURRENCY × MEMORY_MB; the default budget fits a 500 MiB upload.
-      # LIBRARYZ_PDF_SANITIZE_MEMORY_MB: "1024"
-      # LIBRARYZ_PDF_SANITIZE_TIMEOUT: "2m"
-      # LIBRARYZ_PDF_SANITIZE_CONCURRENCY: "2"
-      # Blob GC (Go durations; defaults shown): how often to sweep storage for
-      # orphaned blobs, and how long a moderator-removed edition's file is kept
-      # (so the takedown can still be reverted) before it's purged.
-      # LIBRARYZ_BLOB_GC_INTERVAL: "24h"
-      # LIBRARYZ_BLOB_GC_RETENTION: "720h"
-      # Recommendation retrain interval (optional; default 6h):
-      # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
-    # /ready checks Postgres + the S3 store (503 if either is unreachable); /health is
-    # liveness only. busybox wget ships in the alpine runtime image.
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 15s
-    # libraryz is intentionally NOT published to the host — Kong is the edge
-    # (Slice 6.2). For direct debugging without going through Kong:
-    #   docker compose exec libraryz wget -qO- http://localhost:8080/health
-    # or temporarily add a `ports: ["8081:8080"]` mapping for that session.
+  libraryz-1:
+    <<: *libraryz
+  libraryz-2:
+    <<: *libraryz
 
 volumes:
   pgdata:

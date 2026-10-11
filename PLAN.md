@@ -635,7 +635,7 @@ beat popularity on real data, tune k/α/λ/iterations). In-process training only
 (no `cmd/rectrain` CLI / external scheduler yet); recs reflect the last retrain;
 no time decay / negative sampling beyond dismissals.
 
-### Phase 6 — operational hardening (PLANNED)
+### Phase 6 — operational hardening (DONE 2026-10-11)
 
 Prepares the backend to run as **stateless instances behind a load balancer**.
 Nothing here changes product behavior; it's about not falling over under
@@ -758,6 +758,27 @@ monolith is **not** the banned internal microservice gateway
     planning. Reminder for future schema work: `go test -tags=postgres` and
     direct `psql`/migration sessions connect to Postgres on 5432, not
     pgbouncer on 6432. ✓
+
+**Slice 6.4 — the 2-instance cutover (DONE 2026-10-11).** The deploy change
+the slices above set up, plus what testing it under load turned up:
+- compose runs `libraryz-1` and `libraryz-2` from one `x-libraryz` template
+  (one image), and Kong's upstream has both as targets, with passive health
+  checks (connection failures, timeouts, gateway 5xx; app 500s don't eject),
+  `retries: 3` on connection errors and a 2s connect timeout.
+- **Draining**: on SIGTERM `/ready` answers 503 `draining` for
+  `LIBRARYZ_DRAIN_DELAY` (compose 15s, default 0) while the instance keeps
+  serving, then `Shutdown` as before. `stop_grace_period: 45s`, since
+  Docker's default 10s would SIGKILL mid-drain.
+- `restart: unless-stopped`: a crashed instance comes back (checked with a
+  Go SIGQUIT exit: healthy again in ~7s). There was no restart policy.
+- `scripts/rolling-deploy.sh`: one instance at a time, waiting for Docker
+  *and Kong* to report it healthy (Kong's admin API through `resty`; the
+  image has no curl).
+- Measured under ~25 req/s through Kong, a quarter authenticated writes: 0 of
+  3,728 requests failed across a rolling deploy, 0 of 1,044 across a SIGKILL.
+  A control run with no drain also lost none at this load (Kong retries
+  refused connections and requests are short), so the drain is kept for
+  long requests and the keep-alive race, not for anything this test showed.
 
 **Sequencing.** All three slices landed in Phase 6 on 2026-05-28, ahead of the
 2-instance HA cutover, so the operational shape is locked in once and the
