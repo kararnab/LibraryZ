@@ -109,6 +109,7 @@ fun WorkDetailScreen(
     savedBooks: Map<String, SavedBook> = emptyMap(),
     keeping: Set<String> = emptySet(),
     onKeepOffline: ((Edition, Boolean) -> Unit)? = null,
+    onRemoveFromDevice: ((Edition) -> Unit)? = null,
     onSuggestEdit: (() -> Unit)? = null,
     // Opens Browse searching for one author; null leaves the names as plain text.
     onAuthorClick: ((String) -> Unit)? = null,
@@ -231,6 +232,7 @@ fun WorkDetailScreen(
                             pinned = savedBooks[ed.id]?.pinned == true,
                             keeping = ed.id in keeping,
                             onKeepOffline = onKeepOffline?.let { k -> { keep -> k(ed, keep) } },
+                            onRemoveFromDevice = onRemoveFromDevice?.let { r -> { r(ed) } },
                         )
                     }
                 }

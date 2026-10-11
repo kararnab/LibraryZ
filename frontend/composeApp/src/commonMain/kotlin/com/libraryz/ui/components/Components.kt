@@ -24,10 +24,12 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OfflinePin
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarOutline
 import androidx.compose.material3.AlertDialog
@@ -243,10 +245,12 @@ fun EditionRow(
     onRemove: (() -> Unit)? = null,
     // On this device: [saved] opens offline; [pinned] is "Keep offline";
     // [keeping] while it downloads for that. Null hides the toggle.
+    // [onRemoveFromDevice] deletes the saved copy.
     saved: Boolean = false,
     pinned: Boolean = false,
     keeping: Boolean = false,
     onKeepOffline: ((Boolean) -> Unit)? = null,
+    onRemoveFromDevice: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -261,7 +265,11 @@ fun EditionRow(
             Column(Modifier.weight(1f)) {
                 Text(formatName(edition.format), style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = if (saved) "${edition.prettySize} · On this device" else edition.prettySize,
+                    text = when {
+                        pinned -> "${edition.prettySize} · Kept offline"
+                        saved -> "${edition.prettySize} · On this device"
+                        else -> edition.prettySize
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -274,13 +282,40 @@ fun EditionRow(
                     Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     }
-                } else {
-                    IconButton(onClick = { onKeepOffline(!pinned) }) {
+                } else if (!pinned) {
+                    IconButton(onClick = { onKeepOffline(true) }) {
                         Icon(
-                            if (pinned) Icons.Rounded.OfflinePin else Icons.Rounded.DownloadForOffline,
-                            contentDescription = if (pinned) "Kept offline. Stop keeping it" else "Keep offline",
-                            tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            Icons.Rounded.DownloadForOffline,
+                            contentDescription = "Keep offline",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                } else {
+                    // Undoing it is a choice, not a toggle: one tap shouldn't
+                    // quietly undo what the reader set up for a trip.
+                    Box {
+                        var pinMenu by remember { mutableStateOf(false) }
+                        IconButton(onClick = { pinMenu = true }) {
+                            Icon(
+                                Icons.Rounded.OfflinePin,
+                                contentDescription = "Kept offline",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        DropdownMenu(expanded = pinMenu, onDismissRequest = { pinMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Stop keeping offline") },
+                                leadingIcon = { Icon(Icons.Rounded.PushPin, contentDescription = null) },
+                                onClick = { pinMenu = false; onKeepOffline(false) },
+                            )
+                            if (onRemoveFromDevice != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Remove from this device") },
+                                    leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
+                                    onClick = { pinMenu = false; onRemoveFromDevice() },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -301,6 +336,13 @@ fun EditionRow(
                         leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
                         onClick = { menuOpen = false; onDownload() },
                     )
+                    if (saved && onRemoveFromDevice != null) {
+                        DropdownMenuItem(
+                            text = { Text("Remove from this device") },
+                            leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
+                            onClick = { menuOpen = false; onRemoveFromDevice() },
+                        )
+                    }
                     if (onRemove != null) {
                         DropdownMenuItem(
                             text = { Text("Remove", color = MaterialTheme.colorScheme.error) },

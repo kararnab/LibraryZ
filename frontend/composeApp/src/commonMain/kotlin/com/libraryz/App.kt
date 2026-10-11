@@ -373,6 +373,12 @@ internal fun Root(
     // Books kept on this device: the reader opens these without the server.
     val books = remember { BookCache(::createBookFiles) }
     LaunchedEffect(books) { books.load() }
+    val removeFromDevice: (Work, Edition) -> Unit = { work, ed ->
+        scope.launch {
+            books.remove(ed.id)
+            snackbar.showSnackbar("Removed “${work.title}” from this device. It downloads again when you open it.")
+        }
+    }
     // Editions being fetched for "Keep offline", so their rows show progress.
     var keeping by remember { mutableStateOf(emptySet<String>()) }
     val keepOffline: (Work, Edition, Boolean) -> Unit = { work, ed, keep ->
@@ -597,6 +603,7 @@ internal fun Root(
                 books = books,
                 keeping = keeping,
                 onKeepOffline = keepOffline,
+                onRemoveFromDevice = removeFromDevice,
                 onLibraryUpsert = libraryUpsert,
                 onLibraryRemove = libraryRemove,
                 onRemoveWork = removeWork,
@@ -632,6 +639,7 @@ internal fun Root(
                         savedBooks = books.books,
                         keeping = keeping,
                         onKeepOffline = if (books.enabled) { ed, keep -> keepOffline(work, ed, keep) } else null,
+                        onRemoveFromDevice = if (books.enabled) { ed -> removeFromDevice(work, ed) } else null,
                         onSuggestEdit = { nav.push(Screen.EditWork(s.workId)) },
                         onAuthorClick = searchAuthor,
                         libraryEnabled = auth.isAuthenticated,
@@ -1225,6 +1233,7 @@ private fun ListDetailLayout(
     books: BookCache,
     keeping: Set<String>,
     onKeepOffline: (Work, Edition, Boolean) -> Unit,
+    onRemoveFromDevice: (Work, Edition) -> Unit,
     onLibraryUpsert: (String, UpsertLibraryRequest) -> Unit,
     onLibraryRemove: (String) -> Unit,
     onRemoveWork: ((Work, RemovalRequest) -> Unit)? = null,
@@ -1282,6 +1291,7 @@ private fun ListDetailLayout(
                     savedBooks = books.books,
                     keeping = keeping,
                     onKeepOffline = if (books.enabled) { ed, keep -> onKeepOffline(work, ed, keep) } else null,
+                    onRemoveFromDevice = if (books.enabled) { ed -> onRemoveFromDevice(work, ed) } else null,
                     onSuggestEdit = { nav.push(Screen.EditWork(work.id)) },
                     onAuthorClick = onAuthorClick,
                     libraryEnabled = auth.isAuthenticated,
