@@ -1,0 +1,58 @@
+# Alert rules (docs/observability.md). Prometheus evaluates them and lists
+# firing ones at /alerts; sending them anywhere (email, chat, a pager) needs
+# an Alertmanager, which is a deployment decision (PLAN.md item 130).
+groups:
+  - name: libraryz
+    rules:
+      - alert: LibraryzInstanceDown
+        expr: up{job="libraryz"} == 0
+        for: 2m
+        annotations:
+          summary: "{{ $labels.instance }} isn't answering metrics scrapes"
+
+      - alert: LibraryzServerErrors
+        expr: |
+          sum(rate(libraryz_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(libraryz_http_requests_total[5m])) > 0.02
+        for: 10m
+        annotations:
+          summary: "More than 2% of requests are failing with 5xx"
+
+      - alert: LibraryzSlowRequests
+        # Uploads and downloads are long by nature; everything else should be quick.
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(libraryz_http_request_duration_seconds_bucket{
+            route!~"/works/\\{id\\}/editions|/editions/\\{id\\}/download"}[5m]))) > 1
+        for: 10m
+        annotations:
+          summary: "p95 latency is over 1s"
+
+      - alert: LibraryzPanics
+        expr: increase(libraryz_http_panics_total[10m]) > 0
+        annotations:
+          summary: "A handler panicked on {{ $labels.instance }} (logged with its stack)"
+
+      - alert: LibraryzDBPoolSaturated
+        expr: go_sql_in_use_connections{db_name="libraryz"} / go_sql_max_open_connections{db_name="libraryz"} > 0.9
+        for: 5m
+        annotations:
+          summary: "{{ $labels.instance }} is using over 90% of its DB pool"
+
+      - alert: LibraryzRecommendationModelStale
+        # Any instance may train (runlock), so take the newest success. Three
+        # default retrain intervals (6h).
+        expr: time() - max(libraryz_job_last_success_timestamp_seconds{job="rec_train"}) > 3 * 6 * 3600
+        for: 30m
+        annotations:
+          summary: "No instance has retrained the recommendation model in 18h"
+
+      - alert: LibraryzJobFailing
+        expr: increase(libraryz_job_runs_total{result="failed"}[1h]) > 0
+        annotations:
+          summary: "Background job {{ $labels.job }} failed on {{ $labels.instance }}"
+
+      - alert: LibraryzClientCrashSpike
+        # Only consented reports arrive, so this undercounts; a rise still means something.
+        expr: sum by (platform) (increase(libraryz_client_crashes_total{kind="fatal"}[1h])) > 20
+        annotations:
+          summary: "More than 20 app crashes in an hour on {{ $labels.platform }}"

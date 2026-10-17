@@ -26,14 +26,17 @@ import kotlinx.serialization.json.Json
  *   raises [sessionExpired] ([onSessionExpired]) so the UI can return to
  *   sign-in and say why.
  *
- * Persistence: the store holds `{"access":…,"refresh":…}`.
+ * Persistence: the store holds `{"access":…,"refresh":…,"user":…}`. The
+ * last known [User] is kept with the session, so a launch without the
+ * server still shows who's signed in.
  *
  * The userFetcher is a `suspend () -> User?` set via [setUserFetcher]
  * after construction because ApiClient itself needs `tokenProvider = {
  * auth.token }`, creating a circular construction with the obvious
  * "AuthState takes ApiClient" wiring. Fetcher failures are swallowed
- * (e.g. offline at startup) — the session stays authenticated, `user`
- * just remains null until a later refresh succeeds.
+ * (e.g. offline at startup): the session stays authenticated and `user`
+ * keeps its last known value until [reloadUser] succeeds (the app calls it
+ * again when the server answers after being unreachable).
  */
 @Stable
 class AuthState(private val store: TokenStore) : SessionHooks {
@@ -64,16 +67,19 @@ class AuthState(private val store: TokenStore) : SessionHooks {
 
     suspend fun bootstrap() {
         if (bootstrapped) return
-        val saved = store.load()?.let(::decodeSession)
+        val saved = store.load()?.let(::decodeStored)
         if (saved != null) {
-            session = saved
+            session = Session(saved.access, saved.refresh)
+            user = saved.user
             reloadUser()
         }
         bootstrapped = true
     }
 
     suspend fun signIn(s: Session) {
-        store.save(encodeSession(s))
+        // Another account may be signing in: never show the previous one.
+        user = null
+        store.save(encodeSession(s, null))
         session = s
         sessionExpired = false
         reloadUser()
@@ -86,7 +92,7 @@ class AuthState(private val store: TokenStore) : SessionHooks {
     }
 
     override suspend fun onRefreshed(session: Session) {
-        store.save(encodeSession(session))
+        store.save(encodeSession(session, user))
         this.session = session
     }
 
@@ -104,19 +110,21 @@ class AuthState(private val store: TokenStore) : SessionHooks {
     /** Re-reads the signed-in user (e.g. after verifying their email). */
     suspend fun reloadUser() {
         val fetch = userFetcher ?: return
-        user = catchingNonCancel { fetch.invoke() }.getOrNull()
+        val fresh = catchingNonCancel { fetch.invoke() }.getOrNull() ?: return
+        // Signed out (or into another account) while this was on its way.
+        val current = session ?: return
+        user = fresh
+        catchingNonCancel { store.save(encodeSession(current, fresh)) }
     }
 }
 
 @Serializable
-private data class StoredSession(val access: String, val refresh: String? = null)
+private data class StoredSession(val access: String, val refresh: String? = null, val user: User? = null)
 
 private val sessionJson = Json { ignoreUnknownKeys = true }
 
-private fun encodeSession(s: Session): String =
-    sessionJson.encodeToString(StoredSession.serializer(), StoredSession(s.token, s.refreshToken))
+private fun encodeSession(s: Session, user: User?): String =
+    sessionJson.encodeToString(StoredSession.serializer(), StoredSession(s.token, s.refreshToken, user))
 
-private fun decodeSession(raw: String): Session? =
-    runCatching { sessionJson.decodeFromString(StoredSession.serializer(), raw) }
-        .getOrNull()
-        ?.let { Session(it.access, it.refresh) }
+private fun decodeStored(raw: String): StoredSession? =
+    runCatching { sessionJson.decodeFromString(StoredSession.serializer(), raw) }.getOrNull()

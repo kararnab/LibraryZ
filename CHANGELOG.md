@@ -13,6 +13,21 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 ## [Unreleased]
 
 ### Added
+- **Observability** ([docs/observability.md](docs/observability.md)).
+  Prometheus metrics on each API instance (`LIBRARYZ_METRICS_ADDR`,
+  `:9090`, off the public edge): requests by route and status, latency,
+  panics, DB pool, background jobs. JSON logs (`LIBRARYZ_LOG_FORMAT`) with
+  one line per request and an `X-Request-ID` Kong sets and every response
+  echoes. Prometheus (`:9091`, with alert rules) and Grafana (`:3000`,
+  the LibraryZ dashboard) in `docker compose up`. A handler panic is now a
+  logged, counted 500.
+- **Crash reports and usage statistics, opt-in.** The app asks once on
+  first launch (both off until turned on; Settings › Privacy changes it).
+  Crash reports carry the error's type and code locations, never its
+  message; usage events come from a closed catalog with no free text.
+  Neither is tied to the account. `POST /telemetry/crashes` and
+  `POST /telemetry/events` (anonymous), kept 90 days
+  (`LIBRARYZ_TELEMETRY_RETENTION`).
 - **Two API instances behind Kong** in `docker compose up` (`libraryz-1`,
   `libraryz-2`): Kong balances across them, ejects one that fails `/ready`
   or stops answering, and retries a refused connection on the other; a

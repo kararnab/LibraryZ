@@ -119,6 +119,18 @@ type Config struct {
 	PDFSanitizeMemoryMB    int
 	PDFSanitizeTimeout     time.Duration
 	PDFSanitizeConcurrency int
+	// Logs: LIBRARYZ_LOG_FORMAT (text, the default, or json) and
+	// LIBRARYZ_LOG_LEVEL (debug, info, warn, error; default info).
+	LogFormat string
+	LogLevel  string
+	// MetricsAddr is the separate listener for GET /metrics (Prometheus).
+	// Keep it off the public network: Kong doesn't route to it.
+	// LIBRARYZ_METRICS_ADDR, default ":9090"; "off" turns it off.
+	MetricsAddr string
+	// TelemetryRetention is how long crash reports and usage events are
+	// kept (LIBRARYZ_TELEMETRY_RETENTION, default 90 days). Purged on the
+	// session-purge ticker.
+	TelemetryRetention time.Duration
 }
 
 func Load() *Config {
@@ -172,6 +184,10 @@ func Load() *Config {
 		DBMaxOpenConns:           getIntEnv("LIBRARYZ_DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:           getIntEnv("LIBRARYZ_DB_MAX_IDLE_CONNS", 10),
 		DBConnMaxLifetime:        getDurationEnv("LIBRARYZ_DB_CONN_MAX_LIFETIME", time.Hour),
+		LogFormat:                getEnv("LIBRARYZ_LOG_FORMAT", "text"),
+		LogLevel:                 getEnv("LIBRARYZ_LOG_LEVEL", "info"),
+		MetricsAddr:              getMetricsAddr(),
+		TelemetryRetention:       getDurationEnv("LIBRARYZ_TELEMETRY_RETENTION", 90*24*time.Hour),
 	}
 }
 
@@ -251,6 +267,16 @@ func GetDatabaseUrl() string {
 	return getEnv("DATABASE_URL", "postgres://user:password@localhost:5432/libraryz?sslmode=disable")
 }
 
+// getMetricsAddr is LIBRARYZ_METRICS_ADDR (default ":9090"); "off" means
+// no metrics listener.
+func getMetricsAddr() string {
+	v := getEnv("LIBRARYZ_METRICS_ADDR", ":9090")
+	if v == "off" {
+		return ""
+	}
+	return v
+}
+
 func GetListenAddr() string {
 	return getEnv("LIBRARYZ_LISTEN_ADDR", ":8080")
 }
@@ -309,6 +335,8 @@ func (c *Config) Validate() error {
 		return errors.New("JWT_SECRET_PREVIOUS must differ from JWT_SECRET")
 	case c.trustedProxiesErr != nil:
 		return c.trustedProxiesErr
+	case c.MetricsAddr != "" && c.MetricsAddr == c.ListenAddr:
+		return errors.New("LIBRARYZ_METRICS_ADDR must differ from LIBRARYZ_LISTEN_ADDR: /metrics stays off the public listener")
 	}
 	return nil
 }

@@ -17,11 +17,13 @@ import (
 	"github.com/kararnab/libraryZ/internal/auth"
 	"github.com/kararnab/libraryZ/internal/catalog"
 	"github.com/kararnab/libraryZ/internal/migrations"
+	"github.com/kararnab/libraryZ/internal/obs"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/runlock"
 	"github.com/kararnab/libraryZ/internal/sanitize"
 	"github.com/kararnab/libraryZ/internal/server"
 	"github.com/kararnab/libraryZ/internal/storage"
+	"github.com/kararnab/libraryZ/internal/telemetry"
 	"github.com/kararnab/libraryZ/pkg/config"
 	"github.com/kararnab/libraryZ/pkg/db"
 	"github.com/kararnab/onemailer"
@@ -35,6 +37,11 @@ func main() {
 	sanitize.RunChildIfRequested()
 
 	cfg := config.Load()
+	// Every log line from here on, the standard log package's included,
+	// goes through slog in the configured format.
+	if err := obs.SetupLogging(cfg.LogFormat, cfg.LogLevel); err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
 	// `libraryz migrate` applies pending schema migrations and exits — for
 	// running them as a one-shot deploy step (with LIBRARYZ_AUTO_MIGRATE=false
@@ -77,6 +84,9 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("db: %v", err)
+	}
+	if sqlDB, err := dbConn.DB(); err == nil {
+		obs.RegisterDB(sqlDB)
 	}
 
 	// Hostile PDFs can inflate to gigabytes inside pdfcpu; sanitize them in a
@@ -135,6 +145,7 @@ func main() {
 	startRecommendationTraining(dbConn, cfg)
 	startBlobGC(catalog.NewService(dbConn, store), cfg)
 	startSessionPurge(dbConn, cfg)
+	startMetrics(cfg.MetricsAddr)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -227,13 +238,17 @@ func startBlobGC(svc *catalog.Service, cfg *config.Config) {
 		ticker := time.NewTicker(cfg.BlobGCInterval)
 		defer ticker.Stop()
 		for range ticker.C {
+			start := time.Now()
 			stats, err := svc.CollectGarbage(context.Background(), cfg.BlobGCRetention)
 			switch {
 			case errors.Is(err, runlock.ErrBusy):
+				obs.JobDone("blob_gc", obs.JobSkipped, start)
 				log.Printf("blob gc: another instance is sweeping; skipped")
 			case err != nil:
+				obs.JobDone("blob_gc", obs.JobFailed, start)
 				log.Printf("blob gc: failed after deleting %d blobs: %v", stats.Deleted, err)
 			default:
+				obs.JobDone("blob_gc", obs.JobOK, start)
 				log.Printf("blob gc: scanned %d, deleted %d", stats.Scanned, stats.Deleted)
 			}
 		}
@@ -260,14 +275,19 @@ func startRecommendationTraining(dbConn *gorm.DB, cfg *config.Config) {
 	trainer := recommendation.NewTrainer(dbConn, recCfg)
 
 	train := func() {
+		start := time.Now()
 		switch err := trainer.Train(context.Background()); {
 		case err == nil:
+			obs.JobDone("rec_train", obs.JobOK, start)
 			log.Printf("rec: model retrained")
 		case errors.Is(err, runlock.ErrBusy):
+			obs.JobDone("rec_train", obs.JobSkipped, start)
 			log.Printf("rec: another instance is training; skipped")
 		case errors.Is(err, recommendation.ErrFresh):
+			obs.JobDone("rec_train", obs.JobSkipped, start)
 			log.Printf("rec: model is fresh; skipped")
 		default:
+			obs.JobDone("rec_train", obs.JobFailed, start)
 			log.Printf("rec: train failed: %v", err)
 		}
 	}
@@ -308,17 +328,22 @@ func loginLimiters(cfg *config.Config) (perAccount, perIP ratelimit.Limiter, err
 	return perAccount, perIP, nil
 }
 
-// startSessionPurge deletes expired sessions, expired recovery tokens and
-// day-old email-cap records on a ticker. Idempotent, so every replica can
-// run it without coordination.
+// startSessionPurge deletes expired sessions, expired recovery tokens,
+// day-old email-cap records and telemetry past its retention on a ticker.
+// Idempotent, so every replica can run it without coordination.
 func startSessionPurge(dbConn *gorm.DB, cfg *config.Config) {
 	sessions, tokens := auth.NewSessions(dbConn), auth.NewTokens(dbConn)
 	purge := func(what string, f func(context.Context, time.Time) (int, error)) {
-		n, err := f(context.Background(), time.Now())
+		start := time.Now()
+		n, err := f(context.Background(), start)
 		if err != nil {
-			log.Printf("auth: %s purge failed: %v", what, err)
-		} else if n > 0 {
-			log.Printf("auth: purged %d %s", n, what)
+			obs.JobDone("purge", obs.JobFailed, start)
+			log.Printf("purge: %s failed: %v", what, err)
+			return
+		}
+		obs.JobDone("purge", obs.JobOK, start)
+		if n > 0 {
+			log.Printf("purge: removed %d %s", n, what)
 		}
 	}
 	go func() {
@@ -330,6 +355,28 @@ func startSessionPurge(dbConn *gorm.DB, cfg *config.Config) {
 			purge("old email records", func(ctx context.Context, now time.Time) (int, error) {
 				return auth.PurgeAccountEmails(ctx, dbConn, now)
 			})
+			purge("old telemetry", func(ctx context.Context, now time.Time) (int, error) {
+				n, err := telemetry.Purge(ctx, dbConn, now.Add(-cfg.TelemetryRetention))
+				return int(n), err
+			})
+		}
+	}()
+}
+
+// startMetrics serves GET /metrics on its own listener, so Prometheus
+// scrapes each instance directly and the public edge (Kong) never exposes
+// it. An empty addr means off.
+func startMetrics(addr string) {
+	if addr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", obs.MetricsHandler())
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		log.Printf("metrics listening on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("metrics: %v", err)
 		}
 	}()
 }

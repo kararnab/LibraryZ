@@ -74,6 +74,9 @@ internal/
   library/                UserBook: shelf/status/progress/rating per (user, work)
   recommendation/         implicit-ALS trainer, scorer, cold-start fallback, dismissals
   storage/                Storage interface, Local (FS), S3 (minio-go) impls
+  obs/                    slog setup, request ids, HTTP + job metrics (Prometheus)
+  telemetry/              the app's opt-in crash reports + usage events: catalog,
+                          scrubbing, Sink (DB today; Sentry/analytics adapters later)
   middleware/             UserID(ctx) from iam's subject; IsModerator lookup
   server/                 New(Deps) wires router; shared by main + smoke tests
   httpx/                  small request/response helpers
@@ -456,6 +459,19 @@ Measured on the compose stack (2026-10-11), with ~25 requests/s through Kong
 requests, a `SIGKILL` of one instance 0 of 1,044. On one machine this is
 deploy and crash resilience, not machine-level HA: Postgres, Redis and S3
 are still single.
+
+## Observability
+
+Operational data (`internal/obs`) is always on and names no one: one
+middleware outside everything else gives each request an id (Kong's
+`X-Request-ID`, or a new one), recovers panics into 500s, counts and times
+the request by **route template**, and logs one line. `/metrics` has its
+own listener so the public edge never serves it. Client telemetry
+(`internal/telemetry`) is the app's crash reports and usage events, sent
+only with the reader's consent: the server checks them against a closed
+catalog, scrubs crash stacks, keeps no message, IP or account, and hands
+them to a `Sink`. Rules and how to add an event:
+[docs/observability.md](docs/observability.md).
 
 ## What we deliberately didn't build
 

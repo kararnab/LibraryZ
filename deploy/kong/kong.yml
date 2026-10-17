@@ -55,6 +55,25 @@ upstreams:
           http_statuses: [502, 503, 504]
           http_failures: 5
 
+# Global plugins, on every request:
+#  - correlation-id gives each request an X-Request-ID (kept if the client
+#    sent one) that libraryz logs and echoes, so an edge log line and an app
+#    log line can be matched (internal/obs).
+#  - prometheus counts requests, statuses (429s from the limits below) and
+#    latency at the edge; Prometheus scrapes it from Kong's status listener
+#    (KONG_STATUS_LISTEN, not published on the host).
+plugins:
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+      echo_downstream: true
+  - name: prometheus
+    config:
+      status_code_metrics: true
+      latency_metrics: true
+      upstream_health_metrics: true
+
 services:
   - name: libraryz
     host: libraryz-upstream
@@ -233,6 +252,30 @@ services:
           - name: request-size-limiting
             config:
               allowed_payload_size: 550
+              size_unit: megabytes
+
+      # POST /telemetry/crashes and /telemetry/events — anonymous, consented
+      # crash reports and usage events. The app batches them (about one
+      # request a minute while used), so this only stops floods; the app caps
+      # the body (256 KiB crashes, 64 KiB events) and checks every item.
+      - name: telemetry
+        paths: ["~/telemetry/(crashes|events)$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 20
+              hour: 300
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+          - name: request-size-limiting
+            config:
+              allowed_payload_size: 1
               size_unit: megabytes
 
       # GET /editions/{id}/download — large streaming download.

@@ -1,5 +1,6 @@
 package com.libraryz.ui.screens
 
+import com.libraryz.LocalTelemetry
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -166,6 +167,7 @@ fun ReaderScreen(
     }
 
     val payload = bytes
+    val telemetry = LocalTelemetry.current
     var reader by remember(editionId) { mutableStateOf<Reader?>(null) }
     LaunchedEffect(payload, format) {
         reader?.close()
@@ -176,6 +178,9 @@ fun ReaderScreen(
                 openReader(payload, format)
             } catch (e: Throwable) {
                 e.rethrowIfCancelled()
+                // A file that passed the server's checks but won't open is
+                // a reader bug: report it (type and stack only) if allowed.
+                telemetry.recordNonFatal(e)
                 loadError = e.message ?: "Failed to open edition"
                 null
             }

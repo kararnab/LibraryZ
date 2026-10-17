@@ -139,6 +139,70 @@ val generateMergeCases by tasks.registering {
 }
 kotlin.sourceSets.getByName("commonTest").kotlin.srcDir(generateMergeCases)
 
+// The usage events the server accepts (internal/telemetry/catalog.json) as
+// a typed API: one function per event, an enum per enum prop. The app can
+// only send what the catalog lists, and adding an event is an edit to that
+// one reviewed file.
+val generateTelemetryEvents by tasks.registering {
+    val catalog = rootProject.layout.projectDirectory.file("../internal/telemetry/catalog.json")
+    val outDir = layout.buildDirectory.dir("generated/telemetry/commonMain/kotlin")
+    inputs.file(catalog)
+    outputs.dir(outDir)
+    doLast {
+        fun camel(s: String, upper: Boolean) = s.split('_').mapIndexed { i, w ->
+            if (i == 0 && !upper) w else w.replaceFirstChar { it.uppercase() }
+        }.joinToString("")
+        fun doc(s: String) = s.replace("*/", "* /")
+        @Suppress("UNCHECKED_CAST")
+        val events = (groovy.json.JsonSlurper().parse(catalog.asFile) as Map<String, Any?>)["events"] as List<Map<String, Any?>>
+        val fns = StringBuilder()
+        val enums = StringBuilder()
+        for (e in events) {
+            val name = e["name"] as String
+            @Suppress("UNCHECKED_CAST")
+            val props = e["props"] as List<Map<String, Any?>>
+            val params = props.joinToString(", ") { p ->
+                val pn = p["name"] as String
+                val type = when (p["type"]) {
+                    "enum" -> camel(name, true) + camel(pn, true)
+                    "bool" -> "Boolean"
+                    "int" -> "Long"
+                    else -> error("$name.$pn: unknown type ${p["type"]}")
+                }
+                "${camel(pn, false)}: $type"
+            }
+            val values = props.joinToString(", ") { p ->
+                val pn = p["name"] as String
+                val v = camel(pn, false)
+                val wire = when (p["type"]) {
+                    "enum" -> "JsonPrimitive($v.wire)"
+                    "int" -> "JsonPrimitive($v.coerceIn(${p["min"]}L, ${p["max"]}L))"
+                    else -> "JsonPrimitive($v)"
+                }
+                "\"$pn\" to $wire"
+            }
+            fns.append("    /** ${doc(e["description"] as String)} */\n")
+            fns.append("    fun ${camel(name, false)}($params): TelemetryEvent =\n")
+            fns.append("        TelemetryEvent(\"$name\", mapOf($values))\n\n")
+            for (p in props.filter { it["type"] == "enum" }) {
+                val pn = p["name"] as String
+                @Suppress("UNCHECKED_CAST")
+                val entries = (p["values"] as List<String>).joinToString(", ") { "${camel(it, true)}(\"$it\")" }
+                enums.append("enum class ${camel(name, true)}${camel(pn, true)}(val wire: String) { $entries }\n\n")
+            }
+        }
+        val file = outDir.get().file("com/libraryz/data/telemetry/Events.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            "package com.libraryz.data.telemetry\n\n" +
+                "import kotlinx.serialization.json.JsonPrimitive\n\n" +
+                "/** Generated from internal/telemetry/catalog.json: every usage event the server accepts. */\n" +
+                "object Events {\n" + fns.toString().trimEnd() + "\n}\n\n" + enums.toString().trimEnd() + "\n",
+        )
+    }
+}
+kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generateTelemetryEvents)
+
 // /.well-known/assetlinks.json for the web bundle, which lets Android open
 // the emailed https links in the app (androidApp's libraryz.appLinkUrl).
 // libraryz.androidCertSha256: the SHA-256 fingerprint(s) of the app's

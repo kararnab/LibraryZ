@@ -11,6 +11,7 @@ import (
 	"github.com/kararnab/libraryZ/internal/library"
 	"github.com/kararnab/libraryZ/internal/migrations"
 	"github.com/kararnab/libraryZ/internal/recommendation"
+	"github.com/kararnab/libraryZ/internal/telemetry"
 	"gorm.io/gorm"
 )
 
@@ -23,6 +24,7 @@ var liveModels = []any{
 	&library.UserBook{}, &library.Removal{},
 	&recommendation.WorkFactors{}, &recommendation.UserFactors{},
 	&recommendation.WorkNeighbor{}, &recommendation.Dismissal{},
+	&telemetry.CrashGroup{}, &telemetry.CrashReport{}, &telemetry.EventRecord{},
 }
 
 func openSQLite(t *testing.T) *gorm.DB {

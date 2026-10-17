@@ -147,6 +147,44 @@ class AuthStateTest {
     }
 
     @Test
+    fun anOfflineLaunchShowsTheLastKnownUser() = runTest {
+        val store = FakeTokenStore()
+        val u = User(id = 5, email = "u@x.com", name = "U", isModerator = true)
+        AuthState(store).apply { setUserFetcher { u }; signIn(Session("t", "r")) }
+
+        // Next launch, server unreachable.
+        val next = AuthState(store)
+        next.setUserFetcher { throw RuntimeException("offline") }
+        next.bootstrap()
+        assertEquals(u, next.user)
+        assertTrue(next.isModerator)
+    }
+
+    @Test
+    fun aFailedReloadKeepsTheUser() = runTest {
+        val u = User(id = 5, email = "u@x.com", name = "U", isModerator = false)
+        var online = true
+        val auth = AuthState(FakeTokenStore())
+        auth.setUserFetcher { if (online) u else null }
+        auth.signIn(Session("t"))
+        online = false
+        auth.reloadUser()
+        assertEquals(u, auth.user)
+    }
+
+    @Test
+    fun signingInNeverShowsThePreviousAccount() = runTest {
+        val store = FakeTokenStore()
+        val auth = AuthState(store)
+        auth.setUserFetcher { User(id = 1, email = "a@x.com", name = "A", isModerator = true) }
+        auth.signIn(Session("a"))
+        auth.setUserFetcher { null } // the next account's /auth/me fails
+        auth.signIn(Session("b"))
+        assertNull(auth.user)
+        assertFalse(auth.isModerator)
+    }
+
+    @Test
     fun clearAlsoWipesUser() = runTest {
         val store = FakeTokenStore()
         val auth = AuthState(store)

@@ -1,0 +1,18 @@
+# Prometheus for the compose stack (docs/observability.md). Scrapes each
+# libraryz instance's metrics listener (LIBRARYZ_METRICS_ADDR, :9090 on the
+# compose network, never routed through Kong) and Kong's status listener.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: libraryz
+    static_configs:
+      # One target per replica, like Kong's upstream targets.
+      - targets: ["libraryz-1:9090", "libraryz-2:9090"]
+  - job_name: kong
+    static_configs:
+      - targets: ["kong:8100"]

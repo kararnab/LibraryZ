@@ -28,6 +28,11 @@ go test ./...
 - [ ] No new Postgres-only column types without a dialect gate.
 - [ ] No new storage access that bypasses `internal/storage.Storage`.
 - [ ] Docs / OpenAPI spec updated if behavior changed.
+- [ ] Telemetry: does this feature need a usage event, or change an
+      existing one? New events go in `internal/telemetry/catalog.json`
+      (enum / bool / bounded int props only) and the app's "What's sent"
+      text. Nothing new in logs, metric labels, crash reports or events
+      names a user or what they read (see docs/observability.md).
 
 ## Screenshots / output
 

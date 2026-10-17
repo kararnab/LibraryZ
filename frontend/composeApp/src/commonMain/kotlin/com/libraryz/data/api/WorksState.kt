@@ -60,6 +60,9 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
     // for more; that must not page the new query onto the old items.
     private var replacing = false
 
+    /** Told whether each search's first page found anything (usage statistics; never the query). */
+    var onSearched: (hadResults: Boolean) -> Unit = {}
+
     // Works fetched one by one ([refreshOne]), whatever list is showing.
     private val opened = mutableStateMapOf<String, Work>()
 
@@ -141,6 +144,7 @@ class WorksState(private val api: ApiClient, private val pageSize: Int = DEFAULT
             if (gen != generation) return // a newer refresh or search replaced it
             items = page
             endReached = page.size < pageSize
+            onSearched(page.isNotEmpty())
         } catch (e: Throwable) {
             e.rethrowIfCancelled()
             if (gen == generation) error = api.describe(e)

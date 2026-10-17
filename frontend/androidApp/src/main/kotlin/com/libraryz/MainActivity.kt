@@ -56,6 +56,12 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean(AskingKey, asking)
     }
 
+    // Leaving the screen: send waiting telemetry now, not at the next launch.
+    override fun onStop() {
+        super.onStop()
+        AppExit.backgrounded()
+    }
+
     // singleTask: a link tapped while the app is open arrives here.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

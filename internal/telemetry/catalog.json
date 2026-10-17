@@ -1,0 +1,60 @@
+{
+  "_comment": "Every usage event the app may send. The server rejects anything not listed here, and the app's typed Events API is generated from this file (frontend: generateTelemetryEvents). Adding or changing an event is a reviewed change: props are enums, bools or bounded ints, never free text, ids, titles, queries or anything else that identifies a person or what they read. See docs/observability.md.",
+  "events": [
+    {
+      "name": "app_opened",
+      "description": "The app started (once per launch, after consent is known).",
+      "props": []
+    },
+    {
+      "name": "search",
+      "description": "A catalogue search finished. Never the query.",
+      "props": [
+        {"name": "had_results", "type": "bool"}
+      ]
+    },
+    {
+      "name": "book_opened",
+      "description": "The reader opened an edition. Never which one.",
+      "props": [
+        {"name": "format", "type": "enum", "values": ["pdf", "epub", "txt", "other"]},
+        {"name": "source", "type": "enum", "values": ["device", "server"]}
+      ]
+    },
+    {
+      "name": "upload_finished",
+      "description": "An upload ended (not when the reader cancelled it).",
+      "props": [
+        {"name": "kind", "type": "enum", "values": ["new_work", "add_edition"]},
+        {"name": "result", "type": "enum", "values": ["accepted", "duplicate", "rejected", "quota", "failed"]}
+      ]
+    },
+    {
+      "name": "library_status_set",
+      "description": "A book's reading status changed.",
+      "props": [
+        {"name": "status", "type": "enum", "values": ["want", "reading", "read"]}
+      ]
+    },
+    {
+      "name": "recommendation_opened",
+      "description": "A For You suggestion was opened.",
+      "props": []
+    },
+    {
+      "name": "recommendation_saved",
+      "description": "A For You suggestion was added to Want to read.",
+      "props": []
+    },
+    {
+      "name": "recommendation_dismissed",
+      "description": "A For You suggestion was dismissed.",
+      "props": []
+    },
+    {
+      "name": "went_offline",
+      "description": "The app lost the server (a request got no answer).",
+      "props": []
+    }
+  ]
+}

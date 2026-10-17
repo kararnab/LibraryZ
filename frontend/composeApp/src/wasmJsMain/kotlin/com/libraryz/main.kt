@@ -16,6 +16,8 @@ import kotlinx.browser.window
 fun main() {
     val fullscreen = BrowserFullscreen()
     val reduceMotion = ReduceMotionQuery()
+    // A hidden tab may be closed next: send waiting telemetry now.
+    document.addEventListener("visibilitychange", { if (pageHidden()) AppExit.backgrounded() })
     ComposeViewport(document.body!!) {
         CompositionLocalProvider(
             LocalFullscreen provides fullscreen,
@@ -23,6 +25,9 @@ fun main() {
         ) { App() }
     }
 }
+
+@JsFun("() => document.visibilityState === 'hidden'")
+private external fun pageHidden(): Boolean
 
 /** The browser's `prefers-reduced-motion`, followed live. */
 private class ReduceMotionQuery {

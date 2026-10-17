@@ -68,7 +68,8 @@ go test -tags=eval ./internal/recommendation/...
 scripts/load/run.sh seed && scripts/load/run.sh mix 8-9 "200 400 800"
 
 # Run the whole backend stack (Postgres + API) in one command:
-docker compose up --build          # API (2 instances behind Kong) on :8080, Postgres on :5432
+docker compose up --build          # API (2 instances behind Kong) on :8080, Postgres on :5432,
+                                   # Grafana on :3000, Prometheus on :9091 (docs/observability.md)
 # The frontend is a client, not a service — run it on the host (see below)
 # pointed at http://localhost:8080. Storage lives in the `blobs` volume.
 
@@ -442,6 +443,26 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Otherwise leaving a screen shows an error, or drops a queued library
   change. Bookkeeping that must finish (`LibraryState.sync` after an
   answer) runs in `withContext(NonCancellable)`.
+- **Observability: `docs/observability.md`.** Two kinds, two rules.
+  Operational (`internal/obs`, always on): Prometheus metrics on their own
+  listener (`LIBRARYZ_METRICS_ADDR`, `:9090`, never through Kong), slog
+  logs with the request id (`X-Request-ID`, set by Kong), one access line
+  per request with the **route template**, never the path, query, IP or
+  user. Metric labels stay bounded (`unmatched` for no route). Client
+  telemetry (`internal/telemetry`, app `data/telemetry/`): crash reports
+  and usage events, **opt-in** (asked once, both off; Settings › Privacy).
+  Never a user id, email, IP, title, work/edition id, query or file name.
+  Crash reports are exception type + scrubbed frames, **no message**.
+  Events are the closed catalog `internal/telemetry/catalog.json` (enum /
+  bool / bounded int props, no text); the server refuses anything else and
+  Gradle's `generateTelemetryEvents` turns it into the app's `Events` API.
+  A new event = a catalog entry + the "What's sent" text
+  (`PrivacyDialogs.kt`). The endpoints are anonymous (in
+  `anonymousAuthPaths`). Other destinations (Sentry, analytics) are
+  `telemetry.Sink` adapters in a `Fanout`, never direct calls from the app.
+  Nothing is sent live: events and crash reports wait in files on the
+  device and go out about once a minute and on `AppExit` (Android
+  `onStop`, tab hidden, desktop window closing).
 - **Versions are pinned in `frontend/gradle/libs.versions.toml`** —
   Kotlin 2.4.21, Compose Multiplatform 1.12.1, AGP 9.4.1 (Gradle 9.8.1,
   compileSdk 37). Compose deps use direct coordinates, not the deprecated

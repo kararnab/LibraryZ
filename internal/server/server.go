@@ -17,8 +17,10 @@ import (
 	"github.com/kararnab/libraryZ/internal/contribution"
 	"github.com/kararnab/libraryZ/internal/library"
 	"github.com/kararnab/libraryZ/internal/migrations"
+	"github.com/kararnab/libraryZ/internal/obs"
 	"github.com/kararnab/libraryZ/internal/recommendation"
 	"github.com/kararnab/libraryZ/internal/storage"
+	"github.com/kararnab/libraryZ/internal/telemetry"
 	"gorm.io/gorm"
 )
 
@@ -61,6 +63,9 @@ type Deps struct {
 	// Mail sends password-reset and verification emails; the zero value
 	// means mail is off (requests are still answered as usual).
 	Mail auth.Mail
+	// Telemetry receives the app's crash reports and usage events (sent
+	// only with the user's consent); nil means telemetry.StoreSink on DB.
+	Telemetry telemetry.Sink
 }
 
 // New builds the HTTP handler with all routes wired. Used by cmd/libraryz and
@@ -100,7 +105,19 @@ func New(d Deps) (http.Handler, error) {
 	recSvc := recommendation.NewService(d.DB)
 	recH := recommendation.NewHandler(recSvc)
 
+	events, err := telemetry.DefaultCatalog()
+	if err != nil {
+		return nil, err
+	}
+	sink := d.Telemetry
+	if sink == nil {
+		sink = telemetry.StoreSink{DB: d.DB}
+	}
+	telemetryH := telemetry.NewHandler(events, sink)
+
 	r := mux.NewRouter()
+	// Names the matched route for obs.Middleware's metrics and access log.
+	r.Use(obs.RouteTag)
 	r.HandleFunc("/health", authH.HealthCheck).Methods(http.MethodGet)
 	r.HandleFunc("/ready", ready(d.DB, d.Storage, d.Draining)).Methods(http.MethodGet)
 	r.HandleFunc("/auth/signup", authH.SignUp).Methods(http.MethodPost)
@@ -121,6 +138,10 @@ func New(d Deps) (http.Handler, error) {
 	r.HandleFunc("/editions/{id}/download", catH.DownloadEdition).Methods(http.MethodGet)
 
 	r.HandleFunc("/contributions", contribH.List).Methods(http.MethodGet)
+
+	// Consented client telemetry: anonymous, checked against the catalog.
+	r.HandleFunc("/telemetry/crashes", telemetryH.Crashes).Methods(http.MethodPost)
+	r.HandleFunc("/telemetry/events", telemetryH.Events).Methods(http.MethodPost)
 	r.HandleFunc("/contributions/{id}", contribH.Get).Methods(http.MethodGet)
 
 	authed := r.NewRoute().Subrouter()
@@ -165,7 +186,9 @@ func New(d Deps) (http.Handler, error) {
 	// absent or invalid) for every route; RequireAuth/RequirePermission then
 	// gate. CORS wraps everything so OPTIONS preflights are answered before
 	// mux's method matcher returns 405 (r.Use would run after routing).
-	return cors(a.HTTP.Protect(r), d.AllowedOrigins, d.AllowPrivateLAN), nil
+	// obs.Middleware is outermost: every request gets an id, a metric and a
+	// log line, and a panic anywhere below becomes a 500.
+	return obs.Middleware(cors(a.HTTP.Protect(r), d.AllowedOrigins, d.AllowPrivateLAN)), nil
 }
 
 // cors is the CORS layer for browser clients. It reflects the request Origin
@@ -189,7 +212,7 @@ func cors(next http.Handler, allowed []string, allowPrivateLAN bool) http.Handle
 				"GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers",
 				"Authorization, Content-Type, X-Requested-With")
-			w.Header().Set("Access-Control-Expose-Headers", "Authorization, Content-Disposition, Retry-After, X-Content-SHA256")
+			w.Header().Set("Access-Control-Expose-Headers", "Authorization, Content-Disposition, Retry-After, X-Content-SHA256, X-Request-ID")
 		}
 		// Preflights are always answered 204 (a disallowed origin simply gets
 		// no Allow-Origin header, so the browser blocks it). Non-OPTIONS

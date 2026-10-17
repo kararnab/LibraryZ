@@ -56,6 +56,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
+import com.libraryz.data.telemetry.BookOpenedFormat
+import com.libraryz.data.telemetry.BookOpenedSource
+import com.libraryz.data.telemetry.Events
+import com.libraryz.data.telemetry.LibraryStatusSetStatus
+import com.libraryz.data.telemetry.Telemetry
+import com.libraryz.data.telemetry.UploadFinishedKind
+import com.libraryz.data.telemetry.UploadFinishedResult
+import com.libraryz.data.telemetry.createCrashStore
+import com.libraryz.data.telemetry.createEventStore
+import androidx.compose.runtime.DisposableEffect
+import com.libraryz.data.telemetry.createTelemetryStore
+import com.libraryz.data.telemetry.installCrashHandler
+import com.libraryz.data.api.DuplicateEditionException
+import com.libraryz.ui.components.TelemetryConsentDialog
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -115,6 +132,12 @@ val LocalSnackbar = compositionLocalOf<SnackbarHostState> {
     error("No SnackbarHost in scope")
 }
 
+/**
+ * Consented crash reports and usage events. The default sends nothing (no
+ * stores, never loaded), which is what previews and screenshots get.
+ */
+val LocalTelemetry = staticCompositionLocalOf { Telemetry() }
+
 // M3 "expanded" window-size threshold. Below = phone single-pane; above =
 // navigation rail + list-detail layout.
 private const val EXPANDED_DP = 840
@@ -145,10 +168,19 @@ fun App() {
         val contributions = remember(serverUrl) { ContributionsState(api) }
         val library = remember(serverUrl) { LibraryState(api, ::createLibraryStore, serverUrl) }
         val recs = remember(serverUrl) { RecommendationsState(api) }
+        // Crash reports and usage statistics, each only if the reader agreed
+        // (asked once, in Root). The handler is installed at once so a crash
+        // during start-up is caught too, once the choice is loaded.
+        val telemetry = remember { Telemetry(::createTelemetryStore, ::createCrashStore, ::createEventStore) }
 
         LaunchedEffect(Unit) {
             serverStore.load()?.let { api.baseUrl = it; serverUrl = it }
             auth.bootstrap()
+        }
+        LaunchedEffect(telemetry) {
+            installCrashHandler { type, frames -> telemetry.recordCrash(type, frames, fatal = true) }
+            telemetry.load()
+            telemetry.track(Events.appOpened())
         }
         val scope = rememberCoroutineScope()
         // Blank or invalid input means the default. Between dev addresses
@@ -190,7 +222,7 @@ fun App() {
             if (auth.isModerator && contributions.items == null) contributions.refresh()
         }
 
-        CompositionLocalProvider(LocalSnackbar provides snackbar) {
+        CompositionLocalProvider(LocalSnackbar provides snackbar, LocalTelemetry provides telemetry) {
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbar) },
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -255,6 +287,7 @@ internal fun Root(
     }
     val scope = rememberCoroutineScope()
     val snackbar = LocalSnackbar.current
+    val telemetry = LocalTelemetry.current
 
     // Follow the session: a restored one jumps straight to Browse; losing it
     // (logout, or expiry detected by ApiClient anywhere in the app) returns
@@ -345,6 +378,7 @@ internal fun Root(
     // them (and the saved library's works) without the server.
     val onDevice = savedWorks(books.books) { id -> library.entryFor(id)?.work }
     remember(works, library, books) {
+        works.onSearched = { found -> telemetry.track(Events.search(hadResults = found)) }
         library.workLookup = { id -> works.find(id) }
         works.localWorks = {
             savedWorks(books.books) { id -> library.entryFor(id)?.work } + library.items.orEmpty().mapNotNull { it.work }
@@ -432,8 +466,14 @@ internal fun Root(
     }
     // Back online (any answer from the server): send what's waiting and
     // swap saved copies for the server's.
+    var wasOffline by remember { mutableStateOf(false) }
     LaunchedEffect(api.reachable, auth.isAuthenticated) {
+        if (!api.reachable) wasOffline = true
         if (api.reachable && auth.isAuthenticated) {
+            // The user never loaded (a launch without the server), or may
+            // have changed (roles, verification) while we were away.
+            if (auth.user == null || wasOffline) auth.reloadUser()
+            wasOffline = false
             if (library.offline || library.pending.isNotEmpty()) library.refresh()
             if (works.items == null && works.error != null) works.refresh()
         }
@@ -450,6 +490,35 @@ internal fun Root(
             }
         }
     }
+    // Crash reports and usage statistics: asked once, then sent about once a
+    // minute (a crash from the last run first) while the server answers.
+    if (telemetry.loaded && !telemetry.consent.asked) {
+        TelemetryConsentDialog(
+            onDecide = { crashes, usage ->
+                scope.launch {
+                    telemetry.setConsent(crashes, usage)
+                    // The launch was before the choice; count it now.
+                    telemetry.track(Events.appOpened())
+                }
+            },
+        )
+    }
+    LaunchedEffect(telemetry) {
+        snapshotFlow { telemetry.loaded }.first { it }
+        while (true) {
+            if (api.reachable) telemetry.flush(api)
+            delay(60_000)
+        }
+    }
+    LaunchedEffect(api.reachable) {
+        if (!api.reachable) telemetry.track(Events.wentOffline())
+    }
+    // Leaving the screen or closing sends what's waiting now (AppExit).
+    DisposableEffect(telemetry, api) {
+        AppExit.send = { telemetry.flush(api) }
+        onDispose { AppExit.send = null }
+    }
+
     // The queue is sent only for the user who made it.
     val userId = auth.user?.id
     LaunchedEffect(userId, library) { userId?.let { library.signedInAs(it) } }
@@ -472,6 +541,12 @@ internal fun Root(
     }
     val readEdition: (Work, Edition) -> Unit = { work, ed ->
         if (canPreview(ed.format)) {
+            telemetry.track(
+                Events.bookOpened(
+                    format = BookOpenedFormat.entries.firstOrNull { it.wire == ed.format.lowercase() } ?: BookOpenedFormat.Other,
+                    source = if (books.isSaved(ed.id)) BookOpenedSource.Device else BookOpenedSource.Server,
+                ),
+            )
             nav.push(Screen.Preview(ed.id, ed.format, work.id, work.title, work.authors))
         } else {
             scope.launch {
@@ -525,6 +600,7 @@ internal fun Root(
 
     // Personal-library handlers, shared by compact + expanded WorkDetail.
     val libraryUpsert: (String, UpsertLibraryRequest) -> Unit = { workId, req ->
+        LibraryStatusSetStatus.entries.firstOrNull { it.wire == req.status }?.let { telemetry.track(Events.libraryStatusSet(it)) }
         scope.launch {
             try {
                 library.upsert(workId, req)
@@ -754,9 +830,18 @@ internal fun Root(
                     state = recs,
                     isWide = expanded,
                     onBack = null,
-                    onOpenWork = { workId -> openWork(nav, workId, expanded) },
-                    onDismiss = dismissRec,
-                    onWantToRead = { workId -> libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want)) },
+                    onOpenWork = { workId ->
+                        telemetry.track(Events.recommendationOpened())
+                        openWork(nav, workId, expanded)
+                    },
+                    onDismiss = { workId ->
+                        telemetry.track(Events.recommendationDismissed())
+                        dismissRec(workId)
+                    },
+                    onWantToRead = { workId ->
+                        telemetry.track(Events.recommendationSaved())
+                        libraryUpsert(workId, UpsertLibraryRequest(status = LibraryStatus.Want))
+                    },
                     isInLibrary = { workId -> library.entryFor(workId) != null },
                     onUpload = { nav.push(Screen.Upload()) },
                 )
@@ -801,6 +886,8 @@ internal fun Root(
                 onSignOut = logout,
                 onSignOutEverywhere = logoutEverywhere,
                 books = books,
+                telemetry = telemetry.consent,
+                onTelemetryChange = { crashes, usage -> scope.launch { telemetry.setConsent(crashes, usage) } },
                 onBack = null,
             )
 
@@ -891,54 +978,61 @@ internal fun Root(
                 },
                 loadQuota = { size -> api.uploadQuota(size) },
                 onSubmit = { submission, onProgress ->
-                    when (submission) {
-                        is UploadSubmission.NewWork -> {
-                            val created = api.createWork(
-                                CreateWorkRequest(
-                                    title = submission.title,
-                                    authors = submission.authors,
-                                    language = submission.language,
-                                    publicationYear = submission.publicationYear,
+                    val kind = if (submission is UploadSubmission.NewWork) UploadFinishedKind.NewWork else UploadFinishedKind.AddEdition
+                    try {
+                        when (submission) {
+                            is UploadSubmission.NewWork -> {
+                                val created = api.createWork(
+                                    CreateWorkRequest(
+                                        title = submission.title,
+                                        authors = submission.authors,
+                                        language = submission.language,
+                                        publicationYear = submission.publicationYear,
+                                    )
                                 )
-                            )
-                            try {
+                                try {
+                                    api.uploadEdition(
+                                        workId = created.id,
+                                        format = inferFormatFromName(submission.file.name),
+                                        language = submission.language,
+                                        fileName = submission.file.name,
+                                        bytes = submission.file.bytes,
+                                        onProgress = onProgress,
+                                    )
+                                } catch (e: Throwable) {
+                                    // Don't leave an empty work behind when its
+                                    // only upload was rejected (e.g. duplicate
+                                    // file) or cancelled. Creators may remove
+                                    // their own still-empty work. Best effort,
+                                    // and it must run even when cancelled.
+                                    withContext(NonCancellable) {
+                                        runCatching { api.deleteWork(created.id, RemovalRequest("Upload failed; discarding the empty work")) }
+                                    }
+                                    throw e
+                                } finally {
+                                    withContext(NonCancellable) { works.refresh() }
+                                }
+                                created.id
+                            }
+                            is UploadSubmission.AddEdition -> {
+                                val wid = top.workId
+                                    ?: error("AddEdition submission without a workId")
                                 api.uploadEdition(
-                                    workId = created.id,
-                                    format = inferFormatFromName(submission.file.name),
+                                    workId = wid,
+                                    format = submission.format,
                                     language = submission.language,
                                     fileName = submission.file.name,
                                     bytes = submission.file.bytes,
                                     onProgress = onProgress,
                                 )
-                            } catch (e: Throwable) {
-                                // Don't leave an empty work behind when its
-                                // only upload was rejected (e.g. duplicate
-                                // file) or cancelled. Creators may remove
-                                // their own still-empty work. Best effort,
-                                // and it must run even when cancelled.
-                                withContext(NonCancellable) {
-                                    runCatching { api.deleteWork(created.id, RemovalRequest("Upload failed; discarding the empty work")) }
-                                }
-                                throw e
-                            } finally {
-                                withContext(NonCancellable) { works.refresh() }
+                                works.refreshOne(wid)
+                                wid
                             }
-                            created.id
-                        }
-                        is UploadSubmission.AddEdition -> {
-                            val wid = top.workId
-                                ?: error("AddEdition submission without a workId")
-                            api.uploadEdition(
-                                workId = wid,
-                                format = submission.format,
-                                language = submission.language,
-                                fileName = submission.file.name,
-                                bytes = submission.file.bytes,
-                                onProgress = onProgress,
-                            )
-                            works.refreshOne(wid)
-                            wid
-                        }
+                        }.also { telemetry.track(Events.uploadFinished(kind, UploadFinishedResult.Accepted)) }
+                    } catch (e: Throwable) {
+                        e.rethrowIfCancelled()
+                        telemetry.track(Events.uploadFinished(kind, uploadResult(e)))
+                        throw e
                     }
                 },
             )
@@ -946,6 +1040,14 @@ internal fun Root(
             else -> Unit
         }
     }
+}
+
+/** How a failed upload ended, for usage statistics. */
+private fun uploadResult(e: Throwable): UploadFinishedResult = when {
+    e is DuplicateEditionException -> UploadFinishedResult.Duplicate
+    e is ApiException && e.status == 429 -> UploadFinishedResult.Quota
+    e is ApiException && e.status in 400..499 -> UploadFinishedResult.Rejected
+    else -> UploadFinishedResult.Failed
 }
 
 private fun screenFor(link: DeepLink): Screen = when (link) {

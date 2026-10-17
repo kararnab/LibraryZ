@@ -144,6 +144,8 @@ What's running:
 | <http://localhost:8025> | **Mailpit**: every email the stack sends lands here; nothing leaves the machine |
 | `:5432` | Postgres (book and user data) |
 | `:9100` (console `:9101`) | RustFS, an S3-compatible file store. Any S3 service works in production |
+| <http://localhost:3000> | **Grafana** (`admin` / `admin`): service health, and the app's opt-in crash reports and usage ([observability](docs/observability.md)) |
+| <http://localhost:9091> | Prometheus, with the alert rules |
 
 Then open the app (needs JDK 21, see [Running the client](#running-the-client)):
 
@@ -305,7 +307,10 @@ All via environment variables. Defaults work for `docker compose up`.
 | `LIBRARYZ_LOAD_SUBJECT_ON_ACCESS`         | `true` — role changes and disabled users apply to the next request; `false` uses the token's roles (≤15 min stale) |
 | `LIBRARYZ_REDIS_ADDR` / `_REDIS_PASSWORD` | _(unset)_ — Redis for login throttling shared by all replicas; unset = per-process memory |
 | `LIBRARYZ_TRUSTED_PROXIES`                | _(unset)_ — CIDRs whose `X-Forwarded-For` is believed (set behind Kong / an LB) |
-| `LIBRARYZ_SESSION_PURGE_INTERVAL`         | `1h` — how often expired sessions, used/expired email tokens and old send records are deleted |
+| `LIBRARYZ_SESSION_PURGE_INTERVAL`         | `1h` — how often expired sessions, used/expired email tokens, old send records and old telemetry are deleted |
+| `LIBRARYZ_LOG_FORMAT` / `_LOG_LEVEL`      | `text` (compose: `json`) / `info`                                  |
+| `LIBRARYZ_METRICS_ADDR`                   | `:9090` — Prometheus `/metrics` on its own listener (keep it private); `off` disables it |
+| `LIBRARYZ_TELEMETRY_RETENTION`            | `2160h` (90 days) — how long the app's opt-in crash reports and usage events are kept |
 | `LIBRARYZ_MAIL_PROVIDER`                  | `none` — nothing is sent (reset/verify requests are still answered); `smtp` sends. See [Email](#email) |
 | `LIBRARYZ_PUBLIC_URL`                     | _(unset)_ — origin of the web app that emailed links open (required with `smtp`; `https` outside localhost) |
 | `LIBRARYZ_MAIL_FROM` / `_MAIL_REPLY_TO`   | _(unset)_ — named sender, e.g. `LibraryZ <accounts@example.org>` (required with `smtp`); optional reply-to inbox |

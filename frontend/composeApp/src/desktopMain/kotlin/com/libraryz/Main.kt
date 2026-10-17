@@ -23,7 +23,15 @@ import java.awt.Taskbar
 import java.awt.Toolkit
 import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
+import kotlinx.coroutines.runBlocking
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.window.DefaultWindowExceptionHandlerFactory
+import androidx.compose.ui.window.LocalWindowExceptionHandlerFactory
+import androidx.compose.ui.window.WindowExceptionHandler
+import androidx.compose.ui.window.WindowExceptionHandlerFactory
+import com.libraryz.data.telemetry.reportUiCrash
 
+@OptIn(ExperimentalComposeUiApi::class)
 fun main(args: Array<String>) {
     // Another copy is running and took the link (or the launch): done.
     if (!DesktopLinks.start(args)) return
@@ -32,27 +40,49 @@ fun main(args: Array<String>) {
     val icon = appIcon()?.let { BitmapPainter(it.toComposeImageBitmap()) }
     application {
         val state = rememberWindowState(size = DpSize(1280.dp, 800.dp))
-        Window(
-            onCloseRequest = ::exitApplication,
-            title = "LibraryZ",
-            icon = icon,
-            state = state,
-        ) {
-            // A link or a second launch brings the window forward.
-            val raise by DesktopLinks.raise.collectAsState()
-            LaunchedEffect(raise) {
-                if (raise == 0) return@LaunchedEffect
-                if (state.isMinimized) state.isMinimized = false
-                window.toFront()
-                window.requestFocus()
+        // The AWT window, for hiding it the moment it's closed.
+        val awtWindow = remember { arrayOfNulls<ComposeWindow>(1) }
+        // A crash inside the UI: Compose catches it, so report it here, show
+        // Compose's usual error dialog, then quit. Left alone, the window
+        // closes but the process stays, holding the single-instance lock.
+        val onUiCrash = remember {
+            WindowExceptionHandlerFactory { window ->
+                WindowExceptionHandler { e ->
+                    reportUiCrash(e)
+                    DefaultWindowExceptionHandlerFactory.exceptionHandler(window).onException(e)
+                    exitApplication()
+                }
             }
-            val fullscreen = remember(state) { WindowFullscreen(state, window) }
-            val systemDark by LinuxColorScheme.dark.collectAsState()
-            CompositionLocalProvider(
-                LocalFullscreen provides fullscreen,
-                LocalSystemDarkTheme provides systemDark,
-                LocalReduceMotion provides DesktopReduceMotion.enabled,
-            ) { App() }
+        }
+        CompositionLocalProvider(LocalWindowExceptionHandlerFactory provides onUiCrash) {
+            Window(
+                // Hidden at once; waiting telemetry gets up to 2 s to go out.
+                onCloseRequest = {
+                    awtWindow[0]?.isVisible = false
+                    runBlocking { AppExit.beforeExit() }
+                    exitApplication()
+                },
+                title = "LibraryZ",
+                icon = icon,
+                state = state,
+            ) {
+                // A link or a second launch brings the window forward.
+                val raise by DesktopLinks.raise.collectAsState()
+                LaunchedEffect(raise) {
+                    if (raise == 0) return@LaunchedEffect
+                    if (state.isMinimized) state.isMinimized = false
+                    window.toFront()
+                    window.requestFocus()
+                }
+                awtWindow[0] = window
+                val fullscreen = remember(state) { WindowFullscreen(state, window) }
+                val systemDark by LinuxColorScheme.dark.collectAsState()
+                CompositionLocalProvider(
+                    LocalFullscreen provides fullscreen,
+                    LocalSystemDarkTheme provides systemDark,
+                    LocalReduceMotion provides DesktopReduceMotion.enabled,
+                ) { App() }
+            }
         }
     }
 }

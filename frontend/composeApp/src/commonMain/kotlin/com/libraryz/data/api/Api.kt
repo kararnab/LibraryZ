@@ -14,6 +14,8 @@ import com.libraryz.data.UploadQuota
 import com.libraryz.data.UserBook
 import com.libraryz.data.Work
 import com.libraryz.data.capped
+import com.libraryz.data.telemetry.CrashBatch
+import com.libraryz.data.telemetry.EventBatch
 import kotlinx.serialization.json.JsonElement
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
@@ -159,13 +161,15 @@ interface SessionHooks {
 }
 
 /**
- * Endpoints that take credentials in the body and must never carry a
- * (possibly stale) access token: sending one to `/auth/refresh` would also
- * let the bearer provider try to "refresh" a failed refresh.
+ * Endpoints that must never carry a (possibly stale) access token. The
+ * credential ones take credentials in the body: sending one to
+ * `/auth/refresh` would also let the bearer provider try to "refresh" a
+ * failed refresh. Telemetry is never tied to an account.
  */
 private val anonymousAuthPaths = listOf(
     "/auth/login", "/auth/signup", "/auth/refresh", "/auth/logout",
     "/auth/password-reset", "/auth/password-reset/complete", "/auth/email-verification/complete",
+    "/telemetry/crashes", "/telemetry/events",
 )
 
 /** [filename] is null when the server didn't name the file. */
@@ -362,6 +366,16 @@ class ApiClient(
             }
         }
     }
+
+    // ----- Telemetry (consented; see Telemetry) -----
+
+    /** Sends crash reports; returns the HTTP status (202 when taken). */
+    suspend fun sendCrashes(batch: CrashBatch): Int =
+        client.post("$baseUrl/telemetry/crashes") { setBody(batch) }.status.value
+
+    /** Sends usage events; returns the HTTP status (202 when taken). */
+    suspend fun sendEvents(batch: EventBatch): Int =
+        client.post("$baseUrl/telemetry/events") { setBody(batch) }.status.value
 
     // ----- Auth -----
 

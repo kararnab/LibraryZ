@@ -1188,6 +1188,163 @@ and For You from opening offline, with a snackbar saying why.
 bundle and pdf.js (now from cdnjs), and books in OPFS / IndexedDB under the
 browser's quota. iOS waits for a Mac.
 
+### Phase 9 — product maturity (planned 2026-10-13)
+
+Came out of a product-maturity review after Phase 8. The engineering
+(sync, sanitization, quotas, HA prep, the reader) is ahead of the product.
+What's missing is mostly what a public deployment and its readers need.
+Slices are in priority order: 9.1 and 9.2 gate the first production
+deployment (which also ends the pre-alpha data policy), and 9.3 gates
+store releases. No issues are filed yet.
+
+**Slice 9.1 — launch blockers: legal, abuse, accounts.**
+121. **Reader reports.** A "Report" action on Book detail (and the
+     reader's menu): reason (copyright, illegal, spam, broken file) +
+     free text, into a moderator queue next to contributions. Rate-limited
+     per account. A report links to the existing takedown (`Removal`) so
+     resolving one records `content` vs `technical`.
+122. **Copyright notice intake.** A public notice form/endpoint (no account
+     needed) for rights holders, a counter-notice path for the uploader,
+     and a repeat-infringer rule: N `content` takedowns of a user's uploads
+     disables uploads (then the account). Needs a decision on the notice
+     agent and jurisdiction before building.
+123. **Terms of Service + Privacy Policy.** Served by the backend and linked
+     from sign-up (accepting them is recorded with a version), Settings ›
+     About, and the Upload sheet (the uploader states they have the rights).
+124. **Account deletion.** `DELETE /me` (password re-check). Removes the
+     user's library, sessions, tokens and roles. Uploaded editions and
+     approved contributions stay, unattributed. Required by GDPR/DPDP and
+     the Play Store. Settings › Account › Delete account.
+125. **Data export.** `GET /me/export`: library, notes, ratings, shelves,
+     contributions as JSON (+ a CSV of the library). Also the basis for
+     9.5's import/export.
+126. **Change email / change password while signed in.** Email change
+     re-verifies the new address and notifies the old one; password change
+     revokes other sessions (iam already supports logout-all).
+
+**Slice 9.2 — run it in production.**
+127. **Metrics.** Prometheus `/metrics` (not routed through Kong): request
+     rate/latency/status per route, DB pool, upload sanitization outcomes and
+     child-process kills, quota refusals, trainer runs and duration, blob GC.
+     **DONE (2026-10-13)** in `internal/obs` + Prometheus/Grafana in compose
+     ([docs/observability.md](docs/observability.md)). Upload outcomes and
+     quota refusals come from per-route status counts (400/409/413/429);
+     sanitizer child kills don't have a metric of their own yet. ✓
+128. **Tracing + structured request logs.** OpenTelemetry spans per request
+     and DB call, a request id that Kong sets and logs carry. **Logs and
+     request ids DONE (2026-10-13)** (slog JSON, Kong correlation-id,
+     route-template access log). Tracing still to do.
+129. **Error reporting.** Backend panics and 5xx, plus app crashes and
+     unexpected exceptions (Android, Desktop, Wasm), to an error tracker.
+     Opt-in in the app (Settings), and never with tokens, links or file
+     contents (same rule as the mail logs). **DONE (2026-10-13)**: our own
+     backend is the tracker (`internal/telemetry`: crash groups by
+     fingerprint, scrubbed stacks, no messages), opt-in asked once at first
+     launch; backend panics are recovered, logged with their stack and
+     counted. Forwarding to Sentry later is a `telemetry.Sink` adapter. ✓
+130. **Alerting.** On `/ready`, 5xx rate, p95 latency, disk / bucket usage,
+     a stale recommendation model, and a failed backup. **Rules DONE
+     (2026-10-13)** (`deploy/prometheus/alerts.yml`); disk/bucket and backup
+     alerts wait for 131/132, routing (Alertmanager) for the deployment.
+131. **Backups + restore drill.** Postgres base backups + WAL archiving
+     (PITR) and bucket replication/versioning to a second location. A
+     scripted restore into a scratch stack, run on a schedule; a backup
+     nobody has restored doesn't count.
+132. **Production deployment.** A production compose (or equivalent) with
+     TLS on Kong, secrets out of the environment file, pinned images, and
+     a documented first-deploy + rollback runbook. CD: build and push images
+     on tag, then `scripts/rolling-deploy.sh` on the host.
+
+**Slice 9.3 — release and distribution.**
+133. **Release workflow.** On a `v*` tag: signed Android AAB/APK, desktop
+     installers (deb/rpm, msi, dmg when a Mac runner is used), the Wasm
+     bundle, the backend image, and release notes from CHANGELOG.md.
+134. **Hosted web app.** The Wasm production bundle served by Kong (or a
+     static host) with caching headers; `LIBRARYZ_PUBLIC_URL` points at it
+     instead of the dev server.
+135. **Play Store listing.** Store assets, data-safety form (depends on
+     9.1), content rating, internal → closed testing track.
+136. **Update awareness.** The app learns the latest version from the
+     server (`/health` or a `/version`) and offers the update on Desktop;
+     the backend can refuse clients below a minimum version with a clear
+     message.
+137. **iOS decision.** Either get a Mac (or a macOS CI runner) to link and
+     run it, or mark iOS unsupported until then. It has never run.
+
+**Slice 9.4 — moderation and admin.**
+138. **Admin endpoints + screen.** Grant/revoke `moderator`, disable /
+     enable a user, list a user's uploads and contributions. Replaces the
+     SQL in CLAUDE.md's "Moderator promotion (v0)". Admin is a new role,
+     not every moderator.
+139. **Audit log.** Who removed, restored, approved, rejected, promoted or
+     disabled what, and when, browsable by moderators. Takedowns already
+     keep who/why on the row; this collects all moderator actions.
+140. **Undo a takedown.** Restore a removed work/edition (before blob GC
+     runs); today a `content` removal is permanent.
+141. **My contributions.** A screen over the existing
+     `GET /me/contributions`: pending / approved / rejected with the
+     moderator's reason, so contributors learn why. Reverses the
+     Phase 2 "out of scope" call now that crowdsourcing needs retention.
+142. **Spam handling.** Bulk-reject a user's pending contributions and
+     take down their uploads in one action.
+
+**Slice 9.5 — catalog and library depth.**
+143. **Authors as entities.** An `authors` table + `work_authors` join
+     (replacing the `;` string), author pages listing their works, and
+     contributions that can merge duplicate authors.
+144. **Series.** Series + volume number on works; Book detail shows the
+     series and the next volume.
+145. **Metadata import at upload.** Prefill title, authors, description,
+     subjects and cover from OpenLibrary by ISBN (or the EPUB's OPF); the
+     uploader confirms.
+146. **More formats.** CBZ (comics; images only, so it fits the sanitizer)
+     first, then MOBI/AZW3 (convert to EPUB on upload, DRM refused). DJVU
+     last. Each needs a sanitizer and reader path; the Phase 1 dropdown
+     already promises them.
+147. **Facets in Browse.** Filter by language, subject/tag, format and
+     author; sort by rating and popularity, not only relevance/newest.
+148. **Similar books** on Book detail from the item-neighbor tables the
+     trainer already writes.
+149. **Library import/export.** Goodreads CSV and Calibre import (matched
+     to works by ISBN, unmatched ones listed); export uses 9.1's export.
+150. **Multiple shelves + reading stats.** Shelves become a set (tags on the
+     entry, its own CRDT field group), plus a yearly goal and
+     books/pages-read stats from progress stamps.
+
+**Slice 9.6 — reader depth.**
+151. **Bookmarks and highlights with notes.** Anchored to a location
+     (PDF page + rect; text: chapter + character offset), synced as a new
+     add-wins set in the library merge (`merge_cases.json` gets cases).
+152. **Search in book.** Text reader: over the built text; PDF: pdf.js /
+     PDFBox / `PdfRenderer` text where available.
+153. **Lookup and read aloud.** Dictionary/selection lookup via the
+     platform where there is one; text-to-speech for the text reader.
+
+**Slice 9.7 — quality and reach.**
+154. **Accessibility pass.** Screen readers (TalkBack, Orca/NVDA via
+     Compose's desktop a11y, browser a11y on Wasm): labels on every
+     icon-only control, reading order, focus. Font scaling to 200%,
+     contrast of the reading themes, and full keyboard navigation on
+     Desktop and Web. Add semantics assertions to commonTest.
+155. **Localization.** Move UI strings into Compose resources
+     (`composeResources/values/strings.xml`) and backend email templates
+     into per-locale files; ship English, add a second locale to prove it.
+156. **Web offline.** The deferred part of Phase 8: a service worker for the
+     bundle and pdf.js, saved books in OPFS/IndexedDB.
+157. **Product analytics (privacy-respecting, opt-in).** A handful of
+     counted events (search with no results, upload abandoned, book opened,
+     recommendation opened/dismissed) to decide what to build next, and an
+     online check of MF vs the popularity fallback to complement the
+     offline `-tags=eval`. **Events DONE (2026-10-13)**: the closed catalog
+     `internal/telemetry/catalog.json`, opt-in, Grafana panels. The MF vs
+     popularity online check still to do (needs the recommendation source
+     as an enum prop).
+158. **First run + seeding.** An empty catalog and a cold-start recommender
+     make a poor first impression. A one-shot import of public-domain books
+     (Standard Ebooks / Project Gutenberg) through the normal sanitize path,
+     and an onboarding step that asks for a few liked subjects to seed
+     For You.
+
 ## Storage: do we need erasure coding?
 
 **No, not for any phase we've planned.** Erasure coding (Reed-Solomon etc.) is

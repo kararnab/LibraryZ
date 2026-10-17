@@ -128,6 +128,15 @@ x-libraryz: &libraryz
     # LIBRARYZ_BLOB_GC_RETENTION: "720h"
     # Recommendation retrain interval (optional; default 6h):
     # LIBRARYZ_REC_RETRAIN_INTERVAL: "6h"
+    # Observability (docs/observability.md). JSON logs, one line per request
+    # with its X-Request-ID (set by Kong); no user, IP, path ids or query.
+    LIBRARYZ_LOG_FORMAT: json
+    # LIBRARYZ_LOG_LEVEL: "info"
+    # GET /metrics for Prometheus, on its own port inside the compose
+    # network (Kong doesn't route to it). "off" turns it off.
+    # LIBRARYZ_METRICS_ADDR: ":9090"
+    # Consented crash reports and usage events are kept this long:
+    # LIBRARYZ_TELEMETRY_RETENTION: "2160h"
   # /ready checks Postgres + the S3 store (503 if either is unreachable); /health is
   # liveness only. busybox wget ships in the alpine runtime image.
   healthcheck:
@@ -236,6 +245,8 @@ services:
       KONG_NGINX_HTTP_CLIENT_MAX_BODY_SIZE: 600m
       KONG_NGINX_HTTP_CLIENT_BODY_BUFFER_SIZE: 16k
       KONG_LOG_LEVEL: notice
+      # Kong's own /metrics (prometheus plugin) for Prometheus; not published.
+      KONG_STATUS_LISTEN: "0.0.0.0:8100"
     volumes:
       - ./deploy/kong/kong.yml:/etc/kong/kong.yml:ro
     ports:
@@ -280,6 +291,61 @@ services:
   libraryz-2:
     <<: *libraryz
 
+  # Observability (docs/observability.md). Prometheus scrapes both API
+  # instances and Kong and evaluates deploy/prometheus/alerts.yml (UI on
+  # http://localhost:9091; firing alerts under /alerts). Grafana
+  # (http://localhost:3000, admin / admin) has the LibraryZ dashboard:
+  # service health from Prometheus, and the app's consented crash reports
+  # and usage events from Postgres through a role that can read only those
+  # tables.
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - promdata:/prometheus
+    ports:
+      - "9091:9090" # 9090 is the API's metrics port when it runs on the host
+
+  # Creates Grafana's read-only role once the API has migrated the schema
+  # (the grants name the telemetry tables). Re-runs harmlessly.
+  telemetry-reader:
+    image: postgres:16-alpine
+    depends_on:
+      libraryz-1:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: password
+    volumes:
+      - ./deploy/postgres/telemetry-reader.sql:/telemetry-reader.sql:ro
+    command: ["psql", "-h", "postgres", "-U", "user", "-d", "libraryz", "-v", "ON_ERROR_STOP=1", "-f", "/telemetry-reader.sql"]
+    restart: "no"
+
+  grafana:
+    image: grafana/grafana:13.1.8
+    depends_on:
+      - prometheus
+      - telemetry-reader
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      # Grafana's own usage reporting and update checks stay off.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      # Open straight onto the LibraryZ dashboard.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/libraryz.json
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
 volumes:
   pgdata:
   s3data:
+  promdata:
+  grafanadata:

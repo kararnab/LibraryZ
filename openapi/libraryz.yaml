@@ -39,14 +39,18 @@ info:
 
     **Rate limits.** In the compose/production setup Kong enforces per-IP
     limits (login 5/min, signup 3/min, refresh 20/min, logout 10/min,
-    edition upload 30/hour, everything else 60/min) and answers `429` when
+    edition upload 30/hour, telemetry 20/min, everything else 60/min) and answers `429` when
     exceeded. Edition uploads also count against a per-account quota over a
     rolling window (default per day: 20 files / 2 GiB, or 5 files / 500 MiB
     for accounts that are unverified or under a week old; moderators are
     exempt); see `GET /me/upload-quota`. On top of that the app throttles failed logins per account
     (5 failures in 15 minutes) and per IP (100), with a growing back-off;
     those `429`s carry `Retry-After`. Request bodies are capped at 5 MB
-    except edition uploads (500 MiB).
+    except edition uploads (500 MiB) and telemetry (256 KiB crashes, 64 KiB
+    events).
+
+    **Request ids.** Every response carries `X-Request-ID` (Kong's, or the
+    caller's if it's short and plain, else a new one); the server logs it.
 servers:
   - url: http://localhost:8080
     description: Local dev
@@ -68,6 +72,13 @@ tags:
     description: "Personalized suggestions (matrix factorization with a content/popularity fallback)."
   - name: moderation
     description: "Moderator-only takedowns (soft delete, audited)."
+  - name: telemetry
+    description: >
+      Crash reports and usage events the app sends only with the user's
+      consent. Anonymous: never tied to an account, and the sender's IP isn't
+      stored. Strict: unknown fields are refused, events must match the
+      catalog (internal/telemetry/catalog.json) exactly. See
+      docs/observability.md.
 
 security: []
 
@@ -1257,6 +1268,89 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /telemetry/crashes:
+    post:
+      operationId: postTelemetryCrashes
+      tags: [telemetry]
+      summary: Send crash reports
+      description: >
+        Up to 10 reports. Each is an exception type and its stack frames; the
+        server keeps only the leading type name of `exception` (never a
+        message), scrubs hosts, query strings, emails, home directories,
+        tokens and ids out of frames, and groups reports by platform,
+        exception and top frames without line numbers. A report with an
+        unknown `kind` is counted in `rejected`; a batch with an unknown
+        field or a bad `client` is refused whole.
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/telemetry/crashes" -H 'Content-Type: application/json' -d '{
+              "client": {"platform": "desktop", "app_version": "0.3.0", "os": "Linux"},
+              "crashes": [{"kind": "fatal", "exception": "java.lang.IllegalStateException",
+                "stack": ["at com.libraryz.data.EpubKt.parse(Epub.kt:120)"],
+                "occurred_at": "2026-10-13T10:00:00Z"}]}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrashBatch"
+      responses:
+        "202":
+          description: Taken (some items may have been refused)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          description: Body over 256 KiB
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /telemetry/events:
+    post:
+      operationId: postTelemetryEvents
+      tags: [telemetry]
+      summary: Send usage events
+      description: >
+        Up to 100 events from one install and session. Each must name a
+        catalog event and carry exactly its props with allowed values (enums,
+        booleans, bounded integers; never text); others are counted in
+        `rejected`. `install_id` is random, reset by the app when the user
+        turns usage sharing off.
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -s -X POST "$BASE/telemetry/events" -H 'Content-Type: application/json' -d '{
+              "client": {"platform": "web", "app_version": "0.3.0", "os": "Web"},
+              "install_id": "6f1c2b8e-2f43-4c7a-9a55-0d3f3b1f8a10",
+              "session_id": "0b8f9a7c-1d2e-4f30-8a6b-5c4d3e2f1a09",
+              "events": [{"name": "search", "props": {"had_results": false},
+                "occurred_at": "2026-10-13T10:00:00Z"}]}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventBatch"
+      responses:
+        "202":
+          description: Taken (some events may have been refused)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          description: Body over 64 KiB
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1324,6 +1418,58 @@ components:
           schema: { type: string }
 
   schemas:
+    TelemetryClient:
+      type: object
+      additionalProperties: false
+      required: [platform, app_version]
+      properties:
+        platform: { type: string, enum: [android, desktop, web, ios] }
+        app_version: { type: string, pattern: "^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$", example: "0.3.0" }
+        os: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$", example: "Android 16" }
+    CrashBatch:
+      type: object
+      additionalProperties: false
+      required: [client, crashes]
+      properties:
+        client: { $ref: "#/components/schemas/TelemetryClient" }
+        crashes:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, exception]
+            properties:
+              kind: { type: string, enum: [fatal, nonfatal] }
+              exception: { type: string, description: "Type name only; anything after it is dropped", example: java.lang.IllegalStateException }
+              stack: { type: array, maxItems: 64, items: { type: string, maxLength: 300 } }
+              occurred_at: { type: string, format: date-time, description: "Replaced by the receive time if missing, in the future, or over 30 days old" }
+    EventBatch:
+      type: object
+      additionalProperties: false
+      required: [client, install_id, session_id, events]
+      properties:
+        client: { $ref: "#/components/schemas/TelemetryClient" }
+        install_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        events:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, props]
+            properties:
+              name: { type: string, description: "A catalog event", example: search }
+              props: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }, { type: integer }] } }
+              occurred_at: { type: string, format: date-time }
+    TelemetryResult:
+      type: object
+      properties:
+        accepted: { type: integer }
+        rejected: { type: integer }
     Health:
       type: object
       properties:

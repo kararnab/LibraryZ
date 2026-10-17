@@ -18,11 +18,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DevicesOther
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.OfflinePin
+import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -47,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +59,10 @@ import com.libraryz.AppVersion
 import com.libraryz.data.BookCache
 import com.libraryz.data.User
 import com.libraryz.data.formatBytes
+import com.libraryz.data.telemetry.TelemetryConsent
+import com.libraryz.ui.components.CRASH_REPORTS_SUMMARY
+import com.libraryz.ui.components.USAGE_SUMMARY
+import com.libraryz.ui.components.WhatsSentDialog
 import kotlinx.coroutines.launch
 import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.SectionLabel
@@ -65,7 +74,8 @@ import com.libraryz.ui.components.rememberMultiTap
  * signing out (this device or everywhere), and which server the app talks
  * to. The one home for account actions, so they aren't scattered across
  * per-screen overflow menus. Where the platform keeps books, also how much
- * room [books] may take.
+ * room [books] may take. Privacy holds the crash-report and usage-statistics
+ * choices first asked at launch ([telemetry]).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,10 +88,13 @@ fun SettingsScreen(
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
     books: BookCache,
+    telemetry: TelemetryConsent,
+    onTelemetryChange: (crashReports: Boolean, usage: Boolean) -> Unit,
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     var confirmEverywhere by remember { mutableStateOf(false) }
+    var showWhatsSent by remember { mutableStateOf(false) }
     var editServer by remember { mutableStateOf(false) }
     var pickLimit by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -162,12 +175,39 @@ fun SettingsScreen(
                     onClick = { confirmEverywhere = true },
                 )
 
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                SectionLabel("Privacy")
+                SettingsSwitchRow(
+                    icon = Icons.Rounded.BugReport,
+                    title = "Send crash reports",
+                    subtitle = CRASH_REPORTS_SUMMARY,
+                    checked = telemetry.crashReports,
+                    onCheckedChange = { onTelemetryChange(it, telemetry.usage) },
+                )
+                SettingsSwitchRow(
+                    icon = Icons.Rounded.Insights,
+                    title = "Share usage statistics",
+                    subtitle = USAGE_SUMMARY,
+                    checked = telemetry.usage,
+                    onCheckedChange = { onTelemetryChange(telemetry.crashReports, it) },
+                )
+                SettingsRow(
+                    icon = Icons.Rounded.PrivacyTip,
+                    title = "What’s sent",
+                    subtitle = "Exactly what each one shares, and for how long it’s kept",
+                    onClick = { showWhatsSent = true },
+                )
+
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 SectionLabel("About", Modifier.padding(top = 0.dp))
                 SettingsRow(icon = Icons.Rounded.Dns, title = "Server", subtitle = serverUrl, onClick = rememberMultiTap(taps = 3) { editServer = true })
                 SettingsRow(icon = Icons.Rounded.Info, title = "Version", subtitle = AppVersion, onClick = null)
             }
         }
+    }
+
+    if (showWhatsSent) {
+        WhatsSentDialog(onDismiss = { showWhatsSent = false })
     }
 
     if (editServer) {
@@ -262,6 +302,32 @@ private fun SettingsRow(
             Text(title, style = MaterialTheme.typography.bodyLarge, color = content)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = muted)
         }
+    }
+}
+
+@Composable
+private fun SettingsSwitchRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Switch) { onCheckedChange(!checked) }
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
