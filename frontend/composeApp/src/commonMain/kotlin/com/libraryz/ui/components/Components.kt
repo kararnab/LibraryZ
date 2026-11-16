@@ -263,7 +263,14 @@ fun EditionRow(
         ) {
             FormatBadge(edition.format)
             Column(Modifier.weight(1f)) {
-                Text(formatName(edition.format), style = MaterialTheme.typography.bodyLarge)
+                // One line each: in a very narrow window the actions leave
+                // little room, and wrapping stacks the text a letter a line.
+                Text(
+                    formatName(edition.format),
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     text = when {
                         pinned -> "${edition.prettySize} · Kept offline"
@@ -272,6 +279,8 @@ fun EditionRow(
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             if (edition.isPreviewable) {

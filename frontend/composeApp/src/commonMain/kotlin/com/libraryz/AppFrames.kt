@@ -50,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.libraryz.data.Edition
 import com.libraryz.data.UserBook
@@ -196,19 +197,19 @@ internal fun CompactFrame(
                 selected = current is Screen.Browse,
                 onClick = { nav.replace(Screen.Browse) },
                 icon = { NavIcon(current is Screen.Browse, Icons.Outlined.Explore, Icons.Rounded.Explore) },
-                label = { Text("Browse") },
+                label = { Text("Browse", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
             NavigationBarItem(
                 selected = current is Screen.Library,
                 onClick = { nav.replace(Screen.Library) },
                 icon = { NavIcon(current is Screen.Library, Icons.Outlined.AutoStories, Icons.Rounded.AutoStories) },
-                label = { Text("Library") },
+                label = { Text("Library", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
             NavigationBarItem(
                 selected = current is Screen.ForYou,
                 onClick = { nav.replace(Screen.ForYou) },
                 icon = { NavIcon(current is Screen.ForYou, Icons.Outlined.AutoAwesome, Icons.Rounded.AutoAwesome) },
-                label = { Text("For You") },
+                label = { Text("For You", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
             if (auth.isModerator) {
                 NavigationBarItem(
@@ -229,14 +230,14 @@ internal fun CompactFrame(
                             NavIcon(current is Screen.ContributionQueue, Icons.AutoMirrored.Outlined.FactCheck, Icons.AutoMirrored.Rounded.FactCheck)
                         }
                     },
-                    label = { Text("Review") },
+                    label = { Text("Review", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
             }
             NavigationBarItem(
                 selected = current is Screen.Settings,
                 onClick = { nav.replace(Screen.Settings) },
                 icon = { NavIcon(current is Screen.Settings, Icons.Outlined.Settings, Icons.Rounded.Settings) },
-                label = { Text("Settings") },
+                label = { Text("Settings", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
         }
     }
