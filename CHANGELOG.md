@@ -13,6 +13,10 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 ## [Unreleased]
 
 ### Added
+- **Change password** in Settings › Account. It asks for the current
+  password (wrong guesses count toward the sign-in limit), keeps you signed
+  in on this device and signs out your other devices
+  (`POST /me/password`).
 - **Observability** ([docs/observability.md](docs/observability.md)).
   Prometheus metrics on each API instance (`LIBRARYZ_METRICS_ADDR`,
   `:9090`, off the public edge): requests by route and status, latency,
