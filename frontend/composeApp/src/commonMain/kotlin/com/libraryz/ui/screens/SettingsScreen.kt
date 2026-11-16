@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.OfflinePin
+import androidx.compose.material.icons.rounded.Password
 import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.AlertDialog
@@ -87,6 +88,7 @@ fun SettingsScreen(
     onPrefsChange: (ReaderPrefs) -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
+    onChangePassword: () -> Unit,
     books: BookCache,
     telemetry: TelemetryConsent,
     onTelemetryChange: (crashReports: Boolean, usage: Boolean) -> Unit,
@@ -158,6 +160,15 @@ fun SettingsScreen(
                         )
                     }
                 }
+
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                SectionLabel("Account")
+                SettingsRow(
+                    icon = Icons.Rounded.Password,
+                    title = "Change password",
+                    subtitle = "You’ll stay signed in here; other devices are signed out",
+                    onClick = onChangePassword,
+                )
 
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 SectionLabel("Sessions")

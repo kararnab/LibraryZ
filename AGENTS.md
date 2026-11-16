@@ -272,7 +272,7 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
     resolve callback, JS invokes it, Kotlin wraps in
     `suspendCancellableCoroutine`. Look for `awaitHandle` / `awaitBytes`
     in that file. Don't replace those with `.await()`.
-- **Auth is github.com/kararnab/iam v2.3.0 (core module only), bearer
+- **Auth is github.com/kararnab/iam v2.4.0 (core module only), bearer
   mode only.** `internal/auth` wires it: argon2id passwords (8–1024 chars;
   `auth.PasswordPolicy` deliberately overrides iam's 12-char default),
   15m HS256 access JWTs + opaque single-use refresh tokens (reuse revokes the
@@ -288,7 +288,9 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   /me/sessions/{id}` stop refreshes at once, but issued access tokens live
   out their 15 minutes; `LIBRARYZ_VERIFY_SESSION_ON_ACCESS=true` changes
   that. Roles and `users.disabled` are reloaded per request
-  (`LoadSubjectOnAccess`, default on). Bearer-only httpauth makes no
+  (`LoadSubjectOnAccess`, default on). Built with `iam.NewServices`
+  (typed `Recovery`, no type assertion). An auth check whose client went
+  away answers 499, not 503, so it stays out of the 5xx alert. Bearer-only httpauth makes no
   CSRF/cross-origin checks (iam ≥ v2.3.0); CORS governs browsers. Sign-up
   passes the name as `SignUpRequest.Profile`; `Users.DeleteSubject` lets
   iam roll back a failed sign-up; `Sessions` is a `session.Purger`. Set `LIBRARYZ_TRUSTED_PROXIES` behind
@@ -308,11 +310,19 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `onemailer.LoadConfig(os.Getenv, "LIBRARYZ_")` →
   `LIBRARYZ_{MAIL_PROVIDER,PUBLIC_URL,MAIL_FROM,MAIL_REPLY_TO,SMTP_*}`;
   `MAIL_PROVIDER=none` (default) answers requests but sends nothing.
-  The per-account cap is checked **before** a token is issued — keep it
+  The per-account cap is checked **before** a token is issued (iam's
+  `RecoveryConfig.AllowReset` → `Auth.allowReset`, after iam's throttles,
+  so a capped request counts exactly like an unknown address) — keep it
   that way. **Never log links or tokens** (logs carry kind + user_id).
   Compose mail lands in Mailpit (http://localhost:8025); `libraryz mail
   send-test -to …` checks real SMTP settings. Emailed links point at
   `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**.
+  **Change password** (`POST /me/password`, `internal/auth/password_change.go`,
+  app: Settings › Change password) is iam's `Passwords.ChangePassword`: the
+  current password is checked under the **login** throttles (it shares
+  sign-in's budget), this session stays, the others end. A wrong current
+  password is **403, not 401** — a 401 would make the app's bearer plugin
+  refresh and retry.
 - **App links:** every platform hands links to `DeepLinkInbox` (commonMain),
   which `Root` collects. Android verified https links need
   `-Plibraryz.appLinkUrl=…` (and `-Plibraryz.androidCertSha256=…` for
@@ -364,7 +374,10 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   platform's entry point: when on, nothing slides, scales or pulses; fades
   stay, shortened. Navigation in `Root` (`App.kt`) is one `AnimatedContent`
   over the stack's top (`NavEntry`, `AppNav.kt`): deeper = forward,
-  shallower = back, same depth = fade through. Screens sharing the bar/rail
+  shallower = back, same depth = fade through. A resize across the
+  breakpoint goes through `key(expanded)`, not the transition: composing
+  both layouts for a frame puts one screen under one saveable key twice and
+  crashes (`ResizeAcrossBreakpointTest`). Screens sharing the bar/rail
   have one `windowKey`, so the frame stays still and only the pane
   animates; wide Browse and Book detail share one `ListDetailLayout`
   (`AppFrames.kt`; one call site, keep it so). Sheets (Upload, Suggest

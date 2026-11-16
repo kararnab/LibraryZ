@@ -9,6 +9,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -116,13 +117,10 @@ type Auth struct {
 	Tokens   *Tokens
 	// Recovery is password reset and email verification (iam.Recovery).
 	Recovery iam.Recovery
-	db       *gorm.DB
-
-	// The login limiters iam throttles with. Kept so a reset request that
-	// the per-account email cap suppresses still counts on iam's reset keys
-	// (see countResetAttempt), answering exactly like any other request.
-	perLogin, perIP ratelimit.Limiter
-	now             func() time.Time
+	// Passwords changes a signed-in user's password (iam.Passwords).
+	Passwords iam.Passwords
+	db        *gorm.DB
+	now       func() time.Time
 
 	accessTTL time.Duration
 }
@@ -183,19 +181,12 @@ func New(cfg Config) (*Auth, error) {
 		return nil, err
 	}
 
-	// iam's own defaults, created here so they can be kept (see Auth).
-	if cfg.PerLogin == nil && cfg.PerIP == nil {
-		if cfg.PerLogin, err = ratelimit.NewMemory(ratelimit.Config{Threshold: 5}); err != nil {
-			return nil, err
-		}
-		if cfg.PerIP, err = ratelimit.NewMemory(ratelimit.Config{Threshold: 100}); err != nil {
-			return nil, err
-		}
-	}
-
 	sessions := NewSessions(cfg.DB)
 	tokens := NewTokens(cfg.DB)
-	svc, err := iam.New(iam.Config{
+	// a is filled in below; allowReset (the per-account email cap) needs
+	// only db and now, which are set before iam can call it.
+	a := &Auth{db: cfg.DB, now: cfg.Now, accessTTL: cfg.AccessTokenTTL}
+	svcs, err := iam.NewServices(iam.Config{
 		Providers: []provider.AuthProvider{passwords},
 		Users:     users,
 		Sessions:  sessions,
@@ -217,6 +208,7 @@ func New(cfg Config) (*Auth, error) {
 			Tokens:          tokens,
 			ResetTTL:        ResetTokenTTL,
 			VerificationTTL: VerificationTokenTTL,
+			AllowReset:      a.allowReset,
 		},
 		Now: cfg.Now,
 	})
@@ -225,7 +217,7 @@ func New(cfg Config) (*Auth, error) {
 	}
 
 	mw, err := httpauth.New(httpauth.Config{
-		Service: svc,
+		Service: svcs.Service,
 		// Bearer only. With no cookie mode, httpauth (≥ v2.3.0) makes no
 		// CSRF or cross-origin checks, so the Wasm client's cross-origin
 		// requests work; browser access is governed by the CORS allowlist.
@@ -237,16 +229,9 @@ func New(cfg Config) (*Auth, error) {
 		return nil, err
 	}
 
-	recovery, ok := svc.(iam.Recovery)
-	if !ok {
-		return nil, errors.New("auth: iam service does not implement Recovery")
-	}
-
-	return &Auth{
-		Service: svc, HTTP: mw, Users: users, Sessions: sessions, Tokens: tokens, Recovery: recovery, db: cfg.DB,
-		perLogin: cfg.PerLogin, perIP: cfg.PerIP, now: cfg.Now,
-		accessTTL: cfg.AccessTokenTTL,
-	}, nil
+	a.Service, a.HTTP, a.Recovery, a.Passwords = svcs.Service, mw, svcs.Recovery, svcs.Passwords
+	a.Users, a.Sessions, a.Tokens = users, sessions, tokens
+	return a, nil
 }
 
 // keyProvider holds the signing key and, when rotating, the previous one
@@ -277,11 +262,21 @@ func hmacKey(secret string) keys.Key {
 	return keys.Key{ID: hex.EncodeToString(sum[:4]), Alg: keys.HS256, Secret: []byte(secret)}
 }
 
+// StatusClientClosedRequest (nginx's 499) answers a request whose client
+// went away before it was authenticated. Nobody reads it; it keeps
+// abandoned requests out of the 5xx share and its alert.
+const StatusClientClosedRequest = 499
+
 // writeError answers httpauth's rejections in plain text like the rest of
 // the API; clients show 4xx bodies to users verbatim.
-func writeError(w http.ResponseWriter, _ *http.Request, status int, err error) {
+func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 	msg := "unauthenticated"
 	switch {
+	case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
+		// The client left mid-check (iam ≥ v2.4.0 wraps the cause). Our own
+		// deadlines (context.DeadlineExceeded) stay 503: a store that slow
+		// is an outage.
+		status, msg = StatusClientClosedRequest, "client closed request"
 	case errors.Is(err, httpauth.ErrForbidden):
 		// The only permissions LibraryZ checks are the moderator's.
 		msg = "moderator required"

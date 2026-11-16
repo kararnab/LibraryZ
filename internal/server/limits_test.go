@@ -80,3 +80,16 @@ func TestUploadLanguageTooLong400(t *testing.T) {
 		t.Fatalf("want 400, got %d %s", resp.StatusCode, readBody(resp))
 	}
 }
+
+func TestChangePasswordOutOfBounds400(t *testing.T) {
+	ts, _ := newTestServer(t)
+	bearer := signupLogin(t, ts.URL, "limits-change-pw@x.com")
+	for name, body := range map[string]map[string]string{
+		"current": {"current_password": strings.Repeat("p", 1025), "new_password": "a-new-passphrase"},
+		"new":     {"current_password": testPassword, "new_password": strings.Repeat("p", 1025)},
+	} {
+		if code, msg := post(t, ts.URL+"/me/password", bearer, body); code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d %s", name, code, msg)
+		}
+	}
+}

@@ -12,6 +12,7 @@ import com.libraryz.ui.screens.VerifyEmailBanner
 import com.libraryz.ui.screens.VerifyEmailScreen
 import com.libraryz.ui.screens.ResetPasswordScreen
 import com.libraryz.ui.screens.ForgotPasswordScreen
+import com.libraryz.ui.screens.ChangePasswordScreen
 import com.libraryz.data.launchDeepLink
 import com.libraryz.data.DeepLinkInbox
 import com.libraryz.data.appLinkUrl
@@ -32,6 +33,7 @@ import com.libraryz.ui.screens.ReaderPrefsStore
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -852,6 +854,7 @@ internal fun Root(
                 initialEmail = s.email,
                 onBack = { if (!nav.pop()) nav.replace(Screen.Auth) },
                 onHaveCode = { code -> nav.push(Screen.ResetPassword(code)) },
+                backLabel = if (auth.isAuthenticated) "Back" else "Back to log in",
             )
 
             s is Screen.ResetPassword -> ResetPasswordScreen(
@@ -877,6 +880,16 @@ internal fun Root(
                 onResend = if (auth.isAuthenticated) ({ api.requestEmailVerification() }) else null,
             )
 
+            s == Screen.ChangePassword -> ChangePasswordScreen(
+                api = api,
+                onBack = { nav.pop() },
+                onChanged = {
+                    nav.pop()
+                    scope.launch { snackbar.showSnackbar("Password changed. Your other devices were signed out.") }
+                },
+                onForgotPassword = { nav.push(Screen.ForgotPassword(auth.user?.email.orEmpty())) },
+            )
+
             s == Screen.Settings -> SettingsScreen(
                 user = auth.user,
                 serverUrl = serverUrl,
@@ -885,6 +898,7 @@ internal fun Root(
                 onPrefsChange = setReaderPrefs,
                 onSignOut = logout,
                 onSignOutEverywhere = logoutEverywhere,
+                onChangePassword = { nav.push(Screen.ChangePassword) },
                 books = books,
                 telemetry = telemetry.consent,
                 onTelemetryChange = { crashes, usage -> scope.launch { telemetry.setConsent(crashes, usage) } },
@@ -904,13 +918,20 @@ internal fun Root(
         // Deeper into the stack slides forward, back out slides back, and
         // peers (tabs, signing in) fade through. Screens that share the
         // navigation bar or rail keep it still: only their content changes.
+        //
+        // A resize across the breakpoint re-lays the window out; nothing
+        // moved, so it doesn't animate. key(expanded) disposes the old
+        // layout before the new one is composed: inside one AnimatedContent
+        // both would be composed together for a frame, each hosting the
+        // screen under the same saveable key, which crashes
+        // ("Key … was used multiple times"). The screen's saved state
+        // carries over (saved on dispose, restored on compose).
+        key(expanded) {
         AnimatedContent(
             targetState = NavEntry(base, depth, expanded),
             contentKey = { windowKey(it.screen, it.expanded) },
             transitionSpec = {
                 when {
-                    // A resize across the breakpoint re-lays the window out; nothing moved.
-                    initialState.expanded != targetState.expanded -> Motion.none
                     targetState.depth > initialState.depth -> Motion.sharedAxisX(forward = true, shift, reduce)
                     targetState.depth < initialState.depth -> Motion.sharedAxisX(forward = false, shift, reduce)
                     else -> Motion.fadeThrough(reduce)
@@ -938,13 +959,19 @@ internal fun Root(
                 }
                 }
             }
-            // Upload is a destination of its own on the rail.
-            val selected = if (nav.current is Screen.Upload) nav.current else s
+            // Upload is a destination of its own on the rail; Change
+            // password is a page of Settings.
+            val selected = when {
+                nav.current is Screen.Upload -> nav.current
+                s == Screen.ChangePassword -> Screen.Settings
+                else -> s
+            }
             when (chromeOf(s, entry.expanded)) {
                 Chrome.Rail -> ExpandedFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)
                 Chrome.Bar -> CompactFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)
                 Chrome.None -> saved.SaveableStateProvider(paneKey(s, entry.expanded)) { screen(s, entry.expanded) }
             }
+        }
         }
 
         when (top) {

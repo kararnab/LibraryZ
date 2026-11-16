@@ -85,10 +85,10 @@ func renderEmail(kind string, d emailData) (onemailer.Message, error) {
 // when capped, and a release func that forgets the record (call it when
 // the message could not be queued). On Postgres the user's row is locked
 // so concurrent requests are counted one after the other.
-func (h *Handler) reserveEmail(ctx context.Context, userID uint, kind string) (reason string, release func(), err error) {
-	now := h.auth.now()
+func (a *Auth) reserveEmail(ctx context.Context, userID uint, kind string) (reason string, release func(), err error) {
+	now := a.now()
 	var id uint
-	err = h.auth.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "postgres" {
 			if err := tx.Exec("SELECT 1 FROM users WHERE id = ? FOR UPDATE", userID).Error; err != nil {
 				return err
@@ -125,7 +125,7 @@ func (h *Handler) reserveEmail(ctx context.Context, userID uint, kind string) (r
 	})
 	release = func() {
 		if id != 0 {
-			_ = h.auth.db.Delete(&AccountEmail{}, id).Error
+			_ = a.db.Delete(&AccountEmail{}, id).Error
 		}
 	}
 	return reason, release, err

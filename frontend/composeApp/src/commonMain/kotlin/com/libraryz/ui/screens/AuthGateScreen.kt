@@ -83,7 +83,7 @@ import com.libraryz.ui.components.CoverSize
 import kotlinx.coroutines.launch
 
 private const val WIDE_DP = 840
-private const val MIN_PASSWORD = 8
+internal const val MIN_PASSWORD = 8
 
 /** What went wrong with the last attempt, each with its own banner. */
 private sealed interface AuthProblem {

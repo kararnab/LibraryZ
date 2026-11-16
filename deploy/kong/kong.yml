@@ -225,6 +225,24 @@ services:
               limit_by: ip
               fault_tolerant: true
 
+      # POST /me/password — authenticated; the current password is checked
+      # under the app's login throttles, so this only blunts floods.
+      - name: me-password
+        paths: ["~/me/password$"]
+        methods: [POST]
+        strip_path: false
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 5
+              hour: 30
+              policy: redis
+              redis:
+                host: redis
+                port: 6379
+              limit_by: ip
+              fault_tolerant: true
+
       # POST /works/{id}/editions — large multipart upload (≤500 MiB).
       # The real allowance is the app's per-account quota (catalog.UploadQuota,
       # LIBRARYZ_UPLOAD_QUOTA_*); this per-IP limit is only a flood guard, set

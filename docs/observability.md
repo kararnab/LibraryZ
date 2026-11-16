@@ -95,6 +95,8 @@ change with it.
   latency, panics, DB pool, stale recommendation model, failing jobs, app
   crash spikes). Prometheus evaluates them; routing them anywhere needs an
   Alertmanager, a deployment decision.
+  An auth check whose client disconnected is recorded as `499`, not
+  `503`, so abandoned requests don't move the 5xx rate.
 - **Grafana's read-only role** is created by the `telemetry-reader`
   service once the API has migrated. After `docker compose down -v` it's
   created again on the next `up`.

@@ -75,6 +75,9 @@ fun main(args: Array<String>) {
                     window.requestFocus()
                 }
                 awtWindow[0] = window
+                // No narrower than a phone: below it nothing is laid out for
+                // the width (AWT sizes are logical pixels, i.e. dp here).
+                LaunchedEffect(window) { window.minimumSize = java.awt.Dimension(360, 560) }
                 val fullscreen = remember(state) { WindowFullscreen(state, window) }
                 val systemDark by LinuxColorScheme.dark.collectAsState()
                 CompositionLocalProvider(

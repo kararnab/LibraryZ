@@ -57,4 +57,24 @@ class RecoveryApiTest {
         assertEquals(410, ex.status)
         assertEquals("this link has expired or was already used", ex.userMessage)
     }
+
+    @Test
+    fun changePasswordIsAuthenticatedWithASnakeCaseBody() = runTest {
+        val seen = mutableListOf<Seen>()
+        val api = ApiClient("http://test", tokenProvider = { "access" }, engine = recorder(HttpStatusCode.NoContent, seen))
+        api.changePassword("old-passphrase", "new-passphrase")
+        assertEquals("/me/password", seen[0].path)
+        assertEquals("""{"current_password":"old-passphrase","new_password":"new-passphrase"}""", seen[0].body)
+        assertEquals("Bearer access", seen[0].auth)
+    }
+
+    @Test
+    fun changePasswordFailuresKeepStatusAndRetryAfter() = runTest {
+        val api = ApiClient("http://test", tokenProvider = { "access" }, engine = MockEngine {
+            respond("too many attempts; try again in 90 seconds", HttpStatusCode.TooManyRequests, io.ktor.http.headersOf(io.ktor.http.HttpHeaders.RetryAfter, "90"))
+        })
+        val ex = assertFailsWith<ApiException> { api.changePassword("old-passphrase", "new-passphrase") }
+        assertEquals(429, ex.status)
+        assertEquals(90L, ex.retryAfterSeconds)
+    }
 }

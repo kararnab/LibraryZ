@@ -195,6 +195,37 @@ func TestPasswordResetCooldownKeepsTheFirstLink(t *testing.T) {
 	}
 }
 
+// A request the email cap holds back is throttled exactly like one for an
+// unknown address (iam's AllowReset), so the cap can't be used to tell
+// registered addresses apart, or to get around the reset throttle.
+func TestCappedResetRequestsCountOnTheThrottle(t *testing.T) {
+	base, box := newRecoveryServer(t)
+	const known = "reset-throttle@example.com"
+	signupLogin(t, base, known)
+
+	acceptedBefore429 := func(email string) int {
+		for i := 0; i < 50; i++ {
+			code, _ := post(t, base+"/auth/password-reset", "", map[string]string{"email": email})
+			switch code {
+			case http.StatusAccepted:
+			case http.StatusTooManyRequests:
+				return i
+			default:
+				t.Fatalf("%s request %d: %d", email, i, code)
+			}
+		}
+		t.Fatalf("%s: never throttled", email)
+		return 0
+	}
+	unknown := acceptedBefore429("nobody-throttle@example.com")
+	if got := acceptedBefore429(known); got != unknown {
+		t.Fatalf("known address throttled after %d requests, unknown after %d", got, unknown)
+	}
+	if n := len(box.sent(auth.KindPasswordReset, known)); n != 1 {
+		t.Fatalf("the cap let %d emails through", n)
+	}
+}
+
 func TestEmailVerificationEndToEnd(t *testing.T) {
 	base, box := newRecoveryServer(t)
 	const email = "verify-e2e@example.com"
