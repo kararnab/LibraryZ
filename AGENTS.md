@@ -374,7 +374,10 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   platform's entry point: when on, nothing slides, scales or pulses; fades
   stay, shortened. Navigation in `Root` (`App.kt`) is one `AnimatedContent`
   over the stack's top (`NavEntry`, `AppNav.kt`): deeper = forward,
-  shallower = back, same depth = fade through. Screens sharing the bar/rail
+  shallower = back, same depth = fade through. A resize across the
+  breakpoint goes through `key(expanded)`, not the transition: composing
+  both layouts for a frame puts one screen under one saveable key twice and
+  crashes (`ResizeAcrossBreakpointTest`). Screens sharing the bar/rail
   have one `windowKey`, so the frame stays still and only the pane
   animates; wide Browse and Book detail share one `ListDetailLayout`
   (`AppFrames.kt`; one call site, keep it so). Sheets (Upload, Suggest

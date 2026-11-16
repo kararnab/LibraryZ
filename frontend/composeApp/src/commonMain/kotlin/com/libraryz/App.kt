@@ -33,6 +33,7 @@ import com.libraryz.ui.screens.ReaderPrefsStore
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -917,13 +918,20 @@ internal fun Root(
         // Deeper into the stack slides forward, back out slides back, and
         // peers (tabs, signing in) fade through. Screens that share the
         // navigation bar or rail keep it still: only their content changes.
+        //
+        // A resize across the breakpoint re-lays the window out; nothing
+        // moved, so it doesn't animate. key(expanded) disposes the old
+        // layout before the new one is composed: inside one AnimatedContent
+        // both would be composed together for a frame, each hosting the
+        // screen under the same saveable key, which crashes
+        // ("Key … was used multiple times"). The screen's saved state
+        // carries over (saved on dispose, restored on compose).
+        key(expanded) {
         AnimatedContent(
             targetState = NavEntry(base, depth, expanded),
             contentKey = { windowKey(it.screen, it.expanded) },
             transitionSpec = {
                 when {
-                    // A resize across the breakpoint re-lays the window out; nothing moved.
-                    initialState.expanded != targetState.expanded -> Motion.none
                     targetState.depth > initialState.depth -> Motion.sharedAxisX(forward = true, shift, reduce)
                     targetState.depth < initialState.depth -> Motion.sharedAxisX(forward = false, shift, reduce)
                     else -> Motion.fadeThrough(reduce)
@@ -963,6 +971,7 @@ internal fun Root(
                 Chrome.Bar -> CompactFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)
                 Chrome.None -> saved.SaveableStateProvider(paneKey(s, entry.expanded)) { screen(s, entry.expanded) }
             }
+        }
         }
 
         when (top) {

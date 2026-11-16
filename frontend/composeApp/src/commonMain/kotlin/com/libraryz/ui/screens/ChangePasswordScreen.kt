@@ -202,22 +202,24 @@ fun ChangePasswordScreen(
                                 enabled = !saving,
                                 modifier = Modifier.align(Alignment.End),
                             ) { Text("Forgot your current password?") }
+                            // Same group as the link: the link's own tap
+                            // padding is the gap, not that plus the card's.
+                            PasswordField(
+                                value = next,
+                                onValueChange = {
+                                    next = it
+                                    if (problem is ChangePasswordProblem.Policy) problem = null
+                                },
+                                label = "New password",
+                                shown = showNext,
+                                onToggleShown = { showNext = !showNext },
+                                enabled = !saving,
+                                isError = false,
+                                supportingText = { PasswordHint(next.length) },
+                                imeAction = ImeAction.Done,
+                                onDone = ::save,
+                            )
                         }
-                        PasswordField(
-                            value = next,
-                            onValueChange = {
-                                next = it
-                                if (problem is ChangePasswordProblem.Policy) problem = null
-                            },
-                            label = "New password",
-                            shown = showNext,
-                            onToggleShown = { showNext = !showNext },
-                            enabled = !saving,
-                            isError = false,
-                            supportingText = { PasswordHint(next.length) },
-                            imeAction = ImeAction.Done,
-                            onDone = ::save,
-                        )
                         Banner(
                             BannerTone.Plain,
                             Icons.Outlined.Lock,
