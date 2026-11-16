@@ -67,6 +67,10 @@ git log. This changelog tracks tagged releases from `v0.1.0` onward.
 - Upload and Suggest edit open over the screen they were opened from.
 - The compose service `libraryz` is now `libraryz-1` and `libraryz-2`
   (e.g. `docker compose logs libraryz-1`).
+- **iam v2.4.0.** The per-account cap on reset emails now runs inside
+  iam's reset flow (`AllowReset`) instead of mirroring iam's throttle
+  keys. A request whose client disconnects during the auth check is
+  answered 499 instead of 503, so it no longer counts toward the 5xx alert.
 
 ### Fixed
 - Two-page text no longer clips tables and plates at the foot of a page:

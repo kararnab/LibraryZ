@@ -14,7 +14,6 @@ import (
 
 	"github.com/kararnab/iam/v2"
 	"github.com/kararnab/iam/v2/password"
-	"github.com/kararnab/iam/v2/ratelimit"
 	"github.com/kararnab/libraryZ/internal/middleware"
 )
 
@@ -48,35 +47,34 @@ func writeAccepted(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"status":"accepted"}` + "\n"))
 }
 
-// countResetAttempt counts a reset request that the email cap suppressed
-// on iam's own reset throttle keys (recovery.go: "reset:login:<login>" and
-// "reset:ip:<ip>" on the login limiters), as iam does for every request it
-// sees, so a capped request is throttled exactly like any other.
-func (a *Auth) countResetAttempt(ctx context.Context, login, ip string) (time.Duration, error) {
-	type limitKey struct {
-		limiter ratelimit.Limiter
-		key     string
+// resetHold carries the cap slot that allowReset reserved back to the
+// handler, which releases it when the email is not sent after all.
+type resetHold struct{ release func() }
+
+type resetHoldKey struct{}
+
+// allowReset is iam's RecoveryConfig.AllowReset: the account's email cap,
+// asked after iam's throttles and just before a token is issued. Checking
+// before issuing matters: a new token replaces the account's earlier one,
+// which would break the link already in their inbox. Declining makes iam
+// answer exactly as for an unknown address.
+func (a *Auth) allowReset(ctx context.Context, subjectID, _ string) (bool, error) {
+	uid, ok := middleware.ParseSubjectID(subjectID)
+	if !ok {
+		return false, fmt.Errorf("auth: subject id %q is not a user id", subjectID)
 	}
-	var keys []limitKey
-	if a.perLogin != nil {
-		keys = append(keys, limitKey{a.perLogin, "reset:login:" + login})
+	reason, release, err := a.reserveEmail(ctx, uid, KindPasswordReset)
+	if err != nil {
+		return false, err
 	}
-	if a.perIP != nil && ip != "" {
-		keys = append(keys, limitKey{a.perIP, "reset:ip:" + ip})
+	if reason != "" {
+		slog.Info("mail not sent", "event", KindPasswordReset+"_not_sent", "reason", reason, "user_id", uid)
+		return false, nil
 	}
-	for _, k := range keys {
-		r, err := k.limiter.Check(ctx, k.key)
-		if err != nil {
-			return 0, err
-		}
-		if !r.Allowed {
-			return r.RetryAfter, nil
-		}
+	if hold, ok := ctx.Value(resetHoldKey{}).(*resetHold); ok {
+		hold.release = release
 	}
-	for _, k := range keys {
-		_, _ = k.limiter.Fail(ctx, k.key)
-	}
-	return 0, nil
+	return true, nil
 }
 
 // RequestPasswordReset (POST /auth/password-reset, anonymous) emails a reset
@@ -96,59 +94,36 @@ func (h *Handler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errMsgInvalidEmail, http.StatusBadRequest)
 		return
 	}
-	client := h.auth.HTTP.ClientInfo(r)
-	ctx := r.Context()
+	// allowReset (the account's email cap) runs inside StartPasswordReset
+	// and leaves its reservation here.
+	hold := &resetHold{release: func() {}}
+	ctx := context.WithValue(r.Context(), resetHoldKey{}, hold)
 
-	// Check the account's cap before a token is issued: issuing replaces
-	// the account's earlier token, which would break the link already in
-	// their inbox.
-	var u User
-	release := func() {}
-	found := h.auth.db.WithContext(ctx).Where("email = ?", email).Take(&u).Error == nil
-	if found && !u.Disabled {
-		reason, rel, err := h.reserveEmail(ctx, u.ID, KindPasswordReset)
-		if err != nil {
-			log.Printf("auth: reserving reset email for user %d: %v", u.ID, err)
-			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if reason != "" {
-			slog.Info("mail not sent", "event", KindPasswordReset+"_not_sent", "reason", reason, "user_id", u.ID)
-			retry, err := h.auth.countResetAttempt(ctx, email, client.IP)
-			switch {
-			case err != nil:
-				http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
-			case retry > 0:
-				writeRateLimited(w, retry)
-			default:
-				writeAccepted(w)
-			}
-			return
-		}
-		release = rel
-	}
-
-	issued, err := h.auth.Recovery.StartPasswordReset(ctx, iam.PasswordResetRequest{Login: email, Client: client})
+	issued, err := h.auth.Recovery.StartPasswordReset(ctx, iam.PasswordResetRequest{Login: email, Client: h.auth.HTTP.ClientInfo(r)})
 	var rl *iam.RateLimitError
 	switch {
 	case errors.As(err, &rl):
-		release()
+		hold.release()
 		writeRateLimited(w, rl.RetryAfter)
 		return
 	case errors.Is(err, iam.ErrUnavailable):
-		release()
+		hold.release()
 		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	case err != nil:
-		release()
+		hold.release()
 		log.Printf("auth: password reset request failed: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if issued != nil && found {
-		h.send(KindPasswordReset, &u, issued.Token, ResetTokenTTL, release)
-	} else {
-		release()
+	if issued != nil {
+		var u User
+		uid, ok := middleware.ParseSubjectID(issued.SubjectID)
+		if ok && h.auth.db.WithContext(ctx).Take(&u, uid).Error == nil {
+			h.send(KindPasswordReset, &u, issued.Token, ResetTokenTTL, hold.release)
+		} else {
+			hold.release()
+		}
 	}
 	writeAccepted(w)
 }
@@ -190,7 +165,7 @@ func (h *Handler) CompletePasswordReset(w http.ResponseWriter, r *http.Request) 
 // sendVerification emails u a verification link for their current
 // address, within the account's cap. It returns the cap reason when capped.
 func (h *Handler) sendVerification(r *http.Request, u *User) (capped string, err error) {
-	reason, release, err := h.reserveEmail(r.Context(), u.ID, KindEmailVerification)
+	reason, release, err := h.auth.reserveEmail(r.Context(), u.ID, KindEmailVerification)
 	if err != nil || reason != "" {
 		return reason, err
 	}

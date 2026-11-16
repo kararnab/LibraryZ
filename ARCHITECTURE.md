@@ -274,7 +274,7 @@ real time.
 
 ## Auth + moderation
 
-Built on [kararnab/iam](https://github.com/kararnab/iam) v2.3.0 (core
+Built on [kararnab/iam](https://github.com/kararnab/iam) v2.4.0 (core
 module only). `internal/auth` wires it up; iam does the security-sensitive
 parts, LibraryZ supplies storage and endpoints.
 

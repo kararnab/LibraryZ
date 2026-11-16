@@ -947,6 +947,12 @@ auth of #15 and #8, and covers #6's frontend part).
      `SignUpRequest.Profile` (name written with the user row),
      `iam.SubjectDeleter` (failed sign-ups roll back the user), and
      `session.Purger` + `storetest.Purger` for our session store. ✓
+     **iam v2.4.0** (iam#31–#36, found in CodeAtlas): the reset-email cap
+     runs as `RecoveryConfig.AllowReset` (our copy of iam's throttle keys
+     is gone), `iam.NewServices` types `Recovery`, and httpauth's wrapped
+     `context.Canceled` turns abandoned auth checks into 499s. Not adopted:
+     `ChangePassword` (no signed-in password change yet), `InviteAdmin`
+     (open sign-up), `pgstore.Limiter` (Redis already shares the limits). ✓
 118. **Login throttling.** iam's per-account (5 failures / 15 min) and
      per-IP (100) limiters with back-off, on Redis via `iam/redisstore`
      (`LIBRARYZ_REDIS_ADDR`), shared by every replica; on top of Kong's
