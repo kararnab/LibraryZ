@@ -17,6 +17,8 @@ internal enum class Chrome { Bar, Rail, None }
 internal fun chromeOf(s: Screen, expanded: Boolean): Chrome = when (s) {
     Screen.Browse, Screen.Library, Screen.ForYou, Screen.ContributionQueue, Screen.Settings ->
         if (expanded) Chrome.Rail else Chrome.Bar
+    // A page of Settings: wide, it keeps the rail (Settings stays selected).
+    Screen.ChangePassword -> if (expanded) Chrome.Rail else Chrome.None
     // Wide, a book opens in the catalog's detail pane.
     is Screen.WorkDetail -> if (expanded) Chrome.Rail else Chrome.None
     else -> Chrome.None

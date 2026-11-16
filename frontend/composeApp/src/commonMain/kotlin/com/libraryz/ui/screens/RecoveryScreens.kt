@@ -73,13 +73,13 @@ internal fun classifyRecoveryError(e: Throwable): RecoveryProblem = when {
 
 /** Shared frame: a back arrow (optional) over a centered, readable column. */
 @Composable
-private fun RecoveryFrame(onBack: (() -> Unit)?, content: @Composable () -> Unit) {
+private fun RecoveryFrame(onBack: (() -> Unit)?, backLabel: String = "Back to log in", content: @Composable () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (onBack != null) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to log in")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = backLabel)
                     }
                 }
             }
@@ -150,6 +150,8 @@ fun ForgotPasswordScreen(
     // The code from the email, typed or pasted: how the native apps finish
     // a reset when the emailed link opens the web instead.
     onHaveCode: (String) -> Unit,
+    // Signed in (from Change password), "back" isn't to log in.
+    backLabel: String = "Back to log in",
 ) {
     var enteringCode by remember { mutableStateOf(false) }
     if (enteringCode) {
@@ -183,7 +185,7 @@ fun ForgotPasswordScreen(
         }
     }
 
-    RecoveryFrame(onBack = onBack) {
+    RecoveryFrame(onBack = onBack, backLabel = backLabel) {
         val to = sentTo
         if (to == null) {
             Text("Reset your password", style = MaterialTheme.typography.headlineMedium)
@@ -217,7 +219,7 @@ fun ForgotPasswordScreen(
             ) {
                 ProblemBanner(problem, ::send)
                 Button(onClick = onBack, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                    Text("Back to log in", style = MaterialTheme.typography.titleMedium)
+                    Text(backLabel, style = MaterialTheme.typography.titleMedium)
                 }
                 TextButton(onClick = { enteringCode = true }) { Text("Have a code? Enter it") }
                 TextButton(onClick = ::send, enabled = !sending) { Text(if (sending) "Sending…" else "Didn’t get it? Send again") }

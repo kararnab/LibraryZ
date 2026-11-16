@@ -853,6 +853,7 @@ internal fun Root(
                 initialEmail = s.email,
                 onBack = { if (!nav.pop()) nav.replace(Screen.Auth) },
                 onHaveCode = { code -> nav.push(Screen.ResetPassword(code)) },
+                backLabel = if (auth.isAuthenticated) "Back" else "Back to log in",
             )
 
             s is Screen.ResetPassword -> ResetPasswordScreen(
@@ -885,6 +886,7 @@ internal fun Root(
                     nav.pop()
                     scope.launch { snackbar.showSnackbar("Password changed. Your other devices were signed out.") }
                 },
+                onForgotPassword = { nav.push(Screen.ForgotPassword(auth.user?.email.orEmpty())) },
             )
 
             s == Screen.Settings -> SettingsScreen(
@@ -949,8 +951,13 @@ internal fun Root(
                 }
                 }
             }
-            // Upload is a destination of its own on the rail.
-            val selected = if (nav.current is Screen.Upload) nav.current else s
+            // Upload is a destination of its own on the rail; Change
+            // password is a page of Settings.
+            val selected = when {
+                nav.current is Screen.Upload -> nav.current
+                s == Screen.ChangePassword -> Screen.Settings
+                else -> s
+            }
             when (chromeOf(s, entry.expanded)) {
                 Chrome.Rail -> ExpandedFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)
                 Chrome.Bar -> CompactFrame(selected, nav = nav, auth = auth, contributions = contributions, content = pane)

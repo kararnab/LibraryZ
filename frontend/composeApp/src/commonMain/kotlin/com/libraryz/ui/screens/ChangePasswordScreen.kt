@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Visibility
@@ -28,8 +29,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -49,6 +53,7 @@ import com.libraryz.data.api.ApiClient
 import com.libraryz.data.api.ApiException
 import com.libraryz.data.api.describe
 import com.libraryz.data.api.rethrowIfCancelled
+import com.libraryz.theme.LibraryZ
 import com.libraryz.ui.components.Banner
 import com.libraryz.ui.components.BannerTone
 import com.libraryz.ui.components.MessageSlot
@@ -83,7 +88,8 @@ internal fun retryPhrase(seconds: Long?): String = when {
 /**
  * Settings › Change password. Checks the current password, keeps this
  * device signed in and signs the others out; [onChanged] goes back and
- * says so.
+ * says so. [onForgotPassword] opens the reset-email flow for whoever can't
+ * remember the current one.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +97,7 @@ fun ChangePasswordScreen(
     api: ApiClient,
     onBack: () -> Unit,
     onChanged: () -> Unit,
+    onForgotPassword: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -126,7 +133,7 @@ fun ChangePasswordScreen(
                 title = { Text("Change password", style = MaterialTheme.typography.headlineSmall) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to Settings")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -138,66 +145,92 @@ fun ChangePasswordScreen(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
             contentAlignment = Alignment.TopCenter,
         ) {
-            Column(
-                Modifier.widthIn(max = 440.dp).fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    "You’ll stay signed in here. Your other devices are signed out and need the new password.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                MessageSlot(problem.takeUnless { it is ChangePasswordProblem.WrongCurrent }) { p ->
-                    when (p) {
-                        is ChangePasswordProblem.Throttled -> Banner(
-                            BannerTone.Calm,
-                            Icons.Rounded.HourglassTop,
-                            title = "Too many attempts",
-                            body = "For your security, try again ${retryPhrase(p.retryAfterSeconds)}. Signing in shares this limit.",
+            // Settings' column (640 dp, 16 dp gutters), so the page lines up
+            // with the screen it was opened from.
+            Column(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Choose a new password",
+                                fontFamily = LibraryZ.tokens.serif,
+                                style = MaterialTheme.typography.headlineSmall,
+                            )
+                            Text(
+                                "Enter your current password, then the new one.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        MessageSlot(problem.takeUnless { it is ChangePasswordProblem.WrongCurrent }) { p ->
+                            when (p) {
+                                is ChangePasswordProblem.Throttled -> Banner(
+                                    BannerTone.Calm,
+                                    Icons.Rounded.HourglassTop,
+                                    title = "Too many attempts",
+                                    body = "For your security, try again ${retryPhrase(p.retryAfterSeconds)}. Signing in shares this limit.",
+                                )
+                                is ChangePasswordProblem.Policy -> Banner(BannerTone.Error, Icons.Rounded.Error, p.message)
+                                is ChangePasswordProblem.Other -> Banner(BannerTone.Error, Icons.Rounded.Error, p.message)
+                                ChangePasswordProblem.WrongCurrent -> Unit
+                            }
+                        }
+                        Column {
+                            PasswordField(
+                                value = current,
+                                onValueChange = {
+                                    current = it
+                                    if (problem == ChangePasswordProblem.WrongCurrent) problem = null
+                                },
+                                label = "Current password",
+                                shown = showCurrent,
+                                onToggleShown = { showCurrent = !showCurrent },
+                                enabled = !saving,
+                                isError = problem == ChangePasswordProblem.WrongCurrent,
+                                supportingText = if (problem == ChangePasswordProblem.WrongCurrent) {
+                                    { Text("That’s not your current password.") }
+                                } else null,
+                                imeAction = ImeAction.Next,
+                                onDone = {},
+                            )
+                            TextButton(
+                                onClick = onForgotPassword,
+                                enabled = !saving,
+                                modifier = Modifier.align(Alignment.End),
+                            ) { Text("Forgot your current password?") }
+                        }
+                        PasswordField(
+                            value = next,
+                            onValueChange = {
+                                next = it
+                                if (problem is ChangePasswordProblem.Policy) problem = null
+                            },
+                            label = "New password",
+                            shown = showNext,
+                            onToggleShown = { showNext = !showNext },
+                            enabled = !saving,
+                            isError = false,
+                            supportingText = { PasswordHint(next.length) },
+                            imeAction = ImeAction.Done,
+                            onDone = ::save,
                         )
-                        is ChangePasswordProblem.Policy -> Banner(BannerTone.Error, Icons.Rounded.Error, p.message)
-                        is ChangePasswordProblem.Other -> Banner(BannerTone.Error, Icons.Rounded.Error, p.message)
-                        ChangePasswordProblem.WrongCurrent -> Unit
+                        Banner(
+                            BannerTone.Plain,
+                            Icons.Outlined.Lock,
+                            "You’ll stay signed in here. Your other devices will be signed out.",
+                        )
+                        Button(onClick = ::save, enabled = canSave, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                            if (saving) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.5.dp)
+                                Spacer(Modifier.width(10.dp))
+                            }
+                            Text(if (saving) "Updating…" else "Update password", style = MaterialTheme.typography.titleMedium)
+                        }
                     }
-                }
-                PasswordField(
-                    value = current,
-                    onValueChange = {
-                        current = it
-                        if (problem == ChangePasswordProblem.WrongCurrent) problem = null
-                    },
-                    label = "Current password",
-                    shown = showCurrent,
-                    onToggleShown = { showCurrent = !showCurrent },
-                    enabled = !saving,
-                    isError = problem == ChangePasswordProblem.WrongCurrent,
-                    supportingText = if (problem == ChangePasswordProblem.WrongCurrent) {
-                        { Text("That’s not your current password.") }
-                    } else null,
-                    imeAction = ImeAction.Next,
-                    onDone = {},
-                )
-                PasswordField(
-                    value = next,
-                    onValueChange = {
-                        next = it
-                        if (problem is ChangePasswordProblem.Policy) problem = null
-                    },
-                    label = "New password",
-                    shown = showNext,
-                    onToggleShown = { showNext = !showNext },
-                    enabled = !saving,
-                    isError = false,
-                    supportingText = { PasswordHint(next.length) },
-                    imeAction = ImeAction.Done,
-                    onDone = ::save,
-                )
-                Button(onClick = ::save, enabled = canSave, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                    if (saving) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.5.dp)
-                        Spacer(Modifier.width(10.dp))
-                    }
-                    Text(if (saving) "Saving…" else "Change password", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -236,6 +269,13 @@ private fun PasswordField(
             }
         },
         supportingText = supportingText,
+        // Solid fields on the tinted card, so they read as places to type.
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            errorContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ),
         modifier = Modifier.fillMaxWidth(),
     )
 }
