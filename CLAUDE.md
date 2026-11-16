@@ -317,6 +317,12 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   Compose mail lands in Mailpit (http://localhost:8025); `libraryz mail
   send-test -to …` checks real SMTP settings. Emailed links point at
   `LIBRARYZ_PUBLIC_URL` = the Wasm dev server on **:8081**.
+  **Change password** (`POST /me/password`, `internal/auth/password_change.go`,
+  app: Settings › Change password) is iam's `Passwords.ChangePassword`: the
+  current password is checked under the **login** throttles (it shares
+  sign-in's budget), this session stays, the others end. A wrong current
+  password is **403, not 401** — a 401 would make the app's bearer plugin
+  refresh and retry.
 - **App links:** every platform hands links to `DeepLinkInbox` (commonMain),
   which `Root` collects. Android verified https links need
   `-Plibraryz.appLinkUrl=…` (and `-Plibraryz.androidCertSha256=…` for

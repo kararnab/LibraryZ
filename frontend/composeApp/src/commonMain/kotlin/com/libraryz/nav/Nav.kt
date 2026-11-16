@@ -26,6 +26,7 @@ sealed interface Screen {
     data object Library : Screen
     data object ForYou : Screen
     data object Settings : Screen
+    data object ChangePassword : Screen
     // Account recovery. The last two are opened from emailed links and
     // work signed in or out.
     data class ForgotPassword(val email: String = "") : Screen
@@ -73,5 +74,6 @@ fun needsConnection(s: Screen): String? = when (s) {
     is Screen.EditWork -> "Suggesting an edit needs a connection to the library."
     Screen.ContributionQueue -> "The review queue needs a connection to the library."
     Screen.ForYou -> "For You needs a connection to the library."
+    Screen.ChangePassword -> "Changing your password needs a connection to the library."
     else -> null
 }

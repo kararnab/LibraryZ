@@ -149,6 +149,7 @@ func New(d Deps) (http.Handler, error) {
 	authed.HandleFunc("/auth/me", authH.Me).Methods(http.MethodGet)
 	authed.HandleFunc("/auth/logout-all", authH.LogoutAll).Methods(http.MethodPost)
 	authed.HandleFunc("/me/email-verification", authH.RequestEmailVerification).Methods(http.MethodPost)
+	authed.HandleFunc("/me/password", authH.ChangePassword).Methods(http.MethodPost)
 	authed.HandleFunc("/me/sessions", authH.ListSessions).Methods(http.MethodGet)
 	authed.HandleFunc("/me/sessions/{id}", authH.RevokeSession).Methods(http.MethodDelete)
 	authed.HandleFunc("/works", catH.CreateWork).Methods(http.MethodPost)

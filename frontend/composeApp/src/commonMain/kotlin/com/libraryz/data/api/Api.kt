@@ -72,6 +72,9 @@ data class CompletePasswordResetRequest(val token: String, val newPassword: Stri
 data class TokenRequest(val token: String)
 
 @Serializable
+data class ChangePasswordRequest(val currentPassword: String, val newPassword: String)
+
+@Serializable
 data class CreateWorkRequest(
     val title: String,
     val authors: String? = null,
@@ -423,6 +426,23 @@ class ApiClient(
         val resp = client.post("$baseUrl/auth/logout-all")
         if (!resp.status.isSuccess()) {
             throw ApiException(resp.status.value, resp.bodyAsText(), "logout everywhere failed")
+        }
+    }
+
+    /**
+     * Authenticated. Sets a new password after checking [current]. This
+     * session stays signed in; the account's other sessions end. 403 = wrong
+     * current password (deliberately not 401, which would trigger a token
+     * refresh), 400 = new password rejected by policy, 429 = throttled (the
+     * sign-in budget, so it carries Retry-After).
+     */
+    suspend fun changePassword(current: String, new: String) {
+        val resp = client.post("$baseUrl/me/password") { setBody(ChangePasswordRequest(current, new)) }
+        if (!resp.status.isSuccess()) {
+            throw ApiException(
+                resp.status.value, resp.bodyAsText(), "password change failed",
+                retryAfterSeconds = resp.headers[HttpHeaders.RetryAfter]?.trim()?.toLongOrNull(),
+            )
         }
     }
 

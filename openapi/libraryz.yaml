@@ -380,6 +380,36 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
 
+  /me/password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change the caller's password
+      description: >-
+        Checks the current password under the same throttles as login (a wrong
+        one counts as a failed login). On success the caller's other sessions end
+        and emailed reset links stop working; this session stays signed in. A new
+        password the policy rejects (400) costs no attempt. A wrong current
+        password is 403, not 401, so clients don't treat it as an expired token.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, maxLength: 1024 }
+                new_password: { type: string, minLength: 8, maxLength: 1024 }
+      responses:
+        "204": { description: Password changed }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Current password is incorrect }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
   /auth/email-verification/complete:
     post:
       operationId: completeEmailVerification

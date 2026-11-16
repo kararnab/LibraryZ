@@ -12,6 +12,7 @@ import com.libraryz.ui.screens.VerifyEmailBanner
 import com.libraryz.ui.screens.VerifyEmailScreen
 import com.libraryz.ui.screens.ResetPasswordScreen
 import com.libraryz.ui.screens.ForgotPasswordScreen
+import com.libraryz.ui.screens.ChangePasswordScreen
 import com.libraryz.data.launchDeepLink
 import com.libraryz.data.DeepLinkInbox
 import com.libraryz.data.appLinkUrl
@@ -877,6 +878,15 @@ internal fun Root(
                 onResend = if (auth.isAuthenticated) ({ api.requestEmailVerification() }) else null,
             )
 
+            s == Screen.ChangePassword -> ChangePasswordScreen(
+                api = api,
+                onBack = { nav.pop() },
+                onChanged = {
+                    nav.pop()
+                    scope.launch { snackbar.showSnackbar("Password changed. Your other devices were signed out.") }
+                },
+            )
+
             s == Screen.Settings -> SettingsScreen(
                 user = auth.user,
                 serverUrl = serverUrl,
@@ -885,6 +895,7 @@ internal fun Root(
                 onPrefsChange = setReaderPrefs,
                 onSignOut = logout,
                 onSignOutEverywhere = logoutEverywhere,
+                onChangePassword = { nav.push(Screen.ChangePassword) },
                 books = books,
                 telemetry = telemetry.consent,
                 onTelemetryChange = { crashes, usage -> scope.launch { telemetry.setConsent(crashes, usage) } },

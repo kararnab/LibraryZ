@@ -117,8 +117,10 @@ type Auth struct {
 	Tokens   *Tokens
 	// Recovery is password reset and email verification (iam.Recovery).
 	Recovery iam.Recovery
-	db       *gorm.DB
-	now      func() time.Time
+	// Passwords changes a signed-in user's password (iam.Passwords).
+	Passwords iam.Passwords
+	db        *gorm.DB
+	now       func() time.Time
 
 	accessTTL time.Duration
 }
@@ -227,7 +229,7 @@ func New(cfg Config) (*Auth, error) {
 		return nil, err
 	}
 
-	a.Service, a.HTTP, a.Recovery = svcs.Service, mw, svcs.Recovery
+	a.Service, a.HTTP, a.Recovery, a.Passwords = svcs.Service, mw, svcs.Recovery, svcs.Passwords
 	a.Users, a.Sessions, a.Tokens = users, sessions, tokens
 	return a, nil
 }
