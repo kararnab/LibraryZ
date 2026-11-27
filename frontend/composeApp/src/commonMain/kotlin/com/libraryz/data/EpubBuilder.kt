@@ -43,6 +43,8 @@ internal class BookBuilder(
     val boxes: MutableList<BookBox> = ArrayList(),
     // Building one table cell: nested tables flatten to text.
     private val inCell: Boolean = false,
+    /** Block pictures sized by the book's CSS, by their key (see [BookImage.sized]); a cell's builder shares its book's. */
+    val scaledImages: HashMap<String, BookImage> = HashMap(),
 ) {
     private val out = AnnotatedString.Builder()
     private val anchors = HashMap<String, Int>()
@@ -73,8 +75,6 @@ internal class BookBuilder(
     /** The [pageStarts] where a document of the spine begins: a two-page spread starts there, on the left. */
     val spreadStarts = ArrayList<Int>()
     private var spreadPending = false
-    /** Block pictures drawn narrower than the column, by their key (see [BookImage.widthFraction]). */
-    val scaledImages = HashMap<String, BookImage>()
     // Elements being skipped (head, script, display: none…), innermost last.
     private val skipStack = ArrayList<String>()
 
@@ -213,11 +213,13 @@ internal class BookBuilder(
     }
 
     /**
-     * A blank block bordered only above or below: the book's decorative line.
-     * It gets a thin line of its own (a no-break space under a [BookBox.rule]),
-     * and its small margins none, so two rules sit close as they do in print.
+     * A blank block that paints, bordered above or below or filled: the book's
+     * decorative line or bar. It gets a thin line of its own (a no-break space
+     * under a [BookBox.rule]), and its small margins none, so two rules sit
+     * close as they do in print. A [fill] is drawn as a bar its CSS `height`
+     * thick (thin if it sets none).
      */
-    private fun rule(name: String, css: Map<String, String>, sides: Int, selfClosing: Boolean) {
+    private fun rule(name: String, css: Map<String, String>, sides: Int, fill: Color?, selfClosing: Boolean) {
         holdBreak = false
         gap = maxOf(gap, margin(name, css, top = true).takeIf { it >= 0.5f } ?: 0f)
         block()
@@ -229,8 +231,9 @@ internal class BookBuilder(
         val (_, rightFraction) = insetOf(css, 1)
         val outer = stack.filter { it.block }.sumOf { leftOf(it).toDouble() }.toFloat()
         boxes += BookBox(
-            start = start, end = out.length, left = (outer + leftEm).coerceIn(0f, 8f), background = null, border = true,
-            borderColor = borderColor(css), sides = sides, rule = true, leftFraction = leftFraction, rightFraction = rightFraction,
+            start = start, end = out.length, left = (outer + leftEm).coerceIn(0f, 8f), background = fill, border = sides != 0,
+            borderColor = borderColor(css, currentColor(css)), sides = sides, rule = true, leftFraction = leftFraction, rightFraction = rightFraction,
+            thickness = if (fill != null) (css["height"]?.let(::cssEm) ?: BAR_EM).coerceIn(0.05f, 0.4f) else 0f,
         )
         gap = maxOf(gap, margin(name, css, top = false).takeIf { it >= 0.5f } ?: 0f)
         block()
@@ -284,6 +287,14 @@ internal class BookBuilder(
         classes = t.attrs["class"].orEmpty().split(' ', '\t', '\n').filter { it.isNotEmpty() },
     )
 
+    /**
+     * An element's text colour, for `currentColor`: its own `color`, else the
+     * nearest open element's (colour inherits). Null when the book sets none,
+     * which leaves it to the reader's theme.
+     */
+    private fun currentColor(css: Map<String, String>): Color? =
+        css["color"]?.let(::cssColor) ?: stack.asReversed().firstNotNullOfOrNull { o -> o.css["color"]?.let(::cssColor) }
+
     /** [t]'s declared CSS, presentational attributes (align, bgcolor, font color) below it. */
     private fun cssOf(t: MarkupToken.Start, path: List<CssElement>): Map<String, String> {
         val declared = sheet.declared(path, t.attrs["style"])
@@ -319,7 +330,7 @@ internal class BookBuilder(
         t.attrs["id"]?.let { pendingAnchors += "$path#$it" }
         when (name) {
             "img" -> {
-                image(path, t.attrs["src"], t.attrs["alt"], css)
+                image(path, t.attrs["src"], t.attrs["alt"], css, t.attrs["width"], t.attrs["height"])
                 return
             }
             "br" -> {
@@ -366,10 +377,16 @@ internal class BookBuilder(
         val display = css["display"]?.trim()?.lowercase()
         val isBlock = name in BLOCKS || display == "block" || display == "list-item"
         if (isBlock && breaksPage(css, "before")) pageBreakPending = true
-        if (isBlock && name != "body" && name != "html" && background(css) == null) {
-            val sides = borderSides(css)
-            if (sides != 0 && sides and (BookBox.LEFT or BookBox.RIGHT) == 0 && blankAhead(t)) {
-                rule(name, css, sides, t.selfClosing)
+        if (isBlock && name != "body" && name != "html") {
+            // A blank block that paints: its borders above and below (side borders have no height
+            // to draw on an empty block), or its background as a bar. A browser keeps it; so do we.
+            val sides = borderSides(css) and (BookBox.TOP or BookBox.BOTTOM)
+            // A white or near-white fill (a spacer's) shows on no page; transparent neither.
+            val fill = background(css)?.takeUnless { c ->
+                c.alpha < 0.1f || (maxOf(c.red, c.green, c.blue) > 0.9f && maxOf(c.red, c.green, c.blue) - minOf(c.red, c.green, c.blue) < 0.08f)
+            }
+            if ((sides != 0 || fill != null) && blankAhead(t)) {
+                rule(name, css, sides, fill, t.selfClosing)
                 return
             }
         }
@@ -474,7 +491,7 @@ internal class BookBuilder(
             if (end > start) {
                 val sides = borderSides(top.css)
                 val left = stack.filter { it.block }.sumOf { leftOf(it).toDouble() }.toFloat() + marginLeftOf(top)
-                boxes += BookBox(start, end, left.coerceIn(0f, 8f), background(top.css), sides != 0, borderColor(top.css), sides)
+                boxes += BookBox(start, end, left.coerceIn(0f, 8f), background(top.css), sides != 0, borderColor(top.css, currentColor(top.css)), sides)
             }
         }
         if (top.block) {
@@ -486,24 +503,42 @@ internal class BookBuilder(
     }
 
     /** [src] relative to the document at [doc]: the picture, else its alt text in its place. */
-    private fun image(doc: String, src: String?, alt: String?, css: Map<String, String> = emptyMap()) {
+    private fun image(
+        doc: String,
+        src: String?,
+        alt: String?,
+        css: Map<String, String> = emptyMap(),
+        widthAttr: String? = null,
+        heightAttr: String? = null,
+    ) {
         val path = src?.takeUnless { it.startsWith("data:") }?.let { resolvePath(dirOf(doc), it.substringBefore('#')) }
         val found = path?.let { imageAt(it, alt.orEmpty()) }
         if (found == null) {
             alt?.let(::text)
             return
         }
-        // A block picture as wide as the book asks: its width (a percentage) of what its blocks' side margins leave.
+        // A block picture as wide as the book asks (CSS first, then the HTML attributes): a percentage
+        // of what its blocks' side margins leave, which may scale it up, or a length; else its own size.
+        val width = (css["width"] ?: widthAttr).takeIf { found.block }?.let(BookWidth::parse)
+        val height = (css["height"] ?: heightAttr).takeIf { found.block && width == null }?.let(BookWidth::parse)?.takeIf { it.fraction == 0f }
         val fraction = if (!found.block) 1f else {
-            val own = css["width"]?.trim()?.takeIf { it.endsWith("%") }?.dropLast(1)?.toFloatOrNull()?.div(100f) ?: 1f
+            val own = width?.fraction?.takeIf { it > 0f } ?: 1f
             stack.filter { it.block }.fold(own) { f, o -> f * (1f - insetOf(o.css, 3).second - insetOf(o.css, 1).second) }
                 .coerceIn(0.1f, 1f)
         }
+        val stretch = width != null && width.fraction > 0f
+        val widthEm = width?.em?.takeIf { it > 0f }
+        val heightEm = height?.em
         var key: String = path
         var image: BookImage = found
-        if (fraction < 0.99f) {
-            key = "$path#w${(fraction * 100).roundToInt()}"
-            image = scaledImages.getOrPut(key) { found.scaled(fraction) }
+        if (fraction < 0.99f || stretch || widthEm != null || heightEm != null) {
+            key = buildString {
+                append(path).append("#w").append((fraction * 100).roundToInt())
+                if (stretch) append('s')
+                widthEm?.let { append("e").append((it * 16).roundToInt()) }
+                heightEm?.let { append("h").append((it * 16).roundToInt()) }
+            }
+            image = scaledImages.getOrPut(key) { found.sized(fraction, stretch, widthEm, heightEm) }
         }
         if (headingOpen) alt?.let { headingText.append(it) }
         if (image.block) {
@@ -564,7 +599,7 @@ internal class BookBuilder(
             val cssCell = cssOf(s, path0 + elementOf(s))
             if (hasBorder(cssCell)) bordered = true
             // Its own boxes: a cell's offsets count from the cell's start, not the book's.
-            val text = BookBuilder(imageAt, sheetAt, fontAt, tables, ArrayList(), inCell = true)
+            val text = BookBuilder(imageAt, sheetAt, fontAt, tables, ArrayList(), inCell = true, scaledImages = scaledImages)
                 .cell(path, sheet, faces, path0, listOf(s) + buf + MarkupToken.End(s.name))
             if (rows.isEmpty()) rows.add(ArrayList())
             rows.last() += BookCell(
@@ -866,10 +901,17 @@ internal class BookBuilder(
             return marginLeftOf(o) + padding + if (o.box) BOX_PADDING else 0f
         }
 
-        /** The first colour any `border*` property names, if any. */
-        fun borderColor(css: Map<String, String>): Color? = css.entries.firstNotNullOfOrNull { (k, v) ->
+        /**
+         * The first colour any `border*` property names; else [current], the
+         * text colour, which CSS draws a border in when it names none (or
+         * says `currentColor`).
+         */
+        fun borderColor(css: Map<String, String>, current: Color? = null): Color? = css.entries.firstNotNullOfOrNull { (k, v) ->
             if (k.startsWith("border") && !k.contains("collapse") && !k.contains("spacing") && !k.contains("radius")) cssBackground(v) else null
-        }
+        } ?: current
+
+        /** A filled blank block's bar when its CSS sets no height, in ems. */
+        private const val BAR_EM = 0.15f
 
         /** The width [t]'s CSS or `width` attribute sets (the CSS wins), if any. */
         private fun widthOf(t: MarkupToken.Start, css: Map<String, String>): BookWidth? =

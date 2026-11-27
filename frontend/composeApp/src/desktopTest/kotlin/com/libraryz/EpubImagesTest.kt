@@ -35,7 +35,8 @@ class EpubImagesTest {
         return ByteArrayOutputStream().also { ImageIO.write(image, "png", it) }.toByteArray()
     }
 
-    private fun epub(body: String, images: Map<String, ByteArray>, css: String = ""): ByteArray = ByteArrayOutputStream().also { out ->
+    /** One document of [body] (plus one per [more], in the spine after it), [images] under Images/. */
+    private fun epub(body: String, images: Map<String, ByteArray>, css: String = "", more: List<String> = emptyList()): ByteArray = ByteArrayOutputStream().also { out ->
         ZipOutputStream(out).use { zip ->
             fun put(name: String, bytes: ByteArray) {
                 zip.putNextEntry(ZipEntry(name))
@@ -46,9 +47,13 @@ class EpubImagesTest {
             put("META-INF/container.xml", """<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>""".encodeToByteArray())
             put(
                 "OEBPS/content.opf",
-                """<package><manifest><item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>""".encodeToByteArray(),
+                ("<package><manifest><item id=\"a\" href=\"Text/a.xhtml\" media-type=\"application/xhtml+xml\"/>" +
+                    more.indices.joinToString("") { "<item id=\"m$it\" href=\"Text/m$it.xhtml\" media-type=\"application/xhtml+xml\"/>" } +
+                    "</manifest><spine><itemref idref=\"a\"/>" + more.indices.joinToString("") { "<itemref idref=\"m$it\"/>" } +
+                    "</spine></package>").encodeToByteArray(),
             )
             put("OEBPS/Text/a.xhtml", "<html><head><style>$css</style></head><body>$body</body></html>".encodeToByteArray())
+            more.forEachIndexed { i, doc -> put("OEBPS/Text/m$i.xhtml", "<html><body>$doc</body></html>".encodeToByteArray()) }
             images.forEach { (name, bytes) -> put("OEBPS/Images/$name", bytes) }
         }
     }.toByteArray()
@@ -157,5 +162,40 @@ class EpubImagesTest {
         val n = redPixels(frame)
         // Below the 64 dp top bar a page's body is 620 high, so about 124×618, on the next page.
         assertTrue(n in 70_000..80_000, "red pixels: $n")
+    }
+
+    @Test
+    fun aPercentageWidthScalesASmallPictureUp() {
+        // 100 × 50 of red at width: 100% of a 600-wide reader's column: far more than its own 5,000 pixels,
+        // and still twice as wide as tall.
+        val frame = render(epub("""<p><img style="width: 100%" src="../Images/s.png"/></p>""", mapOf("s.png" to png(100, 50, 0xE01010))), 600, 900, "stretch")
+        val n = redPixels(frame)
+        assertTrue(n > 60_000, "red pixels: $n")
+        val plain = redPixels(render(epub("""<p><img src="../Images/s.png"/></p>""", mapOf("s.png" to png(100, 50, 0xE01010))), 600, 900, "no-stretch"))
+        assertTrue(plain in 4_500..5_500, "unstretched: $plain")
+    }
+
+    @Test
+    fun drawsABlankFilledBlockAsABar() {
+        val frame = render(epub("""<p>Above</p><div class="bar"></div><p>Below</p>""", emptyMap(), css = ".bar { background: #e01010; height: 6px }"), 600, 900, "bar")
+        // About 6 high (a bar's height in px is 6/16 em of 18 dp text = 6.75) across the column.
+        val n = redPixels(frame)
+        assertTrue(n in 1_500..6_000, "red pixels: $n")
+    }
+
+    @Test
+    fun theNextDocumentStartsASpreadOnTheLeft() {
+        // One short page, then a document of its own: in two pages it starts the next spread,
+        // leaving the right-hand page beside the first blank. Its red words show nowhere on the first spread.
+        val book = epub("<p>First document, one short page.</p>", emptyMap(), more = listOf("""<p style="color: #e01010">Second document starts here.</p>"""))
+        val frame = render(book, 1280, 800, "spread-start")
+        assertTrue(redPixels(frame) == 0, "second document on the first spread: ${redPixels(frame)}")
+        val bitmap = org.jetbrains.skia.Bitmap.makeFromImage(frame)
+        var ink = 0
+        for (y in 120 until bitmap.height - 80) for (x in bitmap.width / 2 + 40 until bitmap.width - 60) {
+            val c = bitmap.getColor(x, y)
+            if ((c shr 16 and 0xFF) < 120 && (c shr 8 and 0xFF) < 120 && (c and 0xFF) < 120) ink++
+        }
+        assertTrue(ink == 0, "ink on the blank right-hand page: $ink")
     }
 }

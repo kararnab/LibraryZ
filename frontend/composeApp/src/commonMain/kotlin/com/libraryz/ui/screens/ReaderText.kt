@@ -428,7 +428,8 @@ private fun TextView(
                     style = style.merge(TextStyle(lineHeightStyle = sized.lineHeightStyle)),
                     inlineContent = sized.inlineContent,
                     onTextLayout = { textLayout = it },
-                    modifier = Modifier.bookBoxes(reader, 0, { textLayout }, emPx, prefs.theme),
+                    // The column's width, not its longest line's: rules and boxes span the column.
+                    modifier = Modifier.fillMaxWidth().bookBoxes(reader, 0, { textLayout }, emPx, prefs.theme),
                 )
                 end()
             }

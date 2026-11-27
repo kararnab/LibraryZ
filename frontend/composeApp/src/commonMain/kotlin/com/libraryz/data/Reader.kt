@@ -90,12 +90,23 @@ class BookImage(
     val vector: Boolean = false,
     /** A block picture's widest, as a fraction of the column (the book's width and side margins). */
     val widthFraction: Float = 1f,
+    /**
+     * The book gives the picture a percentage width: it fills [widthFraction]
+     * of the column even when that's wider than the picture (a browser
+     * scales it up; with no width set, neither do we).
+     */
+    val stretch: Boolean = false,
+    /** A width the book sets in pixels or ems, as ems of 16 pixels (drawn as a picture's pixels are), if any. */
+    val widthEm: Float? = null,
+    /** Likewise a height, used when the book sets no width: the width follows from the picture's shape. */
+    val heightEm: Float? = null,
     private val load: () -> ByteArray,
 ) {
     fun bytes(): ByteArray = load()
 
-    /** The same picture, at most [fraction] of the column wide. */
-    fun scaled(fraction: Float) = BookImage(width, height, alt, block, vector, fraction, load)
+    /** The same picture, as wide as the book's CSS asks (see [widthFraction], [stretch], [widthEm], [heightEm]). */
+    fun sized(fraction: Float, stretch: Boolean, widthEm: Float?, heightEm: Float?) =
+        BookImage(width, height, alt, block, vector, fraction, stretch, widthEm, heightEm, load)
 }
 
 /**
@@ -149,7 +160,8 @@ data class BookWidth(val fraction: Float = 0f, val em: Float = 0f) {
  * A [rule] is a blank block with only a top or bottom border (a book's
  * decorative line): one line across the middle of its single line, inset
  * by [left] ems plus [leftFraction] of the column, and [rightFraction] of it
- * from the right.
+ * from the right. With a [background] it's a filled bar [thickness] ems
+ * thick there instead (its borders, if any, above and below it).
  */
 class BookBox(
     val start: Int,
@@ -162,6 +174,8 @@ class BookBox(
     val rule: Boolean = false,
     val leftFraction: Float = 0f,
     val rightFraction: Float = 0f,
+    /** A [rule] with a [background]: the bar's thickness, in ems. */
+    val thickness: Float = 0f,
 ) {
     companion object {
         const val TOP = 1

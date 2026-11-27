@@ -287,9 +287,38 @@ class EpubTest {
             ),
         )
         val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length).map { it.item }
-        assertEquals(listOf("book/p.png#w60", "book/p.png"), marks)
-        assertEquals(0.6f, book.images.getValue("book/p.png#w60").widthFraction, 1e-4f)
+        assertEquals(listOf("book/p.png#w60s", "book/p.png"), marks)
+        assertEquals(0.6f, book.images.getValue("book/p.png#w60s").widthFraction, 1e-4f)
         assertEquals(1f, book.images.getValue("book/p.png").widthFraction)
+    }
+
+    @Test
+    fun sizesAPictureAsTheBookSetsIt() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""),
+                "book/a.xhtml" to """<body>
+                    <p><img style="width: 100%" src="s.png"/></p>
+                    <p><img width="320" src="s.png"/></p>
+                    <p><img style="height: 10em" src="s.png"/></p>
+                    <p><img style="max-width: 100%" src="s.png"/></p>
+                    <table><tr><td><img style="width: 100%" src="c.png"/></td></tr></table>
+                    </body>""",
+                "book/s.png" to png(200, 100),
+                "book/c.png" to png(300, 100),
+            ),
+        )
+        val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length).map { it.item }
+        assertEquals(listOf("book/s.png#w100s", "book/s.png#w100e320", "book/s.png#w100h160", "book/s.png"), marks)
+        // A percentage stretches a small picture; a length sets its size; max-width alone changes nothing.
+        assertTrue(book.images.getValue("book/s.png#w100s").stretch)
+        assertEquals(20f, book.images.getValue("book/s.png#w100e320").widthEm)
+        assertEquals(10f, book.images.getValue("book/s.png#w100h160").heightEm)
+        assertTrue(!book.images.getValue("book/s.png").stretch)
+        // A sized picture inside a table cell is in the book's pictures too (the cell is drawn from them).
+        val cell = book.tables.single().rows.single().single().text
+        val inCell = cell.getStringAnnotations(IMAGE_TAG, 0, cell.length).single().item
+        assertTrue(inCell in book.images, inCell)
     }
 
     @Test

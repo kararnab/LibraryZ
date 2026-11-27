@@ -175,7 +175,14 @@ private fun imagePlaceholder(image: BookImage, maxWidth: Dp, maxHeight: Dp, dens
         )
     }
     return with(density) {
-        var w = min(maxWidth * image.widthFraction, image.width.dp)
+        val widest = maxWidth * image.widthFraction
+        // As the book sizes it (a set length or percentage may scale it up), else never past its own size.
+        var w = when {
+            image.widthEm != null -> min(widest, (image.widthEm * 16).dp)
+            image.heightEm != null -> min(widest, (image.heightEm * 16).dp * image.width.toFloat() / image.height.toFloat())
+            image.stretch -> widest
+            else -> min(widest, image.width.dp)
+        }
         var h = w * image.height.toFloat() / image.width.toFloat()
         if (h > maxHeight) {
             w *= maxHeight / h
@@ -657,12 +664,19 @@ fun Modifier.bookBoxes(reader: TextReader, from: Int, layout: () -> TextLayoutRe
                 val left = b.left * emPx + b.leftFraction * size.width
                 val right = size.width * (1f - b.rightFraction)
                 if (right > left) {
-                    // Above and below: a double rule, two strokes apart.
+                    // A filled bar, in the book's colour (greys and black in the theme's muted ink).
+                    val half = b.background?.let { fill ->
+                        val h = (b.thickness * emPx).coerceAtLeast(stroke)
+                        val c = readableInk(fill, theme.background).takeIf(Color::isSpecified) ?: theme.muted
+                        drawRect(c, Offset(left, mid - h / 2), Size(right - left, h))
+                        h / 2
+                    }
+                    // Above and below: a double rule, two strokes apart (either side of a bar).
                     val ys = listOfNotNull(
-                        mid.takeIf { b.sides and BookBox.TOP != 0 },
-                        (mid + 2 * stroke).takeIf { b.sides and BookBox.BOTTOM != 0 },
+                        (mid - (half ?: 0f)).takeIf { b.sides and BookBox.TOP != 0 },
+                        (mid + (half ?: 2 * stroke)).takeIf { b.sides and BookBox.BOTTOM != 0 },
                     )
-                    ys.forEach { drawLine(line, Offset(left, it), Offset(right, it), stroke) }
+                    if (b.border) ys.forEach { drawLine(line, Offset(left, it), Offset(right, it), stroke) }
                 }
                 continue
             }

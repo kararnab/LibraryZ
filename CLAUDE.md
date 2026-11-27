@@ -354,7 +354,9 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   breaks only start a page. Table columns: `columnWidths` (BookText.kt),
   automatic layout honouring the book's `<col>`/cell/table widths, only
   words that can't fit break; `ReaderPrefs.fixedTables` switches to
-  CSS `table-layout: fixed`. Text-reader gotchas:
+  CSS `table-layout: fixed`. Block pictures: a book's percentage
+  width may scale one up (`BookImage.stretch`), a px/em width or height
+  sets it; with none set, never past its own size. Text-reader gotchas:
   - The style needs `LineHeightStyle.Mode.Minimum` when there are pictures:
     Android's default `Fixed` mode crops a tall placeholder's line (Skia
     grows it either way).

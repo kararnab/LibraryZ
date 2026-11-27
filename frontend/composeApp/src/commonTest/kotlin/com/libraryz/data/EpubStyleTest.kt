@@ -151,6 +151,46 @@ class EpubStyleTest {
     }
 
     @Test
+    fun keepsABlankBlockThatPaints() {
+        val book = book(
+            """<p>A</p><div class="bar"></div><div class="boxed">&#160;</div><div class="clear"></div><div class="side"></div><p>B</p>""",
+            css = """
+                .bar { background: #c00000; height: 4px }
+                .boxed { border: 1px solid }
+                .clear { background-color: white; clear: both }
+                .side { border-left: 2px solid red }
+            """.trimIndent(),
+        )
+        // The bar, and the boxed block as lines above and below; the white spacer and the
+        // side-bordered empty block draw nothing a browser would show.
+        val (bar, boxed) = book.boxes.also { assertEquals(2, it.size) }
+        assertTrue(bar.rule)
+        assertEquals(Color(0xFFC00000), bar.background)
+        assertEquals(0.25f, bar.thickness, 1e-4f)
+        assertTrue(!bar.border)
+        assertTrue(boxed.rule && boxed.border)
+        assertEquals(BookBox.TOP or BookBox.BOTTOM, boxed.sides)
+        assertNull(boxed.background)
+        assertEquals("A\n\u00A0\n\u00A0\nB", book.text.text.lines().filter { it.isNotEmpty() }.joinToString("\n"))
+    }
+
+    @Test
+    fun aBorderWithNoColourTakesTheTextColour() {
+        val book = book(
+            """<div class="red"><p class="under">Red.</p></div><div class="cur">Teal.</div><div class="own">Own.</div><div class="plain">Plain.</div>""",
+            css = """
+                .red { color: #b00000 }
+                .under { border-bottom: 1px solid }
+                .cur { color: teal; border: 1px solid currentColor }
+                .own { color: teal; border: 1px solid #0000ff }
+                .plain { border: 1px solid }
+            """.trimIndent(),
+        )
+        // Inherited from the parent, its own currentColor, an explicit colour, and none at all (the theme's).
+        assertEquals(listOf(Color(0xFFB00000), Color(0xFF008080), Color(0xFF0000FF), null), book.boxes.map { it.borderColor })
+    }
+
+    @Test
     fun drawsOnlyTheSidesTheBookBorders() {
         val book = book(
             """<div class="bar"><p>Quoted.</p></div><div class="none"><p>Plain.</p></div>""",
