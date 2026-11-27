@@ -51,6 +51,19 @@ class TextReader(
     val tables: List<BookTable> = emptyList(),
     /** Blocks the book draws a box around, in text order. */
     val boxes: List<BookBox> = emptyList(),
+    /** Offsets in [text] where a page must start (an EPUB's documents, CSS page breaks), ascending. */
+    val pageStarts: List<Int> = emptyList(),
+    /**
+     * The [pageStarts] where an EPUB's next document begins. Two pages a
+     * spread, each starts a spread on the left-hand page; when the page
+     * before it is a left-hand one, the right-hand page beside that stays
+     * blank.
+     */
+    val spreadStarts: List<Int> = emptyList(),
+    /** Regions where the book sets its own `line-height`, drawn so only if the reader asks ([TextOverrides]). */
+    val lineHeights: List<BookLineHeight> = emptyList(),
+    /** Formatted by the book (an EPUB), so the reader's [TextOverrides] mean something; plain text isn't. */
+    val styled: Boolean = false,
 ) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
@@ -79,9 +92,25 @@ class BookImage(
     val block: Boolean,
     /** SVG, rasterized at the size it's drawn; else a bitmap format. */
     val vector: Boolean = false,
+    /** A block picture's widest, as a fraction of the column (the book's width and side margins). */
+    val widthFraction: Float = 1f,
+    /**
+     * The book gives the picture a percentage width: it fills [widthFraction]
+     * of the column even when that's wider than the picture (a browser
+     * scales it up; with no width set, neither do we).
+     */
+    val stretch: Boolean = false,
+    /** A width the book sets in pixels or ems, as ems of 16 pixels (drawn as a picture's pixels are), if any. */
+    val widthEm: Float? = null,
+    /** Likewise a height, used when the book sets no width: the width follows from the picture's shape. */
+    val heightEm: Float? = null,
     private val load: () -> ByteArray,
 ) {
     fun bytes(): ByteArray = load()
+
+    /** The same picture, as wide as the book's CSS asks (see [widthFraction], [stretch], [widthEm], [heightEm]). */
+    fun sized(fraction: Float, stretch: Boolean, widthEm: Float?, heightEm: Float?) =
+        BookImage(width, height, alt, block, vector, fraction, stretch, widthEm, heightEm, load)
 }
 
 /**
@@ -91,17 +120,75 @@ class BookImage(
  * key, so a long table breaks between rows across pages. The screen sizes
  * the columns and rows for the column it has.
  */
-class BookTable(val rows: List<List<BookCell>>, val bordered: Boolean)
+class BookTable(
+    val rows: List<List<BookCell>>,
+    val bordered: Boolean,
+    /** The widths the book's `<col>`s give, column by column (null = not set). */
+    val columns: List<BookWidth?> = emptyList(),
+    /** The table's own width, if the book sets one. */
+    val width: BookWidth? = null,
+)
 
 /** One cell: its text (styled like the book's, pictures included), spanning [span] columns. */
-class BookCell(val text: AnnotatedString, val header: Boolean, val span: Int, val background: Color?)
+class BookCell(
+    val text: AnnotatedString,
+    val header: Boolean,
+    val span: Int,
+    val background: Color?,
+    /** The width the book gives the cell (`width` attribute or CSS), if any. */
+    val width: BookWidth? = null,
+)
+
+/** A width a book sets: a [fraction] of the table's (or column's) width, or [em]s of the reading text. */
+data class BookWidth(val fraction: Float = 0f, val em: Float = 0f) {
+    companion object {
+        /** A CSS `width` or HTML `width` attribute ("30%", "120" pixels, "8em"); null for auto or nonsense. */
+        fun parse(value: String?): BookWidth? {
+            val v = value?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+            if (v.endsWith("%")) {
+                val f = v.dropLast(1).trim().toFloatOrNull() ?: return null
+                return if (f > 0f) BookWidth(fraction = (f / 100f).coerceAtMost(1f)) else null
+            }
+            val em = v.toFloatOrNull()?.let { it / 16f } ?: cssEm(v) ?: return null
+            return if (em > 0f) BookWidth(em = em) else null
+        }
+    }
+}
 
 /**
  * A block the book draws a box around (a CSS background or border): its
  * lines from [start] until [end] in the text, the box's left edge [left] ems
  * in from the column's. Its text is padded in from the edge already.
+ * Only the [sides] the book borders are drawn ([BookBox.TOP] and so on).
+ *
+ * A [rule] is a blank block with only a top or bottom border (a book's
+ * decorative line): one line across the middle of its single line, inset
+ * by [left] ems plus [leftFraction] of the column, and [rightFraction] of it
+ * from the right. With a [background] it's a filled bar [thickness] ems
+ * thick there instead (its borders, if any, above and below it).
  */
-class BookBox(val start: Int, val end: Int, val left: Float, val background: Color?, val border: Boolean, val borderColor: Color?)
+class BookBox(
+    val start: Int,
+    val end: Int,
+    val left: Float,
+    val background: Color?,
+    val border: Boolean,
+    val borderColor: Color?,
+    val sides: Int = ALL,
+    val rule: Boolean = false,
+    val leftFraction: Float = 0f,
+    val rightFraction: Float = 0f,
+    /** A [rule] with a [background]: the bar's thickness, in ems. */
+    val thickness: Float = 0f,
+) {
+    companion object {
+        const val TOP = 1
+        const val RIGHT = 2
+        const val BOTTOM = 4
+        const val LEFT = 8
+        const val ALL = TOP or RIGHT or BOTTOM or LEFT
+    }
+}
 
 const val IMAGE_TAG = "libraryz.image"
 const val TABLE_TAG = "libraryz.table"
@@ -131,7 +218,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes, it.pageStarts, it.spreadStarts, it.lineHeights, styled = true) }
         }
         else -> throw UnsupportedFormatException(format)
     }

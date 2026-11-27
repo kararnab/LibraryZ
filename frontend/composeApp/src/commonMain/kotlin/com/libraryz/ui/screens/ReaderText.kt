@@ -96,6 +96,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.ui.graphics.TransformOrigin
 import com.libraryz.ui.components.bookBoxes
+import com.libraryz.ui.components.pageText
 import com.libraryz.ui.components.prefetchImages
 import com.libraryz.ui.components.rememberSizedText
 import kotlinx.coroutines.launch
@@ -141,6 +142,8 @@ internal fun TextReaderLayout(
             onLayoutChange = onLayoutChange,
             spread = spread,
             showBookFonts = reader.hasBookFonts,
+            showTables = reader.tables.isNotEmpty(),
+            showOverrides = reader.styled,
         )
     }
     val reduce = LocalReduceMotion.current
@@ -403,10 +406,11 @@ private fun TextView(
                 fontSize = prefs.textSize.sp,
                 lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
                 color = prefs.theme.ink,
+                textAlign = if (reader.styled) prefs.overrides.baseAlign(TextAlign.Unspecified) else TextAlign.Unspecified,
             ),
         )
         // Pictures and tables fit the column, pictures most of the screen's height.
-        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts)
+        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts, prefs.fixedTables, prefs.overrides)
         val emPx = with(density) { prefs.textSize.sp.toPx() }
         Box(
             modifier = Modifier.fillMaxSize().verticalScroll(scroll),
@@ -426,7 +430,8 @@ private fun TextView(
                     style = style.merge(TextStyle(lineHeightStyle = sized.lineHeightStyle)),
                     inlineContent = sized.inlineContent,
                     onTextLayout = { textLayout = it },
-                    modifier = Modifier.bookBoxes(reader, 0, { textLayout }, emPx, prefs.theme),
+                    // The column's width, not its longest line's: rules and boxes span the column.
+                    modifier = Modifier.fillMaxWidth().bookBoxes(reader, 0, { textLayout }, emPx, prefs.theme),
                 )
                 end()
             }
@@ -444,8 +449,9 @@ private fun TextView(
  *   only a placeholder where it starts, and read as empty those lines looked
  *   blank, so they were skipped at the top of a page.
  */
-internal fun textPageBreaks(layout: TextLayoutResult, height: Float): List<Int> {
+internal fun textPageBreaks(layout: TextLayoutResult, height: Float, pageStarts: List<Int> = emptyList()): List<Int> {
     val text = layout.layoutInput.text.text
+    val forced = pageStarts.filter { it < text.length }.mapTo(HashSet()) { layout.getLineForOffset(it) }
     // The highest and lowest drawn edges of each line's placeholders.
     val drawnTop = HashMap<Int, Float>()
     val drawnBottom = HashMap<Int, Float>()
@@ -460,12 +466,16 @@ internal fun textPageBreaks(layout: TextLayoutResult, height: Float): List<Int> 
         top = { line -> minOf(layout.getLineTop(line), drawnTop[line] ?: Float.MAX_VALUE) },
         bottom = { line -> maxOf(layout.getLineBottom(line), drawnBottom[line] ?: 0f) },
         height = height,
+        forced = { it in forced },
         blank = { line ->
             val end = if (line + 1 < layout.lineCount) layout.getLineStart(line + 1) else text.length
             text.substring(layout.getLineStart(line), end).isBlank()
         },
     )
 }
+
+/** A spread's right-hand slot left blank, so the next document starts on the left. */
+private const val BLANK_PAGE = -1
 
 /**
  * Lets the reader's key handler turn a two-page text spread, which keeps its
@@ -526,10 +536,10 @@ private fun TextSpreadView(
             fontSize = prefs.textSize.sp,
             lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
             color = theme.ink,
-            textAlign = TextAlign.Justify,
+            textAlign = if (reader.styled) prefs.overrides.baseAlign(TextAlign.Justify) else TextAlign.Justify,
         )
         // A picture or table row fits a page, a little under so rounding can't push it over.
-        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts)
+        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts, prefs.fixedTables, prefs.overrides)
         val emPx = with(density) { prefs.textSize.sp.toPx() }
         val text = sized.text
         val style = baseStyle.copy(lineHeightStyle = sized.lineHeightStyle)
@@ -541,7 +551,7 @@ private fun TextSpreadView(
         val layout = remember(text, style, columnPx) {
             measurer.measure(text, style, placeholders = sized.placeholders, constraints = Constraints(maxWidth = columnPx))
         }
-        val starts = remember(layout, bodyPx) { textPageBreaks(layout, bodyPx) }
+        val starts = remember(layout, bodyPx) { textPageBreaks(layout, bodyPx, reader.pageStarts) }
         val pageCount = starts.size
         fun startOf(p: Int): Int = if (p >= pageCount) text.length else layout.getLineStart(starts[p])
         fun endOf(p: Int): Int = if (p + 1 >= pageCount) text.length else startOf(p + 1)
@@ -552,7 +562,9 @@ private fun TextSpreadView(
             return if (i >= 0) i else (-i - 2).coerceAtLeast(0)
         }
         // Two pages a spread, the end card in the slot after the last page.
-        val spreads = remember(pageCount) { Spreads(pageCount, coverAlone = false) }
+        // Each of the book's documents starts a spread, on the left.
+        val leftStarts = remember(layout, starts) { reader.spreadStarts.filter { it < text.length }.mapTo(HashSet()) { pageAt(it) } }
+        val spreads = remember(pageCount, leftStarts) { Spreads(pageCount, coverAlone = false, leftStarts = leftStarts) }
         // Empty text: straight to the end card.
         val slots = spreads.at(pageAt(anchor)).ifEmpty { listOf(pageCount) }
         val atEnd = pageCount in slots
@@ -625,7 +637,7 @@ private fun TextSpreadView(
                 Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
                     Box(Modifier.widthIn(max = 440.dp)) { end() }
                 }
-            } else slots.forEachIndexed { i, p ->
+            } else (if (slots.size == 1) slots + BLANK_PAGE else slots).forEachIndexed { i, p ->
                 if (i == 1) {
                     // The gutter: a hairline that fades out at the ends.
                     Box(
@@ -648,7 +660,9 @@ private fun TextSpreadView(
                         bottom = 20.dp,
                     ),
                 ) {
-                    if (p == pageCount) {
+                    if (p == BLANK_PAGE) {
+                        // The right-hand page before a document that starts on the left.
+                    } else if (p == pageCount) {
                         // The end card in the empty right-hand page.
                         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                             Box(Modifier.fillMaxWidth().heightIn(min = pageHeight - 48.dp), contentAlignment = Alignment.Center) {
@@ -672,7 +686,7 @@ private fun TextSpreadView(
                             var pageLayout by remember(p, text) { mutableStateOf<TextLayoutResult?>(null) }
                             // Same width as the measured column, so lines break where they did there.
                             Text(
-                                text.subSequence(startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
+                                pageText(text, startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
                                 style = style,
                                 inlineContent = sized.inlineContent,
                                 onTextLayout = { pageLayout = it },

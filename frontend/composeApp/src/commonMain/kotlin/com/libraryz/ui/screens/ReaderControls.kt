@@ -1,5 +1,20 @@
 package com.libraryz.ui.screens
 
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import com.libraryz.theme.LocalReduceMotion
+import com.libraryz.theme.Motion
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.animation.AnimatedVisibility
+import com.libraryz.data.AlignOverride
+import com.libraryz.data.IndentOverride
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -89,6 +104,8 @@ internal fun ReadingSettings(
     onLayoutChange: (PageLayout) -> Unit,
     spread: Boolean,
     showBookFonts: Boolean,
+    showTables: Boolean = false,
+    showOverrides: Boolean = false,
 ) {
     if (layout != null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -114,22 +131,6 @@ internal fun ReadingSettings(
         }
     }
     TextSizeControl(prefs.textSize, onChange = { onChange(prefs.copy(textSize = it)) })
-    if (showBookFonts) {
-        Row(
-            Modifier.fillMaxWidth().clickable { onChange(prefs.copy(bookFonts = !prefs.bookFonts)) },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Book's fonts", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    "Where this book uses fonts of its own. Off sets everything in the reader's serif.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = prefs.bookFonts, onCheckedChange = { onChange(prefs.copy(bookFonts = it)) })
-        }
-    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Theme", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -196,6 +197,9 @@ internal fun ReadingSettings(
                 )
             }
         }
+    }
+    if (showBookFonts || showOverrides || showTables) {
+        BookFormatting(prefs, onChange, showBookFonts = showBookFonts, showOverrides = showOverrides, showTables = showTables)
     }
 }
 
@@ -319,5 +323,112 @@ internal fun EndCard(
                 TextButton(onClick = onBack) { Text("Back to book") }
             }
         }
+    }
+}
+
+/**
+ * Where the reader's choices replace the book's own formatting (fonts,
+ * alignment, indent, line height, tables): one row,
+ * collapsed, saying what's changed; it opens onto the controls. Kept out of
+ * the way of the panel's everyday settings (the canvas's: size, theme,
+ * spacing, width).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookFormatting(
+    prefs: ReaderPrefs,
+    onChange: (ReaderPrefs) -> Unit,
+    showBookFonts: Boolean,
+    showOverrides: Boolean,
+    showTables: Boolean,
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    val o = prefs.overrides
+    val changes = buildList {
+        if (showBookFonts && !prefs.bookFonts) add("reader's font")
+        if (showOverrides && o.align != AlignOverride.Auto) add(o.align.label.lowercase())
+        if (showOverrides && o.indent == IndentOverride.None) add("no indent")
+        if (showOverrides && o.indent == IndentOverride.Indent) add("2 em indent")
+        if (showOverrides && o.bookLineHeight) add("book's line height")
+        if (showTables && prefs.fixedTables) add("fixed tables")
+    }
+    val reduce = LocalReduceMotion.current
+    // The row usually sits at the panel's foot: opening it scrolls what it opens into view.
+    val opened = remember { BringIntoViewRequester() }
+    LaunchedEffect(open) {
+        if (open) {
+            delay(Motion.MEDIUM.toLong())
+            opened.bringIntoView()
+        }
+    }
+    Column {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Book formatting", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (changes.isEmpty()) "As the book sets it" else changes.joinToString(", ").replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = if (open) "Hide book formatting" else "Show book formatting",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        AnimatedVisibility(open, enter = Motion.reveal(reduce), exit = Motion.conceal(reduce)) {
+            Column(Modifier.bringIntoViewRequester(opened).padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                if (showBookFonts) {
+                    SwitchRow("Book's fonts", prefs.bookFonts) { onChange(prefs.copy(bookFonts = it)) }
+                }
+                if (showOverrides) {
+                    Choice("Alignment", AlignOverride.entries, o.align, { it.label }) { onChange(prefs.copy(overrides = o.copy(align = it))) }
+                    Choice("First-line indent", IndentOverride.entries, o.indent, { it.label }) { onChange(prefs.copy(overrides = o.copy(indent = it))) }
+                    SwitchRow("Book's line height", o.bookLineHeight) { onChange(prefs.copy(overrides = o.copy(bookLineHeight = it))) }
+                }
+                if (showTables) {
+                    SwitchRow("Fixed table columns", prefs.fixedTables) { onChange(prefs.copy(fixedTables = it)) }
+                }
+            }
+        }
+    }
+}
+
+/** A label over a row of segmented choices. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> Choice(label: String, entries: List<T>, selected: T, name: (T) -> String, onPick: (T) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            entries.forEachIndexed { i, e ->
+                SegmentedButton(
+                    selected = selected == e,
+                    onClick = { onPick(e) },
+                    shape = SegmentedButtonDefaults.itemShape(i, entries.size),
+                    label = { Text(name(e), maxLines = 1) },
+                    icon = {},
+                )
+            }
+        }
+    }
+}
+
+/** A one-line label and its switch; the whole row toggles. */
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onChange(!checked) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }

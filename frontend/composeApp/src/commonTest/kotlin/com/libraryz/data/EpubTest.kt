@@ -165,7 +165,7 @@ class EpubTest {
         assertEquals(
             // A centered heading or rule is a paragraph region of its own: its end breaks the line, so one \n makes the blank line.
             "Hello, world!\n\nNested\n\nLine one\nline two\nLeading break\n3. three\n\n4. four\n\n• dot\n*   *   *\n" +
-                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n*   *   *\nafter\n\n• \n\n    • inner\n\n" +
+                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n*   *   *\nafter\n\n• \n\n    ◦ inner\n\n" +
                     "Unclosed em\n\nNext",
             book.text.text,
         )
@@ -242,6 +242,83 @@ class EpubTest {
         assertEquals(listOf("Chapter One"), book.chapters.map { it.title })
         assertEquals(book.text.text.indexOf(p, 1), book.chapters.single().offset)
         assertEquals(png(800, 600).toList(), book.images.getValue("book/Images/map.png").bytes().toList())
+    }
+
+    @Test
+    fun startsEachDocumentAndCssPageBreakOnANewPage() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml") + item("b", "b.xhtml"), """<itemref idref="a"/><itemref idref="b"/>"""),
+                "book/a.xhtml" to """<body><p>One.</p><p style="page-break-before: always">Two.</p><p style="break-after: page">Three.</p><p>Four.</p></body>""",
+                "book/b.xhtml" to """<body><p>Five.</p></body>""",
+            ),
+        )
+        val text = book.text.text
+        assertEquals(listOf("Two.", "Four.", "Five.").map(text::indexOf), book.pageStarts)
+        // Only the documents start a spread; the first is at the start already.
+        assertEquals(listOf(text.indexOf("Five.")), book.spreadStarts)
+    }
+
+    @Test
+    fun decodesDoublyEscapedNcxLabelsAgain() {
+        // Some books escape their NCX labels twice; the label is read as HTML once more.
+        val ncx = """<ncx><navMap>
+            <navPoint id="a"><navLabel><text>Salt &amp;amp; Pepper</text></navLabel><content src="a.xhtml"/></navPoint>
+            <navPoint id="b"><navLabel><text>&lt;i&gt;Coda&lt;/i&gt; &amp;#8212; end</text></navLabel><content src="a.xhtml#b"/></navPoint>
+            <navPoint id="c"><navLabel><text>1 &lt; 2</text></navLabel><content src="a.xhtml#c"/></navPoint>
+            </navMap></ncx>"""
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml") + item("n", "toc.ncx", "application/x-dtbncx+xml"), """<itemref idref="a"/>""", """toc="n""""),
+                "book/a.xhtml" to """<body><p>One.</p><p id="b">Two.</p><p id="c">Three.</p></body>""",
+                "book/toc.ncx" to ncx,
+            ),
+        )
+        assertEquals(listOf("Salt & Pepper", "Coda \u2014 end", "1 < 2"), book.chapters.map { it.title })
+    }
+
+    @Test
+    fun drawsAPictureAsWideAsItsBlocksMarginsLeave() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""),
+                "book/a.xhtml" to """<body><div style="margin: 0 20%"><img style="width: 100%" src="p.png"/></div><p><img src="p.png"/></p></body>""",
+                "book/p.png" to png(800, 600),
+            ),
+        )
+        val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length).map { it.item }
+        assertEquals(listOf("book/p.png#w60s", "book/p.png"), marks)
+        assertEquals(0.6f, book.images.getValue("book/p.png#w60s").widthFraction, 1e-4f)
+        assertEquals(1f, book.images.getValue("book/p.png").widthFraction)
+    }
+
+    @Test
+    fun sizesAPictureAsTheBookSetsIt() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""),
+                "book/a.xhtml" to """<body>
+                    <p><img style="width: 100%" src="s.png"/></p>
+                    <p><img width="320" src="s.png"/></p>
+                    <p><img style="height: 10em" src="s.png"/></p>
+                    <p><img style="max-width: 100%" src="s.png"/></p>
+                    <table><tr><td><img style="width: 100%" src="c.png"/></td></tr></table>
+                    </body>""",
+                "book/s.png" to png(200, 100),
+                "book/c.png" to png(300, 100),
+            ),
+        )
+        val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length).map { it.item }
+        assertEquals(listOf("book/s.png#w100s", "book/s.png#w100e320", "book/s.png#w100h160", "book/s.png"), marks)
+        // A percentage stretches a small picture; a length sets its size; max-width alone changes nothing.
+        assertTrue(book.images.getValue("book/s.png#w100s").stretch)
+        assertEquals(20f, book.images.getValue("book/s.png#w100e320").widthEm)
+        assertEquals(10f, book.images.getValue("book/s.png#w100h160").heightEm)
+        assertTrue(!book.images.getValue("book/s.png").stretch)
+        // A sized picture inside a table cell is in the book's pictures too (the cell is drawn from them).
+        val cell = book.tables.single().rows.single().single().text
+        val inCell = cell.getStringAnnotations(IMAGE_TAG, 0, cell.length).single().item
+        assertTrue(inCell in book.images, inCell)
     }
 
     @Test

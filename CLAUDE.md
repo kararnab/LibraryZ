@@ -195,8 +195,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   **no presigned URLs** — fine at the current scale (public downloads,
   500 MiB cap). Current `golang.org/x/*`, pdfcpu, goose and
   `kararnab/iam` releases require **go 1.26** (the go.mod directive); the Docker builder
-  (`golang:1.27-alpine`) and CI build with Go 1.27. pdfcpu ≥0.16 takes a
-  `context.Context` on `api.ReadContext`/`WriteContext`.
+  (`golang:1.27.4-alpine`) and CI build with Go 1.27.4, the `toolchain` line in go.mod.
+  pdfcpu ≥0.16 takes a `context.Context` on `api.ReadContext`/`WriteContext`.
+  **Dependency age: a version may be added or updated only if it was
+  published at least 7 days earlier** (`docs/dependency-age-policy.md`;
+  `scripts/check-dep-age.sh` checks Go, and CI runs it on PRs).
   **Compose runs RustFS, not MinIO** (`rustfs/rustfs`, pinned): MinIO stopped
   publishing images and archived its repo in 2026, so `minio/minio` doesn't
   pull. The client library is still `minio-go` — it's a generic S3 client.
@@ -345,7 +348,18 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `TextSpreadView`), `ReaderControls.kt` (settings, contents, end card).
   EPUB is pure commonMain: `data/Zip.kt`, `Markup.kt`, `Css.kt`, `Epub.kt`
   (parse), `EpubToc.kt` (contents), `EpubBuilder.kt` (`BookBuilder`). It
-  becomes a `TextReader` like TXT. Text-reader gotchas:
+  becomes a `TextReader` like TXT. Two pages a spread, each spine document
+  starts a spread on the left (`TextReader.spreadStarts` → `Spreads(leftStarts)`,
+  a blank right page before it if needed); CSS page
+  breaks only start a page. Table columns: `columnWidths` (BookText.kt),
+  automatic layout honouring the book's `<col>`/cell/table widths, only
+  words that can't fit break; `ReaderPrefs.fixedTables` switches to
+  CSS `table-layout: fixed`. Block pictures: a book's percentage
+  width may scale one up (`BookImage.stretch`), a px/em width or height
+  sets it; with none set, never past its own size. Reader overrides
+  (`ReaderPrefs.overrides`, `data/TextOverrides.kt`): alignment, indent and
+  the book's line heights, applied when drawing (`overridden` in `prepare`),
+  never re-parsing; they must keep the text's length (offsets). Text-reader gotchas:
   - The style needs `LineHeightStyle.Mode.Minimum` when there are pictures:
     Android's default `Fixed` mode crops a tall placeholder's line (Skia
     grows it either way).

@@ -1,5 +1,8 @@
 package com.libraryz.ui.screens
 
+import com.libraryz.data.AlignOverride
+import com.libraryz.data.IndentOverride
+import com.libraryz.data.TextOverrides
 import com.libraryz.data.api.TokenStore
 import com.libraryz.theme.ReadingTheme
 import kotlinx.serialization.Serializable
@@ -28,13 +31,21 @@ class ReaderPrefsStore(storeFactory: () -> TokenStore) {
         val spacing: String? = null,
         val width: String? = null,
         val bookFonts: Boolean? = null,
+        val fixedTables: Boolean? = null,
+        val align: String? = null,
+        val indent: String? = null,
+        val bookLineHeight: Boolean? = null,
     )
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
 
         fun encode(p: ReaderPrefs): String =
-            json.encodeToString(Saved.serializer(), Saved(p.textSize, p.theme.name, p.spacing.name, p.width.name, p.bookFonts))
+            json.encodeToString(Saved.serializer(), Saved(
+                    p.textSize, p.theme.name, p.spacing.name, p.width.name, p.bookFonts, p.fixedTables,
+                    p.overrides.align.name, p.overrides.indent.name, p.overrides.bookLineHeight,
+                ),
+            )
 
         fun decode(s: String): ReaderPrefs {
             val saved = json.decodeFromString(Saved.serializer(), s)
@@ -45,6 +56,12 @@ class ReaderPrefsStore(storeFactory: () -> TokenStore) {
                 spacing = LineSpacing.entries.firstOrNull { it.name == saved.spacing } ?: d.spacing,
                 width = ColumnWidth.entries.firstOrNull { it.name == saved.width } ?: d.width,
                 bookFonts = saved.bookFonts ?: d.bookFonts,
+                fixedTables = saved.fixedTables ?: d.fixedTables,
+                overrides = TextOverrides(
+                    align = AlignOverride.entries.firstOrNull { it.name == saved.align } ?: d.overrides.align,
+                    indent = IndentOverride.entries.firstOrNull { it.name == saved.indent } ?: d.overrides.indent,
+                    bookLineHeight = saved.bookLineHeight ?: d.overrides.bookLineHeight,
+                ),
             )
         }
     }

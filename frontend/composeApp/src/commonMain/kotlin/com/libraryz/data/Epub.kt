@@ -12,6 +12,12 @@ class EpubBook(
     val images: Map<String, BookImage>,
     val tables: List<BookTable>,
     val boxes: List<BookBox>,
+    /** Where a page must start: see [TextReader.pageStarts]. */
+    val pageStarts: List<Int> = emptyList(),
+    /** Where a spread must start: see [TextReader.spreadStarts]. */
+    val spreadStarts: List<Int> = emptyList(),
+    /** Where the book's own line heights apply: see [TextReader.lineHeights]. */
+    val lineHeights: List<BookLineHeight> = emptyList(),
 )
 
 class EpubException(message: String) : RuntimeException(message)
@@ -110,7 +116,8 @@ fun parseEpub(bytes: ByteArray): EpubBook {
         val listed = toc.ifEmpty { book.headings }
         val chapters = (listed + unlistedChapters(text.text, documents.mapNotNull { book.offsetOf(it, "") }, listed))
             .sortedBy { it.offset }
-        return EpubBook(text, chapters, images.filterValues { it != null }.mapValues { it.value!! }, book.tables, book.boxes)
+        val pictures = images.filterValues { it != null }.mapValues { it.value!! } + book.scaledImages
+        return EpubBook(text, chapters, pictures, book.tables, book.boxes, book.pageStarts, book.spreadStarts, book.lineHeights)
     } catch (e: ZipException) {
         throw EpubException("This EPUB is damaged (${e.message}).")
     }

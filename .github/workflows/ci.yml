@@ -54,15 +54,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the age check compares go.mod with the PR's base
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version: '1.27.4'
           cache: true
 
       - name: Verify modules
         run: go mod verify
+
+      - name: Dependency age (docs/dependency-age-policy.md)
+        if: github.event_name == 'pull_request'
+        run: BASE=origin/${{ github.base_ref }} scripts/check-dep-age.sh
 
       - name: Vet
         run: go vet ./...
@@ -116,7 +122,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version: '1.27.4'
           cache: true
 
       - name: Test (-tags=postgres)
