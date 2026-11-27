@@ -74,6 +74,10 @@ internal class BookBuilder(
     val pageStarts = ArrayList<Int>()
     /** The [pageStarts] where a document of the spine begins: a two-page spread starts there, on the left. */
     val spreadStarts = ArrayList<Int>()
+    /** Where the book's own `line-height` sets a region's lines (see [BookLineHeight]). */
+    val lineHeights = ArrayList<BookLineHeight>()
+    // Paragraph styles carrying a book line-height, and the line height each would have without it.
+    private val bookLineStyles = HashMap<ParagraphStyle, TextUnit>()
     private var spreadPending = false
     // Elements being skipped (head, script, display: none…), innermost last.
     private val skipStack = ArrayList<String>()
@@ -784,7 +788,10 @@ internal class BookBuilder(
 
     private fun closeRegion() {
         val style = regionStyle
-        if (style != null && out.length > regionStart) out.addStyle(style, regionStart, out.length)
+        if (style != null && out.length > regionStart) {
+            out.addStyle(style, regionStart, out.length)
+            bookLineStyles[style]?.let { lineHeights += BookLineHeight(regionStart, out.length, it) }
+        }
         regionStart = out.length
     }
 
@@ -809,16 +816,21 @@ internal class BookBuilder(
         val heading = stack.lastOrNull { it.heading > 0 }?.heading ?: 0
         // Large type (a heading, a book's display text) needs taller lines than the reader's spacing.
         val scale = stack.lastOrNull { it.block }?.scale ?: 1f
-        if (align == null && indent == 0f && left == 0f && heading == 0 && scale <= 1.1f) return null
+        // The book's line-height, used only if the reader asks (TextOverrides.bookLineHeight); not in cells.
+        val book = if (inCell) null else stack.asReversed().firstNotNullOfOrNull { o -> o.css["line-height"]?.let { lineHeightOf(it, scale) } }
+        if (align == null && indent == 0f && left == 0f && heading == 0 && scale <= 1.1f && book == null) return null
         val textIndent = if (indent != 0f || left != 0f) TextIndent((left + indent).coerceAtLeast(0f).em, left.em) else null
-        return ParagraphStyle(
+        val own = if (heading > 0 || scale > 1.1f) (scale * 1.3f).em else TextUnit.Unspecified
+        val style = ParagraphStyle(
             textAlign = align ?: TextAlign.Unspecified,
             textIndent = textIndent,
-            lineHeight = if (heading > 0 || scale > 1.1f) (scale * 1.3f).em else TextUnit.Unspecified,
+            lineHeight = book ?: own,
             // Such a paragraph is a region of its own (see startBlock): untrimmed, its lines
             // are spaced as they would be inside one region.
             lineHeightStyle = if (textIndent != null && textIndent.firstLine != textIndent.restLine) UNTRIMMED else null,
         )
+        if (book != null) bookLineStyles[style] = own
+        return style
     }
 
     private fun write(s: String) {
@@ -909,6 +921,23 @@ internal class BookBuilder(
         fun borderColor(css: Map<String, String>, current: Color? = null): Color? = css.entries.firstNotNullOfOrNull { (k, v) ->
             if (k.startsWith("border") && !k.contains("collapse") && !k.contains("spacing") && !k.contains("radius")) cssBackground(v) else null
         } ?: current
+
+        /**
+         * A CSS `line-height` as a height in ems of the reader's text: a number,
+         * em or percentage times the element's own size ([scale]), a length as
+         * is. Null for `normal`, nonsense, or under 0.8 of the type (a book's
+         * `line-height: 0` trick, which would overlap real text); at most 3.
+         */
+        fun lineHeightOf(value: String, scale: Float): TextUnit? {
+            val v = value.trim().lowercase()
+            val factor = v.toFloatOrNull()
+                ?: v.removeSuffix("%").takeIf { v.endsWith("%") }?.toFloatOrNull()?.div(100f)
+                ?: v.removeSuffix("em").takeIf { v.endsWith("em") && !v.endsWith("rem") }?.toFloatOrNull()
+                ?: cssEm(v)?.div(scale) // rem, px, pt: absolute, so as a multiple of this element's size
+                ?: return null
+            if (factor < 0.8f) return null
+            return (factor.coerceAtMost(3f) * scale).em
+        }
 
         /** A filled blank block's bar when its CSS sets no height, in ems. */
         private const val BAR_EM = 0.15f

@@ -143,6 +143,7 @@ internal fun TextReaderLayout(
             spread = spread,
             showBookFonts = reader.hasBookFonts,
             showTables = reader.tables.isNotEmpty(),
+            showOverrides = reader.styled,
         )
     }
     val reduce = LocalReduceMotion.current
@@ -405,10 +406,11 @@ private fun TextView(
                 fontSize = prefs.textSize.sp,
                 lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
                 color = prefs.theme.ink,
+                textAlign = if (reader.styled) prefs.overrides.baseAlign(TextAlign.Unspecified) else TextAlign.Unspecified,
             ),
         )
         // Pictures and tables fit the column, pictures most of the screen's height.
-        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts, prefs.fixedTables)
+        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts, prefs.fixedTables, prefs.overrides)
         val emPx = with(density) { prefs.textSize.sp.toPx() }
         Box(
             modifier = Modifier.fillMaxSize().verticalScroll(scroll),
@@ -534,10 +536,10 @@ private fun TextSpreadView(
             fontSize = prefs.textSize.sp,
             lineHeight = (prefs.textSize * prefs.spacing.factor).sp,
             color = theme.ink,
-            textAlign = TextAlign.Justify,
+            textAlign = if (reader.styled) prefs.overrides.baseAlign(TextAlign.Justify) else TextAlign.Justify,
         )
         // A picture or table row fits a page, a little under so rounding can't push it over.
-        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts, prefs.fixedTables)
+        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts, prefs.fixedTables, prefs.overrides)
         val emPx = with(density) { prefs.textSize.sp.toPx() }
         val text = sized.text
         val style = baseStyle.copy(lineHeightStyle = sized.lineHeightStyle)

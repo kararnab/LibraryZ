@@ -356,7 +356,10 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   words that can't fit break; `ReaderPrefs.fixedTables` switches to
   CSS `table-layout: fixed`. Block pictures: a book's percentage
   width may scale one up (`BookImage.stretch`), a px/em width or height
-  sets it; with none set, never past its own size. Text-reader gotchas:
+  sets it; with none set, never past its own size. Reader overrides
+  (`ReaderPrefs.overrides`, `data/TextOverrides.kt`): alignment, indent and
+  the book's line heights, applied when drawing (`overridden` in `prepare`),
+  never re-parsing; they must keep the text's length (offsets). Text-reader gotchas:
   - The style needs `LineHeightStyle.Mode.Minimum` when there are pictures:
     Android's default `Fixed` mode crops a tall placeholder's line (Skia
     grows it either way).

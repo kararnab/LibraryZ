@@ -1,5 +1,8 @@
 package com.libraryz.ui.screens
 
+import com.libraryz.data.AlignOverride
+import com.libraryz.data.IndentOverride
+import com.libraryz.data.TextOverrides
 import com.libraryz.data.api.TokenStore
 import com.libraryz.theme.ReadingTheme
 import kotlinx.coroutines.test.runTest
@@ -18,7 +21,9 @@ class ReaderPrefsStoreTest {
     @Test
     fun keepsSettingsBetweenSessions() = runTest {
         val disk = Memory()
-        val prefs = ReaderPrefs(textSize = 22, theme = ReadingTheme.Dark, spacing = LineSpacing.Airy, width = ColumnWidth.Wide, bookFonts = false, fixedTables = true)
+        val prefs = ReaderPrefs(textSize = 22, theme = ReadingTheme.Dark, spacing = LineSpacing.Airy, width = ColumnWidth.Wide, bookFonts = false, fixedTables = true,
+            overrides = TextOverrides(AlignOverride.Justify, IndentOverride.Indent, bookLineHeight = true),
+        )
         ReaderPrefsStore { disk }.save(prefs)
         assertEquals(prefs, ReaderPrefsStore { disk }.load())
     }

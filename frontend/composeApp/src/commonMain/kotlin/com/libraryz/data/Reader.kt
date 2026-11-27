@@ -60,6 +60,10 @@ class TextReader(
      * blank.
      */
     val spreadStarts: List<Int> = emptyList(),
+    /** Regions where the book sets its own `line-height`, drawn so only if the reader asks ([TextOverrides]). */
+    val lineHeights: List<BookLineHeight> = emptyList(),
+    /** Formatted by the book (an EPUB), so the reader's [TextOverrides] mean something; plain text isn't. */
+    val styled: Boolean = false,
 ) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
@@ -214,7 +218,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes, it.pageStarts, it.spreadStarts) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes, it.pageStarts, it.spreadStarts, it.lineHeights, styled = true) }
         }
         else -> throw UnsupportedFormatException(format)
     }

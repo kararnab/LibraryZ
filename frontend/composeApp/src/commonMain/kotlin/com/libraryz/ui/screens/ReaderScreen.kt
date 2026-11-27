@@ -1,5 +1,6 @@
 package com.libraryz.ui.screens
 
+import com.libraryz.data.TextOverrides
 import com.libraryz.LocalTelemetry
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -102,6 +103,8 @@ data class ReaderPrefs(
     val bookFonts: Boolean = true,
     /** Tables laid out with CSS `table-layout: fixed`: columns by the book's widths or evenly, not by content. */
     val fixedTables: Boolean = false,
+    /** Where the reader's alignment, indent and line height win over an EPUB's own. */
+    val overrides: TextOverrides = TextOverrides(),
 )
 
 /**

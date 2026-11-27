@@ -19,6 +19,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.imageio.ImageIO
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.math.abs
 import kotlin.test.assertTrue
 
@@ -197,5 +198,42 @@ class EpubImagesTest {
             if ((c shr 16 and 0xFF) < 120 && (c shr 8 and 0xFF) < 120 && (c and 0xFF) < 120) ink++
         }
         assertTrue(ink == 0, "ink on the blank right-hand page: $ink")
+    }
+
+    @Test
+    fun theReadersIndentMovesEveryParagraphIn() {
+        val book = epub("<p>First paragraph of plain text.</p><p>Second paragraph of plain text.</p>", emptyMap(), css = "p { margin: 0 0 1em }")
+        // The leftmost ink of the body text, below the top bar.
+        fun leftInk(frame: Image): Int {
+            val bitmap = org.jetbrains.skia.Bitmap.makeFromImage(frame)
+            var left = Int.MAX_VALUE
+            for (y in 80 until 300) for (x in 0 until bitmap.width / 2) {
+                val c = bitmap.getColor(x, y)
+                if ((c shr 16 and 0xFF) < 100 && (c shr 8 and 0xFF) < 100 && (c and 0xFF) < 100) left = minOf(left, x)
+            }
+            return left
+        }
+        // The rows holding ink, top to bottom: where each line of text is.
+        fun inkRows(frame: Image): List<Int> {
+            val bitmap = org.jetbrains.skia.Bitmap.makeFromImage(frame)
+            return (80 until 300).filter { y ->
+                (0 until bitmap.width / 2).any { x ->
+                    val c = bitmap.getColor(x, y)
+                    (c shr 16 and 0xFF) < 100 && (c shr 8 and 0xFF) < 100 && (c and 0xFF) < 100
+                }
+            }
+        }
+        val bookFrame = render(book, 600, 900, "indent-book")
+        val indentFrame = render(book, 600, 900, "indent-2em", ReaderPrefs(overrides = com.libraryz.data.TextOverrides(indent = com.libraryz.data.IndentOverride.Indent)))
+        val plain = leftInk(bookFrame)
+        val indented = leftInk(indentFrame)
+        // 2 em of 18 dp text at density 1.
+        assertTrue(indented - plain in 32..40, "moved ${indented - plain} (from $plain to $indented)")
+        // And only moved in: the lines sit where they did (to a pixel: an indented paragraph, a range
+        // of its own, keeps its first line's top untrimmed), not a line further down per paragraph.
+        val before = inkRows(bookFrame)
+        val after = inkRows(indentFrame)
+        assertEquals(before.size, after.size, "$before vs $after")
+        before.zip(after).forEach { (b, a) -> assertTrue(kotlin.math.abs(a - b) <= 2, "$before vs $after") }
     }
 }

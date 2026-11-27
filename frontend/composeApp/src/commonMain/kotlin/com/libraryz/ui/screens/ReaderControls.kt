@@ -1,5 +1,8 @@
 package com.libraryz.ui.screens
 
+import com.libraryz.data.AlignOverride
+import com.libraryz.data.IndentOverride
+import com.libraryz.data.TextOverrides
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -90,6 +93,7 @@ internal fun ReadingSettings(
     spread: Boolean,
     showBookFonts: Boolean,
     showTables: Boolean = false,
+    showOverrides: Boolean = false,
 ) {
     if (layout != null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -131,6 +135,7 @@ internal fun ReadingSettings(
             Switch(checked = prefs.bookFonts, onCheckedChange = { onChange(prefs.copy(bookFonts = it)) })
         }
     }
+    if (showOverrides) BookOverrides(prefs.overrides, onChange = { onChange(prefs.copy(overrides = it)) })
     if (showTables) {
         Row(
             Modifier.fillMaxWidth().clickable { onChange(prefs.copy(fixedTables = !prefs.fixedTables)) },
@@ -337,5 +342,65 @@ internal fun EndCard(
                 TextButton(onClick = onBack) { Text("Back to book") }
             }
         }
+    }
+}
+
+/**
+ * Where the reader's formatting wins over the book's:
+ * alignment, first-line indent, and whether the book's own line heights
+ * count. "Book" keeps what the book says.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookOverrides(o: TextOverrides, onChange: (TextOverrides) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Alignment", style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            AlignOverride.entries.forEachIndexed { i, a ->
+                SegmentedButton(
+                    selected = o.align == a,
+                    onClick = { onChange(o.copy(align = a)) },
+                    shape = SegmentedButtonDefaults.itemShape(i, AlignOverride.entries.size),
+                    label = { Text(a.label, maxLines = 1) },
+                )
+            }
+        }
+        Text(
+            "Auto justifies two pages and sets one page left. Text the book centres or sets right keeps its own.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("First-line indent", style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            IndentOverride.entries.forEachIndexed { i, a ->
+                SegmentedButton(
+                    selected = o.indent == a,
+                    onClick = { onChange(o.copy(indent = a)) },
+                    shape = SegmentedButtonDefaults.itemShape(i, IndentOverride.entries.size),
+                    label = { Text(a.label, maxLines = 1) },
+                )
+            }
+        }
+        Text(
+            "Book keeps the book's own. Headings and centred lines keep theirs either way.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Row(
+        Modifier.fillMaxWidth().clickable { onChange(o.copy(bookLineHeight = !o.bookLineHeight)) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Book's line height", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Where the book sets how far apart its lines are. Off uses your spacing throughout.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = o.bookLineHeight, onCheckedChange = { onChange(o.copy(bookLineHeight = it)) })
     }
 }

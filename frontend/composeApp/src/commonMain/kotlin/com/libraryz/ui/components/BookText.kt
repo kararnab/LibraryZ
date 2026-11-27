@@ -61,6 +61,8 @@ import com.libraryz.data.BookCell
 import com.libraryz.data.BookImage
 import com.libraryz.data.BookTable
 import com.libraryz.data.BookWidth
+import com.libraryz.data.TextOverrides
+import com.libraryz.data.overridden
 import com.libraryz.data.IMAGE_TAG
 import com.libraryz.data.TABLE_TAG
 import com.libraryz.data.TextReader
@@ -114,11 +116,12 @@ fun rememberSizedText(
     theme: ReadingTheme,
     bookFonts: Boolean = true,
     fixedTables: Boolean = false,
+    overrides: TextOverrides = TextOverrides(),
 ): SizedText {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer(cacheSize = 0)
-    return remember(reader, maxWidth, maxHeight, density, style, theme, bookFonts, fixedTables) {
-        prepare(reader, maxWidth, maxHeight, style, theme, density, measurer, bookFonts, fixedTables)
+    return remember(reader, maxWidth, maxHeight, density, style, theme, bookFonts, fixedTables, overrides) {
+        prepare(reader, maxWidth, maxHeight, style, theme, density, measurer, bookFonts, fixedTables, overrides)
     }
 }
 
@@ -132,8 +135,10 @@ internal fun prepare(
     measurer: TextMeasurer,
     bookFonts: Boolean = true,
     fixedTables: Boolean = false,
+    overrides: TextOverrides = TextOverrides(),
 ): SizedText {
-    val text = themed(reader.text, theme, fontSize = style.fontSize, bookFonts = bookFonts)
+    val own = if (reader.styled) overridden(reader.text, reader.lineHeights, overrides) else reader.text
+    val text = themed(own, theme, fontSize = style.fontSize, bookFonts = bookFonts)
     if (reader.images.isEmpty() && reader.tables.isEmpty()) return SizedText(text, emptyMap(), emptyList(), null)
     val content = HashMap<String, InlineTextContent>()
     reader.images.forEach { (key, image) ->
