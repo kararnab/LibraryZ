@@ -72,6 +72,8 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.ExperimentalResourceApi
 import org.jetbrains.compose.resources.decodeToImageBitmap
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -228,7 +230,9 @@ internal fun layoutTable(
     fixed: Boolean = false,
 ): TableLayout = with(density) {
     val columns = table.rows.maxOf { row -> row.sumOf { it.span } }
-    val available = maxWidth.toPx()
+    // A whole pixel inside the column: the row's placeholder comes back through sp a fraction
+    // narrower, and a full-width row would squeeze its last cell by a pixel and wrap its text.
+    val available = (floor(maxWidth.toPx()) - 1f).coerceAtLeast(1f)
     val pad = CELL_PAD_H.toPx() * 2
     // Cell text made readable on its own cell's colour.
     val fills = table.rows.map { row -> row.map { c -> c.background?.let { highlight(it, theme) } } }
@@ -255,9 +259,11 @@ internal fun layoutTable(
                     placeholders = placeholdersOf(texts[r][i], content),
                 ).multiParagraph.intrinsics
                 // Intrinsic widths leave out text indents (a box's padding, the book's margins).
+                // Rounded up to whole pixels: the cell's box rounds its width, and a column held at
+                // exactly its widest text (61.3 px drawn in 61) would wrap it, the row too short to show it.
                 val indent = indentPx(texts[r][i], style)
-                minW[c] = max(minW[c], m.minIntrinsicWidth + indent + pad)
-                maxW[c] = max(maxW[c], m.maxIntrinsicWidth + indent + pad)
+                minW[c] = max(minW[c], ceil(m.minIntrinsicWidth + indent) + pad)
+                maxW[c] = max(maxW[c], ceil(m.maxIntrinsicWidth + indent) + pad)
             }
             c += cell.span
         }
