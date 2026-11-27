@@ -334,4 +334,19 @@ class EpubStyleTest {
         assertEquals(listOf("0:0", "0:1", "0:2"), keys)
         assertEquals(TextAlign.Center, text.paragraphAt("Planets")?.textAlign)
     }
+
+    @Test
+    fun readsTheWidthsATableSets() {
+        val table = book(
+            """<table style="width: 100%"><colgroup><col width="20%"/><col span="2" style="width: 6em"/></colgroup>
+                 <tr><td width="120">a</td><td class="w">b</td><td>c</td><td style="width: auto">d</td></tr></table>""",
+            css = ".w { width: 30% }",
+        ).tables.single()
+        assertEquals(BookWidth(fraction = 1f), table.width)
+        assertEquals(listOf(BookWidth(fraction = 0.2f), BookWidth(em = 6f), BookWidth(em = 6f)), table.columns)
+        assertEquals(listOf(BookWidth(em = 7.5f), BookWidth(fraction = 0.3f), null, null), table.rows.single().map { it.width })
+        assertNull(BookWidth.parse("0"))
+        assertNull(BookWidth.parse("-5%"))
+        assertEquals(BookWidth(fraction = 1f), BookWidth.parse("150%"))
+    }
 }

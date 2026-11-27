@@ -100,6 +100,8 @@ data class ReaderPrefs(
     val width: ColumnWidth = ColumnWidth.Medium,
     /** Use the fonts an EPUB embeds (its @font-face rules) where it asks for them; off = the reader's serif throughout. */
     val bookFonts: Boolean = true,
+    /** Tables laid out with CSS `table-layout: fixed`: columns by the book's widths or evenly, not by content. */
+    val fixedTables: Boolean = false,
 )
 
 /**

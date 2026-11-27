@@ -60,6 +60,7 @@ import com.libraryz.data.BookBox
 import com.libraryz.data.BookCell
 import com.libraryz.data.BookImage
 import com.libraryz.data.BookTable
+import com.libraryz.data.BookWidth
 import com.libraryz.data.IMAGE_TAG
 import com.libraryz.data.TABLE_TAG
 import com.libraryz.data.TextReader
@@ -97,8 +98,9 @@ class SizedText(
  * - A block picture's placeholder spans the column, so the picture is drawn
  *   centered in it, as wide as it is (one image pixel = 1 dp) up to that,
  *   then shrunk to fit [maxHeight]. An inline one is an em high.
- * - A table's columns share the width by their content, as a browser's
- *   automatic table layout does; each row is as tall as its tallest cell
+ * - A table's columns share the width by their content and the widths the
+ *   book sets, as a browser's automatic table layout does, or by those
+ *   widths alone with [fixedTables] (see [columnWidths]); each row is as tall as its tallest cell
  *   (at most [maxHeight]) and the table is centered.
  *
  * [style] is the reading text's: cells are measured in it.
@@ -111,11 +113,12 @@ fun rememberSizedText(
     style: TextStyle,
     theme: ReadingTheme,
     bookFonts: Boolean = true,
+    fixedTables: Boolean = false,
 ): SizedText {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer(cacheSize = 0)
-    return remember(reader, maxWidth, maxHeight, density, style, theme, bookFonts) {
-        prepare(reader, maxWidth, maxHeight, style, theme, density, measurer, bookFonts)
+    return remember(reader, maxWidth, maxHeight, density, style, theme, bookFonts, fixedTables) {
+        prepare(reader, maxWidth, maxHeight, style, theme, density, measurer, bookFonts, fixedTables)
     }
 }
 
@@ -128,6 +131,7 @@ internal fun prepare(
     density: Density,
     measurer: TextMeasurer,
     bookFonts: Boolean = true,
+    fixedTables: Boolean = false,
 ): SizedText {
     val text = themed(reader.text, theme, fontSize = style.fontSize, bookFonts = bookFonts)
     if (reader.images.isEmpty() && reader.tables.isEmpty()) return SizedText(text, emptyMap(), emptyList(), null)
@@ -138,7 +142,7 @@ internal fun prepare(
     // Cells start-aligned whatever the page does (a spread justifies), unless the book says otherwise.
     val cellStyle = style.copy(textAlign = TextAlign.Start, lineHeightStyle = MINIMUM)
     reader.tables.forEachIndexed { t, table ->
-        val layout = layoutTable(table, reader, maxWidth, maxHeight, cellStyle, theme, density, measurer, bookFonts)
+        val layout = layoutTable(table, reader, maxWidth, maxHeight, cellStyle, theme, density, measurer, bookFonts, fixedTables)
         layout.rows.forEachIndexed { r, row ->
             val placeholder = with(density) { Placeholder(maxWidth.toSp(), row.height.toSp(), PlaceholderVerticalAlign.Center) }
             content["$t:$r"] = InlineTextContent(placeholder) {
@@ -195,10 +199,9 @@ private val CELL_PAD_H = 8.dp
 private val CELL_PAD_V = 4.dp
 
 /**
- * Column widths from each column's narrowest (longest word) and widest (one
- * line) cell: all at their widest if that fits, else everything above the
- * narrowest shared in proportion; past that, the narrowest scaled down.
- * Cells spanning columns don't size them.
+ * A table's cells measured and its columns sized ([columnWidths]): by their
+ * content and the widths the book sets, or ([fixed]) by those widths alone,
+ * as CSS `table-layout: fixed` does.
  */
 internal fun layoutTable(
     table: BookTable,
@@ -210,6 +213,7 @@ internal fun layoutTable(
     density: Density,
     measurer: TextMeasurer,
     bookFonts: Boolean = true,
+    fixed: Boolean = false,
 ): TableLayout = with(density) {
     val columns = table.rows.maxOf { row -> row.sumOf { it.span } }
     val available = maxWidth.toPx()
@@ -251,13 +255,28 @@ internal fun layoutTable(
         minW[c] = pad * 2
         maxW[c] = pad * 2
     }
-    val sumMin = minW.sum()
-    val sumMax = maxW.sum()
-    val widths = when {
-        sumMax <= available -> maxW.toList()
-        sumMin >= available -> minW.map { it * available / sumMin }
-        else -> List(columns) { minW[it] + (maxW[it] - minW[it]) * (available - sumMin) / (sumMax - sumMin) }
-    }.map { it.toDp() }
+    // The widths the book sets, as pixels with the cell's padding (CSS widths leave it out).
+    val fontPx = style.fontSize.takeIf { it.isSp }?.toPx() ?: 16.dp.toPx()
+    val tableWidth = table.width?.let { (it.fraction * available + it.em * fontPx).coerceAtMost(available) }
+    fun px(w: BookWidth?): Float? = w?.let { it.fraction * (tableWidth ?: available) + it.em * fontPx + pad }
+    val specified = MutableList<Float?>(columns) { c -> px(table.columns.getOrNull(c)) }
+    // Fixed layout reads only the first row; automatic, every row (the widest wins).
+    for (row in if (fixed) table.rows.take(1) else table.rows) {
+        var c = 0
+        for (cell in row) {
+            if (c >= columns) break
+            val w = px(cell.width)
+            if (w != null && table.columns.getOrNull(c) == null) {
+                if (cell.span == 1) {
+                    specified[c] = max(specified[c] ?: 0f, w)
+                } else if (fixed) {
+                    for (k in c until minOf(columns, c + cell.span)) specified[k] = specified[k] ?: (w / cell.span)
+                }
+            }
+            c += cell.span
+        }
+    }
+    val widths = columnWidths(minW, maxW, specified, tableWidth, available, fixed, minColumn = pad * 2).map { it.toDp() }
 
     val rows = table.rows.mapIndexed { r, row ->
         var c = 0
@@ -277,6 +296,70 @@ internal fun layoutTable(
         RowLayout(min(height, maxHeight), cells)
     }
     TableLayout(widths, rows)
+}
+
+/**
+ * A table's column widths, in pixels, never wider together than [available]:
+ * - Automatic (a browser's automatic table layout): each column from its
+ *   narrowest (longest word, [contentMin]) and widest (one line,
+ *   [contentMax]) content; a [specified] width replaces the widest and
+ *   raises the narrowest. All at their widest if that fits (grown to
+ *   [tableWidth] if the book sets one), else the room above the narrowest
+ *   shared in proportion. When even that can't fit, the book's widths give
+ *   way first, then only the columns whose longest word can't fit are
+ *   narrowed, to one shared cap, so only their words break mid-word.
+ * - [fixed] (CSS `table-layout: fixed`): the table
+ *   is [tableWidth] or the full width; [specified] columns get their widths,
+ *   the rest share what's left evenly (at least [minColumn] each), and the
+ *   whole is scaled to the table's width. Content doesn't count.
+ */
+internal fun columnWidths(
+    contentMin: FloatArray,
+    contentMax: FloatArray,
+    specified: List<Float?>,
+    tableWidth: Float?,
+    available: Float,
+    fixed: Boolean,
+    minColumn: Float,
+): List<Float> {
+    val n = contentMin.size
+    if (n == 0) return emptyList()
+    if (fixed) {
+        val base = tableWidth ?: available
+        val unset = specified.count { it == null }
+        val each = if (unset > 0) max((base - specified.sumOf { (it ?: 0f).toDouble() }.toFloat()) / unset, minColumn) else 0f
+        val w = List(n) { specified[it] ?: each }
+        val total = w.sum()
+        // Too wide: scaled down to fit. All set and narrower: the extra shared in proportion, as CSS does.
+        return if (total > base || (unset == 0 && total < base)) w.map { it * base / total } else w
+    }
+    val lo = FloatArray(n) { c -> max(contentMin[c], specified[c] ?: 0f) }
+    val hi = FloatArray(n) { c -> specified[c]?.let { max(contentMin[c], it) } ?: max(contentMin[c], contentMax[c]) }
+    val sumLo = lo.sum()
+    val sumHi = hi.sum()
+    val sumMin = contentMin.sum()
+    return when {
+        sumHi <= available -> {
+            val target = tableWidth ?: return hi.toList()
+            if (target <= sumHi) return hi.toList()
+            // Grown to the book's width: the columns it doesn't size take the extra, by their content.
+            val grow = (0 until n).filter { specified[it] == null }.ifEmpty { (0 until n).toList() }
+            val weight = grow.sumOf { hi[it].toDouble() }.toFloat()
+            List(n) { c -> if (c in grow) hi[c] + (target - sumHi) * (if (weight > 0f) hi[c] / weight else 1f / grow.size) else hi[c] }
+        }
+        sumLo <= available -> List(n) { lo[it] + (hi[it] - lo[it]) * (available - sumLo) / (sumHi - sumLo) }
+        sumMin <= available -> List(n) { contentMin[it] + (lo[it] - contentMin[it]) * (available - sumMin) / (sumLo - sumMin) }
+        else -> {
+            // The cap where columns' narrowest, held to it, just fill the width.
+            var low = 0f
+            var high = contentMin.max()
+            repeat(40) {
+                val mid = (low + high) / 2
+                if (contentMin.sumOf { minOf(it, mid).toDouble() } > available) high = mid else low = mid
+            }
+            contentMin.map { minOf(it, low) }
+        }
+    }
 }
 
 /** The widest indent [text]'s paragraphs set, in pixels ([style]'s size makes an em). */

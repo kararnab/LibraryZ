@@ -105,10 +105,40 @@ class BookImage(
  * key, so a long table breaks between rows across pages. The screen sizes
  * the columns and rows for the column it has.
  */
-class BookTable(val rows: List<List<BookCell>>, val bordered: Boolean)
+class BookTable(
+    val rows: List<List<BookCell>>,
+    val bordered: Boolean,
+    /** The widths the book's `<col>`s give, column by column (null = not set). */
+    val columns: List<BookWidth?> = emptyList(),
+    /** The table's own width, if the book sets one. */
+    val width: BookWidth? = null,
+)
 
 /** One cell: its text (styled like the book's, pictures included), spanning [span] columns. */
-class BookCell(val text: AnnotatedString, val header: Boolean, val span: Int, val background: Color?)
+class BookCell(
+    val text: AnnotatedString,
+    val header: Boolean,
+    val span: Int,
+    val background: Color?,
+    /** The width the book gives the cell (`width` attribute or CSS), if any. */
+    val width: BookWidth? = null,
+)
+
+/** A width a book sets: a [fraction] of the table's (or column's) width, or [em]s of the reading text. */
+data class BookWidth(val fraction: Float = 0f, val em: Float = 0f) {
+    companion object {
+        /** A CSS `width` or HTML `width` attribute ("30%", "120" pixels, "8em"); null for auto or nonsense. */
+        fun parse(value: String?): BookWidth? {
+            val v = value?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+            if (v.endsWith("%")) {
+                val f = v.dropLast(1).trim().toFloatOrNull() ?: return null
+                return if (f > 0f) BookWidth(fraction = (f / 100f).coerceAtMost(1f)) else null
+            }
+            val em = v.toFloatOrNull()?.let { it / 16f } ?: cssEm(v) ?: return null
+            return if (em > 0f) BookWidth(em = em) else null
+        }
+    }
+}
 
 /**
  * A block the book draws a box around (a CSS background or border): its

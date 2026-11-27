@@ -89,6 +89,7 @@ internal fun ReadingSettings(
     onLayoutChange: (PageLayout) -> Unit,
     spread: Boolean,
     showBookFonts: Boolean,
+    showTables: Boolean = false,
 ) {
     if (layout != null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -128,6 +129,23 @@ internal fun ReadingSettings(
                 )
             }
             Switch(checked = prefs.bookFonts, onCheckedChange = { onChange(prefs.copy(bookFonts = it)) })
+        }
+    }
+    if (showTables) {
+        Row(
+            Modifier.fillMaxWidth().clickable { onChange(prefs.copy(fixedTables = !prefs.fixedTables)) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Fixed table columns", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Columns take the widths the book sets, or share the width evenly. " +
+                        "Off sizes them to fit their content. Long words may break either way when a table is too wide.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = prefs.fixedTables, onCheckedChange = { onChange(prefs.copy(fixedTables = it)) })
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

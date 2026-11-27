@@ -554,6 +554,7 @@ internal class BookBuilder(
         var caption: ArrayList<MarkupToken>? = null
         var captionDone: List<MarkupToken>? = null
         var nested = 0
+        val columns = ArrayList<BookWidth?>()
 
         fun rowPath() = tablePath + (row?.let(::elementOf) ?: CssElement("tr", null, emptyList()))
         fun finishCell() {
@@ -571,6 +572,7 @@ internal class BookBuilder(
                 header = s.name == "th",
                 span = (s.attrs["colspan"]?.toIntOrNull() ?: 1).coerceIn(1, 20),
                 background = background(cssCell) ?: background(rowCss) ?: background(tableCss),
+                width = widthOf(s, cssCell),
             )
             cellStart = null
             cell = null
@@ -586,6 +588,11 @@ internal class BookBuilder(
                 t is MarkupToken.Start && t.name == "table" && !t.selfClosing -> {
                     nested++
                     cell?.add(t) ?: caption?.add(t)
+                }
+                // <col>s (in a <colgroup> or not), and a <colgroup span> with none inside.
+                t is MarkupToken.Start && (t.name == "col" || (t.name == "colgroup" && t.selfClosing)) -> {
+                    val w = widthOf(t, cssOf(t, tablePath + elementOf(t)))
+                    repeat((t.attrs["span"]?.toIntOrNull() ?: 1).coerceIn(1, 20)) { columns += w }
                 }
                 t is MarkupToken.Start && t.name == "tr" -> {
                     finishCell()
@@ -618,7 +625,7 @@ internal class BookBuilder(
         }
         if (rows.isEmpty()) return
         val index = tables.size
-        tables += BookTable(rows, bordered)
+        tables += BookTable(rows, bordered, columns, widthOf(start, tableCss))
         // Each row is a one-line paragraph of its own: Android sizes a paragraph's
         // middle lines from its first, which would crop a tall row to one line of text.
         holdBreak = false
@@ -863,6 +870,10 @@ internal class BookBuilder(
         fun borderColor(css: Map<String, String>): Color? = css.entries.firstNotNullOfOrNull { (k, v) ->
             if (k.startsWith("border") && !k.contains("collapse") && !k.contains("spacing") && !k.contains("radius")) cssBackground(v) else null
         }
+
+        /** The width [t]'s CSS or `width` attribute sets (the CSS wins), if any. */
+        private fun widthOf(t: MarkupToken.Start, css: Map<String, String>): BookWidth? =
+            BookWidth.parse(css["width"]) ?: BookWidth.parse(t.attrs["width"])
 
         /** A table row's paragraph: unlike any style a block gets, so rows never join a text region. */
         val TABLE_ROW = ParagraphStyle(

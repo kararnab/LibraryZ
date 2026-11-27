@@ -18,7 +18,7 @@ class ReaderPrefsStoreTest {
     @Test
     fun keepsSettingsBetweenSessions() = runTest {
         val disk = Memory()
-        val prefs = ReaderPrefs(textSize = 22, theme = ReadingTheme.Dark, spacing = LineSpacing.Airy, width = ColumnWidth.Wide, bookFonts = false)
+        val prefs = ReaderPrefs(textSize = 22, theme = ReadingTheme.Dark, spacing = LineSpacing.Airy, width = ColumnWidth.Wide, bookFonts = false, fixedTables = true)
         ReaderPrefsStore { disk }.save(prefs)
         assertEquals(prefs, ReaderPrefsStore { disk }.load())
     }

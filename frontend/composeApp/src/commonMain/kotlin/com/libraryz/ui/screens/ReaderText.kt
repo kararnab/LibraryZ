@@ -142,6 +142,7 @@ internal fun TextReaderLayout(
             onLayoutChange = onLayoutChange,
             spread = spread,
             showBookFonts = reader.hasBookFonts,
+            showTables = reader.tables.isNotEmpty(),
         )
     }
     val reduce = LocalReduceMotion.current
@@ -407,7 +408,7 @@ private fun TextView(
             ),
         )
         // Pictures and tables fit the column, pictures most of the screen's height.
-        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts)
+        val sized = rememberSizedText(reader, min(maxWidth, prefs.width.max) - gutter * 2, maxHeight * 0.85f, style, prefs.theme, prefs.bookFonts, prefs.fixedTables)
         val emPx = with(density) { prefs.textSize.sp.toPx() }
         Box(
             modifier = Modifier.fillMaxSize().verticalScroll(scroll),
@@ -535,7 +536,7 @@ private fun TextSpreadView(
             textAlign = TextAlign.Justify,
         )
         // A picture or table row fits a page, a little under so rounding can't push it over.
-        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts)
+        val sized = rememberSizedText(reader, column, bodyHeight - 2.dp, baseStyle, theme, prefs.bookFonts, prefs.fixedTables)
         val emPx = with(density) { prefs.textSize.sp.toPx() }
         val text = sized.text
         val style = baseStyle.copy(lineHeightStyle = sized.lineHeightStyle)

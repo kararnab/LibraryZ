@@ -351,7 +351,10 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   becomes a `TextReader` like TXT. Two pages a spread, each spine document
   starts a spread on the left (`TextReader.spreadStarts` → `Spreads(leftStarts)`,
   a blank right page before it if needed); CSS page
-  breaks only start a page. Text-reader gotchas:
+  breaks only start a page. Table columns: `columnWidths` (BookText.kt),
+  automatic layout honouring the book's `<col>`/cell/table widths, only
+  words that can't fit break; `ReaderPrefs.fixedTables` switches to
+  CSS `table-layout: fixed`. Text-reader gotchas:
   - The style needs `LineHeightStyle.Mode.Minimum` when there are pictures:
     Android's default `Fixed` mode crops a tall placeholder's line (Skia
     grows it either way).
