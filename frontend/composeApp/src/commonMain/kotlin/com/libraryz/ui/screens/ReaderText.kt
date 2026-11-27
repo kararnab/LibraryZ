@@ -470,6 +470,9 @@ internal fun textPageBreaks(layout: TextLayoutResult, height: Float, pageStarts:
     )
 }
 
+/** A spread's right-hand slot left blank, so the next document starts on the left. */
+private const val BLANK_PAGE = -1
+
 /**
  * Lets the reader's key handler turn a two-page text spread, which keeps its
  * pages to itself. [TextSpreadView] fills these in while it's shown.
@@ -555,7 +558,9 @@ private fun TextSpreadView(
             return if (i >= 0) i else (-i - 2).coerceAtLeast(0)
         }
         // Two pages a spread, the end card in the slot after the last page.
-        val spreads = remember(pageCount) { Spreads(pageCount, coverAlone = false) }
+        // Each of the book's documents starts a spread, on the left.
+        val leftStarts = remember(layout, starts) { reader.spreadStarts.filter { it < text.length }.mapTo(HashSet()) { pageAt(it) } }
+        val spreads = remember(pageCount, leftStarts) { Spreads(pageCount, coverAlone = false, leftStarts = leftStarts) }
         // Empty text: straight to the end card.
         val slots = spreads.at(pageAt(anchor)).ifEmpty { listOf(pageCount) }
         val atEnd = pageCount in slots
@@ -628,7 +633,7 @@ private fun TextSpreadView(
                 Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
                     Box(Modifier.widthIn(max = 440.dp)) { end() }
                 }
-            } else slots.forEachIndexed { i, p ->
+            } else (if (slots.size == 1) slots + BLANK_PAGE else slots).forEachIndexed { i, p ->
                 if (i == 1) {
                     // The gutter: a hairline that fades out at the ends.
                     Box(
@@ -651,7 +656,9 @@ private fun TextSpreadView(
                         bottom = 20.dp,
                     ),
                 ) {
-                    if (p == pageCount) {
+                    if (p == BLANK_PAGE) {
+                        // The right-hand page before a document that starts on the left.
+                    } else if (p == pageCount) {
                         // The end card in the empty right-hand page.
                         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                             Box(Modifier.fillMaxWidth().heightIn(min = pageHeight - 48.dp), contentAlignment = Alignment.Center) {

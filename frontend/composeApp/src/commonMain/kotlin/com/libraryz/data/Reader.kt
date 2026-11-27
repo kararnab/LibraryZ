@@ -53,6 +53,13 @@ class TextReader(
     val boxes: List<BookBox> = emptyList(),
     /** Offsets in [text] where a page must start (an EPUB's documents, CSS page breaks), ascending. */
     val pageStarts: List<Int> = emptyList(),
+    /**
+     * The [pageStarts] where an EPUB's next document begins. Two pages a
+     * spread, each starts a spread on the left-hand page; when the page
+     * before it is a left-hand one, the right-hand page beside that stays
+     * blank.
+     */
+    val spreadStarts: List<Int> = emptyList(),
 ) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
@@ -163,7 +170,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes, it.pageStarts) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes, it.pageStarts, it.spreadStarts) }
         }
         else -> throw UnsupportedFormatException(format)
     }

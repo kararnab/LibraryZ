@@ -86,12 +86,15 @@ enum class PageLayout(val label: String) {
  * [coverAlone]: like a printed book, page 1 sits alone on the right, then
  * 2–3, 4–5 (even pages on the left); false pairs 1–2, 3–4 for offset scans.
  * [alone] pages (a landscape map in a portrait PDF) are shown by themselves,
- * and pairing starts again after each.
+ * and pairing starts again after each. [leftStarts] pages (an EPUB's
+ * documents) always start a spread: one that would land on the right
+ * leaves the page before it a spread of its own, beside a blank page.
  */
 class Spreads(
     val pageCount: Int,
     coverAlone: Boolean = true,
     alone: Set<Int> = emptySet(),
+    leftStarts: Set<Int> = emptySet(),
 ) {
     /** Each spread's slots, in order. Empty only for an empty book. */
     val list: List<List<Int>>
@@ -107,7 +110,7 @@ class Spreads(
                 i = 1
             }
             while (i <= end) {
-                val pair = i + 1 <= end && i !in alone && (i + 1) !in alone
+                val pair = i + 1 <= end && i !in alone && (i + 1) !in alone && (i + 1) !in leftStarts
                 out += if (pair) listOf(i, i + 1) else listOf(i)
                 i += if (pair) 2 else 1
             }

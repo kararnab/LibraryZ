@@ -165,7 +165,7 @@ class EpubTest {
         assertEquals(
             // A centered heading or rule is a paragraph region of its own: its end breaks the line, so one \n makes the blank line.
             "Hello, world!\n\nNested\n\nLine one\nline two\nLeading break\n3. three\n\n4. four\n\n• dot\n*   *   *\n" +
-                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n*   *   *\nafter\n\n• \n\n    • inner\n\n" +
+                "  keep\n  this\n\na\u00A0b & c — ’ &unknown;\n\nRule\n*   *   *\nafter\n\n• \n\n    ◦ inner\n\n" +
                     "Unclosed em\n\nNext",
             book.text.text,
         )
@@ -255,6 +255,26 @@ class EpubTest {
         )
         val text = book.text.text
         assertEquals(listOf("Two.", "Four.", "Five.").map(text::indexOf), book.pageStarts)
+        // Only the documents start a spread; the first is at the start already.
+        assertEquals(listOf(text.indexOf("Five.")), book.spreadStarts)
+    }
+
+    @Test
+    fun decodesDoublyEscapedNcxLabelsAgain() {
+        // Some books escape their NCX labels twice; the label is read as HTML once more.
+        val ncx = """<ncx><navMap>
+            <navPoint id="a"><navLabel><text>Salt &amp;amp; Pepper</text></navLabel><content src="a.xhtml"/></navPoint>
+            <navPoint id="b"><navLabel><text>&lt;i&gt;Coda&lt;/i&gt; &amp;#8212; end</text></navLabel><content src="a.xhtml#b"/></navPoint>
+            <navPoint id="c"><navLabel><text>1 &lt; 2</text></navLabel><content src="a.xhtml#c"/></navPoint>
+            </navMap></ncx>"""
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml") + item("n", "toc.ncx", "application/x-dtbncx+xml"), """<itemref idref="a"/>""", """toc="n""""),
+                "book/a.xhtml" to """<body><p>One.</p><p id="b">Two.</p><p id="c">Three.</p></body>""",
+                "book/toc.ncx" to ncx,
+            ),
+        )
+        assertEquals(listOf("Salt & Pepper", "Coda \u2014 end", "1 < 2"), book.chapters.map { it.title })
     }
 
     @Test

@@ -70,6 +70,9 @@ internal class BookBuilder(
     private var ruleNext = false
     /** Where a new page must start: each document's first block, and blocks the CSS breaks before. */
     val pageStarts = ArrayList<Int>()
+    /** The [pageStarts] where a document of the spine begins: a two-page spread starts there, on the left. */
+    val spreadStarts = ArrayList<Int>()
+    private var spreadPending = false
     /** Block pictures drawn narrower than the column, by their key (see [BookImage.widthFraction]). */
     val scaledImages = HashMap<String, BookImage>()
     // Elements being skipped (head, script, display: none…), innermost last.
@@ -100,7 +103,7 @@ internal class BookBuilder(
     private val stack = ArrayList<Open>()
     private class Span(val style: SpanStyle, val start: Int, val end: Int, val depth: Int)
     private val spans = ArrayList<Span>()
-    private val lists = ArrayList<IntArray>() // [next number], or [-1] for a bulleted list
+    private val lists = ArrayList<ListCounter>()
     private var headingOpen = false
     private val headingText = StringBuilder()
 
@@ -130,6 +133,7 @@ internal class BookBuilder(
         block()
         // Each document starts a page, as in every reader.
         pageBreakPending = true
+        spreadPending = true
         pendingAnchors += path
         run(path, tokens)
         while (stack.isNotEmpty()) closeTop()
@@ -376,18 +380,28 @@ internal class BookBuilder(
             gap = maxOf(gap, margin(name, css, top = true))
         }
         when (name) {
-            "ul" -> lists += intArrayOf(-1)
-            "ol" -> lists += intArrayOf(t.attrs["start"]?.toIntOrNull() ?: 1)
+            "ul" -> lists += ListCounter(next = 1, step = 1, ordered = false)
+            "ol" -> {
+                val reversed = "reversed" in t.attrs
+                val start = t.attrs["start"]?.trim()?.toIntOrNull() ?: if (reversed) countItems(tokens, at) else 1
+                lists += ListCounter(next = start, step = if (reversed) -1 else 1, ordered = true)
+            }
             "li" -> {
                 stack += Open(name, out.length, emptyList(), 0, true, css, element)
                 startBlock()
                 stack.removeAt(stack.lastIndex)
                 val list = lists.lastOrNull()
-                val marker = when {
-                    list == null || list[0] < 0 -> "•"
-                    else -> "${list[0]++}."
-                }
-                write("    ".repeat((lists.size - 1).coerceAtLeast(0)) + marker + " ")
+                t.attrs["value"]?.trim()?.toIntOrNull()?.let { list?.next = it }
+                val n = list?.next ?: 1
+                list?.let { it.next += it.step }
+                val ordered = list?.ordered ?: false
+                // The item's own list-style-type, else its list's: the browser's own sheet sets one
+                // on every ol/ul, so nothing further out is inherited past it.
+                val type = listStyleType(css)
+                    ?: stack.lastOrNull { it.name == "ol" || it.name == "ul" }?.let { listStyleType(it.css) }
+                    ?: defaultListStyle(ordered, bulletDepth = (stack.count { it.name == "ul" } - 1).coerceAtLeast(0))
+                val marker = listMarker(type, n, ordered).orEmpty()
+                write("    ".repeat((lists.size - 1).coerceAtLeast(0)) + marker)
                 holdBreak = true
             }
             "pre" -> preDepth++
@@ -722,6 +736,8 @@ internal class BookBuilder(
         if (!pageBreakPending) return
         pageBreakPending = false
         if (out.length > 0 && pageStarts.lastOrNull() != out.length) pageStarts += out.length
+        if (spreadPending && out.length > 0) spreadStarts += out.length
+        spreadPending = false
     }
 
     private fun closeRegion() {

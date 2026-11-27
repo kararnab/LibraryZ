@@ -41,6 +41,18 @@ class SpreadTest {
     }
 
     @Test
+    fun aDocumentStartsASpreadOnTheLeft() {
+        // Documents start on pages 3 and 6 (0-based): page 2 would pair with 3, so it stands
+        // alone (beside a blank page); 6 falls on the left already.
+        val s = Spreads(9, coverAlone = false, leftStarts = setOf(3, 6))
+        assertEquals(listOf(listOf(0, 1), listOf(2), listOf(3, 4), listOf(5), listOf(6, 7), listOf(8, 9)), s.list)
+        assertEquals(3, s.turn(2, 1))
+        assertEquals(2, s.turn(3, -1))
+        // A document starting on a left-hand page changes nothing.
+        assertEquals(Spreads(9, coverAlone = false).list, Spreads(9, coverAlone = false, leftStarts = setOf(2, 4)).list)
+    }
+
+    @Test
     fun outOfRangePagesClamp() {
         assertEquals(listOf(0), Spreads(10).at(-1))
         assertEquals(listOf(9, 10), Spreads(10).at(99))

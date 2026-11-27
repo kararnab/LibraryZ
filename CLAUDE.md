@@ -348,7 +348,10 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   `TextSpreadView`), `ReaderControls.kt` (settings, contents, end card).
   EPUB is pure commonMain: `data/Zip.kt`, `Markup.kt`, `Css.kt`, `Epub.kt`
   (parse), `EpubToc.kt` (contents), `EpubBuilder.kt` (`BookBuilder`). It
-  becomes a `TextReader` like TXT. Text-reader gotchas:
+  becomes a `TextReader` like TXT. Two pages a spread, each spine document
+  starts a spread on the left (`TextReader.spreadStarts` → `Spreads(leftStarts)`,
+  a blank right page before it if needed); CSS page
+  breaks only start a page. Text-reader gotchas:
   - The style needs `LineHeightStyle.Mode.Minimum` when there are pictures:
     Android's default `Fixed` mode crops a tall placeholder's line (Skia
     grows it either way).

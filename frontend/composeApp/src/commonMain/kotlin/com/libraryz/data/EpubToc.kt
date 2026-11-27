@@ -58,11 +58,20 @@ private fun ncxToc(xml: String, dir: String): List<TocEntry> {
             t is MarkupToken.End && t.name == "text" -> inText = false
             t is MarkupToken.Text && inText && depth > 0 -> label.append(t.text)
             t is MarkupToken.Start && t.name == "content" && depth > 0 ->
-                t.attrs["src"]?.let { out += tocEntry(label.toString(), it, dir, depth - 1) }
+                t.attrs["src"]?.let { out += tocEntry(htmlText(label.toString()), it, dir, depth - 1) }
         }
     }
     return out.filter { it.title.isNotEmpty() }
 }
+
+/**
+ * An NCX label read once more as HTML: books that escape
+ * their labels twice (`&amp;amp;`, `&lt;i&gt;Title&lt;/i&gt;`) show `&` and
+ * `Title`, not the escapes. Tags are dropped, entities decoded a second time.
+ */
+internal fun htmlText(label: String): String =
+    if ('&' !in label && '<' !in label) label
+    else markupTokens(label).filterIsInstance<MarkupToken.Text>().joinToString("") { it.text }
 
 private fun tocEntry(label: String, href: String, dir: String, depth: Int) = TocEntry(
     title = label.collapseWhitespace(),
