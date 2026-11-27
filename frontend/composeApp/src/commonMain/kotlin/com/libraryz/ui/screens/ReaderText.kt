@@ -96,6 +96,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.ui.graphics.TransformOrigin
 import com.libraryz.ui.components.bookBoxes
+import com.libraryz.ui.components.pageText
 import com.libraryz.ui.components.prefetchImages
 import com.libraryz.ui.components.rememberSizedText
 import kotlinx.coroutines.launch
@@ -444,8 +445,9 @@ private fun TextView(
  *   only a placeholder where it starts, and read as empty those lines looked
  *   blank, so they were skipped at the top of a page.
  */
-internal fun textPageBreaks(layout: TextLayoutResult, height: Float): List<Int> {
+internal fun textPageBreaks(layout: TextLayoutResult, height: Float, pageStarts: List<Int> = emptyList()): List<Int> {
     val text = layout.layoutInput.text.text
+    val forced = pageStarts.filter { it < text.length }.mapTo(HashSet()) { layout.getLineForOffset(it) }
     // The highest and lowest drawn edges of each line's placeholders.
     val drawnTop = HashMap<Int, Float>()
     val drawnBottom = HashMap<Int, Float>()
@@ -460,6 +462,7 @@ internal fun textPageBreaks(layout: TextLayoutResult, height: Float): List<Int> 
         top = { line -> minOf(layout.getLineTop(line), drawnTop[line] ?: Float.MAX_VALUE) },
         bottom = { line -> maxOf(layout.getLineBottom(line), drawnBottom[line] ?: 0f) },
         height = height,
+        forced = { it in forced },
         blank = { line ->
             val end = if (line + 1 < layout.lineCount) layout.getLineStart(line + 1) else text.length
             text.substring(layout.getLineStart(line), end).isBlank()
@@ -541,7 +544,7 @@ private fun TextSpreadView(
         val layout = remember(text, style, columnPx) {
             measurer.measure(text, style, placeholders = sized.placeholders, constraints = Constraints(maxWidth = columnPx))
         }
-        val starts = remember(layout, bodyPx) { textPageBreaks(layout, bodyPx) }
+        val starts = remember(layout, bodyPx) { textPageBreaks(layout, bodyPx, reader.pageStarts) }
         val pageCount = starts.size
         fun startOf(p: Int): Int = if (p >= pageCount) text.length else layout.getLineStart(starts[p])
         fun endOf(p: Int): Int = if (p + 1 >= pageCount) text.length else startOf(p + 1)
@@ -672,7 +675,7 @@ private fun TextSpreadView(
                             var pageLayout by remember(p, text) { mutableStateOf<TextLayoutResult?>(null) }
                             // Same width as the measured column, so lines break where they did there.
                             Text(
-                                text.subSequence(startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
+                                pageText(text, startOf(p), trimEnd(text.text, startOf(p), endOf(p))),
                                 style = style,
                                 inlineContent = sized.inlineContent,
                                 onTextLayout = { pageLayout = it },

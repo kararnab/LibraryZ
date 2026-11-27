@@ -45,3 +45,7 @@ Thumbs.db
 
 # Raw k6 summaries from scripts/load/run.sh (docs/load-testing.md has the numbers)
 scripts/load/results/
+
+# Android release builds (signed APKs land here)
+frontend/androidApp/release/
+*.apk

@@ -34,12 +34,14 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.min
+import com.libraryz.data.BookBox
 import com.libraryz.data.BookCell
 import com.libraryz.data.BookImage
 import com.libraryz.data.BookTable
@@ -168,7 +171,7 @@ private fun imagePlaceholder(image: BookImage, maxWidth: Dp, maxHeight: Dp, dens
         )
     }
     return with(density) {
-        var w = min(maxWidth, image.width.dp)
+        var w = min(maxWidth * image.widthFraction, image.width.dp)
         var h = w * image.height.toFloat() / image.width.toFloat()
         if (h > maxHeight) {
             w *= maxHeight / h
@@ -235,8 +238,10 @@ internal fun layoutTable(
                     constraints = Constraints(maxWidth = available.roundToInt().coerceAtLeast(1)),
                     placeholders = placeholdersOf(texts[r][i], content),
                 ).multiParagraph.intrinsics
-                minW[c] = max(minW[c], m.minIntrinsicWidth + pad)
-                maxW[c] = max(maxW[c], m.maxIntrinsicWidth + pad)
+                // Intrinsic widths leave out text indents (a box's padding, the book's margins).
+                val indent = indentPx(texts[r][i], style)
+                minW[c] = max(minW[c], m.minIntrinsicWidth + indent + pad)
+                maxW[c] = max(maxW[c], m.maxIntrinsicWidth + indent + pad)
             }
             c += cell.span
         }
@@ -272,6 +277,16 @@ internal fun layoutTable(
         RowLayout(min(height, maxHeight), cells)
     }
     TableLayout(widths, rows)
+}
+
+/** The widest indent [text]'s paragraphs set, in pixels ([style]'s size makes an em). */
+private fun Density.indentPx(text: AnnotatedString, style: TextStyle): Float {
+    fun px(u: TextUnit): Float = when {
+        u.isEm -> u.value * style.fontSize.toPx()
+        u.isSp -> u.toPx()
+        else -> 0f
+    }
+    return text.paragraphStyles.maxOfOrNull { r -> r.item.textIndent?.let { max(px(it.firstLine), px(it.restLine)) } ?: 0f } ?: 0f
 }
 
 /** One table row in its placeholder: cells side by side, the table centered in the column. */
@@ -512,6 +527,27 @@ suspend fun prefetchImages(reader: TextReader, start: Int, end: Int) {
 }
 
 /**
+ * The part of [text] from [start] to [end] that one page shows. A page that
+ * starts partway through a paragraph continues it, so its first line takes
+ * the paragraph's other lines' indent, not the first line's.
+ */
+fun pageText(text: AnnotatedString, start: Int, end: Int): AnnotatedString {
+    val slice = text.subSequence(start, end)
+    if (start == 0 || text[start - 1] == '\n' || text.paragraphStyles.any { it.start == start }) return slice
+    val region = slice.paragraphStyles.firstOrNull { it.start == 0 && it.end > 0 } ?: return slice
+    val indent = region.item.textIndent?.takeIf { it.firstLine != it.restLine } ?: return slice
+    val firstEnd = slice.text.indexOf('\n').let { if (it < 0) slice.length else it + 1 }.coerceAtMost(region.end)
+    // Split, not nested: paragraph styles stay non-overlapping.
+    return slice.flatMapAnnotations { r ->
+        if (r != region) return@flatMapAnnotations listOf(r)
+        listOfNotNull(
+            AnnotatedString.Range(region.item.copy(textIndent = TextIndent(indent.restLine, indent.restLine)), 0, firstEnd),
+            AnnotatedString.Range(region.item, firstEnd, region.end).takeIf { firstEnd < region.end },
+        )
+    }
+}
+
+/**
  * Draws [reader]'s boxes ([com.libraryz.data.BookBox]) behind the text laid
  * out in [layout], which shows the reader's text from [from] (a spread page
  * starts mid-book). A box spans its lines, from its left edge ([emPx] a
@@ -530,6 +566,23 @@ fun Modifier.bookBoxes(reader: TextReader, from: Int, layout: () -> TextLayoutRe
             val start = (b.start - from).coerceAtLeast(0)
             val end = (b.end - from).coerceAtMost(length)
             if (end <= start) continue
+            val line = b.borderColor?.let { readableInk(it, theme.background).takeIf(Color::isSpecified) } ?: theme.muted
+            val stroke = 1.dp.toPx()
+            if (b.rule) {
+                val first = l.getLineForOffset(start)
+                val mid = (l.getLineTop(first) + l.getLineBottom(first)) / 2
+                val left = b.left * emPx + b.leftFraction * size.width
+                val right = size.width * (1f - b.rightFraction)
+                if (right > left) {
+                    // Above and below: a double rule, two strokes apart.
+                    val ys = listOfNotNull(
+                        mid.takeIf { b.sides and BookBox.TOP != 0 },
+                        (mid + 2 * stroke).takeIf { b.sides and BookBox.BOTTOM != 0 },
+                    )
+                    ys.forEach { drawLine(line, Offset(left, it), Offset(right, it), stroke) }
+                }
+                continue
+            }
             val top = l.getLineTop(l.getLineForOffset(start)) - pad / 2
             val bottom = l.getLineBottom(l.getLineForOffset(end - 1)) + pad / 2
             val left = b.left * emPx - pad
@@ -538,8 +591,15 @@ fun Modifier.bookBoxes(reader: TextReader, from: Int, layout: () -> TextLayoutRe
                 drawRect(it, Offset(left, top), Size(right - left, bottom - top))
             }
             if (b.border) {
-                val line = b.borderColor?.let { readableInk(it, theme.background).takeIf(Color::isSpecified) } ?: theme.muted
-                drawRect(line, Offset(left, top), Size(right - left, bottom - top), style = Stroke(1.dp.toPx()))
+                if (b.sides == BookBox.ALL) {
+                    drawRect(line, Offset(left, top), Size(right - left, bottom - top), style = Stroke(stroke))
+                } else {
+                    // Only the sides the book borders: a bar down the left, a line under a heading.
+                    if (b.sides and BookBox.TOP != 0) drawLine(line, Offset(left, top), Offset(right, top), stroke)
+                    if (b.sides and BookBox.BOTTOM != 0) drawLine(line, Offset(left, bottom), Offset(right, bottom), stroke)
+                    if (b.sides and BookBox.LEFT != 0) drawLine(line, Offset(left, top), Offset(left, bottom), stroke)
+                    if (b.sides and BookBox.RIGHT != 0) drawLine(line, Offset(right, top), Offset(right, bottom), stroke)
+                }
             }
         }
     }

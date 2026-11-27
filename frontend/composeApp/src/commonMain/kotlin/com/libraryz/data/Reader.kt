@@ -51,6 +51,8 @@ class TextReader(
     val tables: List<BookTable> = emptyList(),
     /** Blocks the book draws a box around, in text order. */
     val boxes: List<BookBox> = emptyList(),
+    /** Offsets in [text] where a page must start (an EPUB's documents, CSS page breaks), ascending. */
+    val pageStarts: List<Int> = emptyList(),
 ) : Reader {
     /** Plain text, with chapters found from its headings. */
     constructor(text: String) : this(AnnotatedString(text), chaptersOf(text))
@@ -79,9 +81,14 @@ class BookImage(
     val block: Boolean,
     /** SVG, rasterized at the size it's drawn; else a bitmap format. */
     val vector: Boolean = false,
+    /** A block picture's widest, as a fraction of the column (the book's width and side margins). */
+    val widthFraction: Float = 1f,
     private val load: () -> ByteArray,
 ) {
     fun bytes(): ByteArray = load()
+
+    /** The same picture, at most [fraction] of the column wide. */
+    fun scaled(fraction: Float) = BookImage(width, height, alt, block, vector, fraction, load)
 }
 
 /**
@@ -100,8 +107,33 @@ class BookCell(val text: AnnotatedString, val header: Boolean, val span: Int, va
  * A block the book draws a box around (a CSS background or border): its
  * lines from [start] until [end] in the text, the box's left edge [left] ems
  * in from the column's. Its text is padded in from the edge already.
+ * Only the [sides] the book borders are drawn ([BookBox.TOP] and so on).
+ *
+ * A [rule] is a blank block with only a top or bottom border (a book's
+ * decorative line): one line across the middle of its single line, inset
+ * by [left] ems plus [leftFraction] of the column, and [rightFraction] of it
+ * from the right.
  */
-class BookBox(val start: Int, val end: Int, val left: Float, val background: Color?, val border: Boolean, val borderColor: Color?)
+class BookBox(
+    val start: Int,
+    val end: Int,
+    val left: Float,
+    val background: Color?,
+    val border: Boolean,
+    val borderColor: Color?,
+    val sides: Int = ALL,
+    val rule: Boolean = false,
+    val leftFraction: Float = 0f,
+    val rightFraction: Float = 0f,
+) {
+    companion object {
+        const val TOP = 1
+        const val RIGHT = 2
+        const val BOTTOM = 4
+        const val LEFT = 8
+        const val ALL = TOP or RIGHT or BOTTOM or LEFT
+    }
+}
 
 const val IMAGE_TAG = "libraryz.image"
 const val TABLE_TAG = "libraryz.table"
@@ -131,7 +163,7 @@ suspend fun openReader(bytes: ByteArray, format: String): Reader =
         "PDF" -> openPdfReader(bytes)
         "TXT" -> TextReader(bytes.decodeToString())
         "EPUB" -> withContext(Dispatchers.Default) {
-            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes) }
+            parseEpub(bytes).let { TextReader(it.text, it.chapters, it.images, it.tables, it.boxes, it.pageStarts) }
         }
         else -> throw UnsupportedFormatException(format)
     }

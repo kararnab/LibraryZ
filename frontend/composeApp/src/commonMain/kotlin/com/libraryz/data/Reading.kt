@@ -195,7 +195,7 @@ fun pagesLeftLabel(left: Int, inChapter: Boolean): String {
 /**
  * Splits laid-out lines into pages [height] tall: the first line of each
  * page. Blank lines aren't left at the top of a page. A line taller than a
- * page still gets one to itself.
+ * page still gets one to itself. A [forced] line starts a page whatever room is left.
  */
 fun pageBreaks(
     lineCount: Int,
@@ -203,6 +203,7 @@ fun pageBreaks(
     bottom: (Int) -> Float,
     height: Float,
     blank: (Int) -> Boolean = { false },
+    forced: (Int) -> Boolean = { false },
 ): List<Int> {
     val starts = ArrayList<Int>()
     var line = 0
@@ -212,7 +213,7 @@ fun pageBreaks(
         starts += line
         val pageTop = top(line)
         var next = line + 1
-        while (next < lineCount && bottom(next) - pageTop <= height) next++
+        while (next < lineCount && !forced(next) && bottom(next) - pageTop <= height) next++
         line = next
     }
     if (starts.isEmpty() && lineCount > 0) starts += 0

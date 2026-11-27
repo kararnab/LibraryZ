@@ -8,6 +8,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.em
+import com.libraryz.ui.components.pageText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -109,9 +110,85 @@ class EpubStyleTest {
             "<p>One.</p><p>Two.</p><p class='x'>Three.</p><div class='poem'><span class='l'>Line a</span><span class='l'>Line b</span></div>",
             css = "p { margin: 0; text-indent: 1em } p.x { margin-top: 1em } span.l { display: block }",
         ).text
-        // Three. ends an indented region, so its trailing \n is the blank line before the poem.
-        assertEquals("One.\nTwo.\n\nThree.\nLine a\nLine b", text.text)
+        // Each indented paragraph is a region of its own (Skia indents only a region's first line),
+        // so the region's end is the line break; Three. carries its trailing \n, the blank line before the poem.
+        assertEquals("One.Two.\nThree.\nLine a\nLine b", text.text)
         assertEquals(TextIndent(1.em, 0.em), text.paragraphAt("Two")?.textIndent)
+        listOf("One.", "Two.", "Three.").forEach { p ->
+            assertTrue(text.paragraphStyles.any { it.start == text.text.indexOf(p) }, "$p starts a paragraph")
+        }
+    }
+
+    @Test
+    fun aPageStartingMidParagraphDoesNotIndentItsFirstLine() {
+        val text = book("<p>One two three.</p><p>Four five.</p>", css = "p { margin: 0; text-indent: 2em }").text
+        fun indentAt(page: AnnotatedString) = page.paragraphStyles.first { it.start == 0 }.item.textIndent
+        // From "two": the rest of One's paragraph, as its other lines are.
+        assertEquals(TextIndent(0.em, 0.em), indentAt(pageText(text, text.text.indexOf("two"), text.length)))
+        // From a paragraph's start, its indent stays.
+        assertEquals(TextIndent(2.em, 0.em), indentAt(pageText(text, text.text.indexOf("Four"), text.length)))
+    }
+
+    @Test
+    fun drawsABlankBlockWithATopBorderAsARule() {
+        val book = book(
+            """<h1>Heading</h1><div class="wide">&#160;</div><div class="narrow"></div><h1>Title</h1>""",
+            css = """
+                div.wide { line-height: 0; border-top-style: solid; border-top-width: 1px; margin-left: 30%; margin-right: 30%; margin-bottom: 0 }
+                div.narrow { border-top: 1px solid; margin: 0 44% 1em }
+            """.trimIndent(),
+        )
+        val (wide, narrow) = book.boxes
+        listOf(wide, narrow).forEach {
+            assertTrue(it.rule)
+            assertEquals(BookBox.TOP, it.sides)
+            assertEquals("\u00A0", book.text.text.substring(it.start, it.end))
+        }
+        assertEquals(0.3f, wide.leftFraction, 1e-4f)
+        assertEquals(0.3f, wide.rightFraction, 1e-4f)
+        assertEquals(0.44f, narrow.leftFraction, 1e-4f)
+        assertEquals(0.44f, narrow.rightFraction, 1e-4f)
+    }
+
+    @Test
+    fun drawsOnlyTheSidesTheBookBorders() {
+        val book = book(
+            """<div class="bar"><p>Quoted.</p></div><div class="none"><p>Plain.</p></div>""",
+            css = ".bar { border: none; border-left: 3px solid #888 } .none { border: 1px none; border-color: red }",
+        )
+        val box = book.boxes.single()
+        assertEquals(BookBox.LEFT, box.sides)
+        assertTrue(box.border)
+        assertTrue(!box.rule)
+        // One value per side in the width / style shorthands.
+        fun sidesOf(css: String) = BookBuilder.borderSides(Stylesheet.EMPTY.declared(listOf(CssElement("div", null, emptyList())), css))
+        assertEquals(BookBox.BOTTOM, sidesOf("border-style: solid; border-width: 0 0 1px 0"))
+        assertEquals(BookBox.TOP or BookBox.BOTTOM, sidesOf("border-width: 1px; border-style: solid none"))
+        assertEquals(BookBox.ALL, sidesOf("border: 1px solid"))
+    }
+
+    @Test
+    fun followsTextTransform() {
+        val text = book(
+            """<h1 class="up">Rivers and <span>Hills</span></h1><p class="low">MIXED Case</p><p class="cap">two words</p>""",
+            css = ".up { text-transform: uppercase } .low { text-transform: lowercase } .cap { text-transform: capitalize }",
+        )
+        assertEquals("RIVERS AND HILLS\nmixed case\n\nTwo Words", text.text.text)
+        // The contents keep the book's own words.
+        assertEquals("Rivers and Hills", text.chapters.single().title)
+    }
+
+    @Test
+    fun anHrTheBookHidesIsOnlyItsMargins() {
+        val text = book(
+            """<p>Before.</p><hr class="break"/><div class="break">—</div><p>After.</p>""",
+            css = "p { margin: 0 } hr.break { display: block; border: none; margin: 0 } div.break { margin: 1em 0; text-align: center }",
+        ).text
+        assertTrue("*" !in text.text, text.text)
+        assertEquals(TextAlign.Center, text.paragraphAt("—")?.textAlign)
+        // Drawn by its background instead of a border: still a visible break.
+        val filled = book("<p>Before.</p><hr/><p>After.</p>", css = "hr { border: 0; height: 1px; background-color: #333 }").text
+        assertTrue("*" in filled.text, filled.text)
     }
 
     @Test

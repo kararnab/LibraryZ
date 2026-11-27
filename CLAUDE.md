@@ -195,8 +195,11 @@ macOS host; don't try to invoke `:composeApp:link*FrameworkIos*` here.
   **no presigned URLs** — fine at the current scale (public downloads,
   500 MiB cap). Current `golang.org/x/*`, pdfcpu, goose and
   `kararnab/iam` releases require **go 1.26** (the go.mod directive); the Docker builder
-  (`golang:1.27-alpine`) and CI build with Go 1.27. pdfcpu ≥0.16 takes a
-  `context.Context` on `api.ReadContext`/`WriteContext`.
+  (`golang:1.27.4-alpine`) and CI build with Go 1.27.4, the `toolchain` line in go.mod.
+  pdfcpu ≥0.16 takes a `context.Context` on `api.ReadContext`/`WriteContext`.
+  **Dependency age: a version may be added or updated only if it was
+  published at least 7 days earlier** (`docs/dependency-age-policy.md`;
+  `scripts/check-dep-age.sh` checks Go, and CI runs it on PRs).
   **Compose runs RustFS, not MinIO** (`rustfs/rustfs`, pinned): MinIO stopped
   publishing images and archived its repo in 2026, so `minio/minio` doesn't
   pull. The client library is still `minio-go` — it's a generic S3 client.

@@ -245,6 +245,34 @@ class EpubTest {
     }
 
     @Test
+    fun startsEachDocumentAndCssPageBreakOnANewPage() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml") + item("b", "b.xhtml"), """<itemref idref="a"/><itemref idref="b"/>"""),
+                "book/a.xhtml" to """<body><p>One.</p><p style="page-break-before: always">Two.</p><p style="break-after: page">Three.</p><p>Four.</p></body>""",
+                "book/b.xhtml" to """<body><p>Five.</p></body>""",
+            ),
+        )
+        val text = book.text.text
+        assertEquals(listOf("Two.", "Four.", "Five.").map(text::indexOf), book.pageStarts)
+    }
+
+    @Test
+    fun drawsAPictureAsWideAsItsBlocksMarginsLeave() {
+        val book = parseEpub(
+            epub(
+                opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""),
+                "book/a.xhtml" to """<body><div style="margin: 0 20%"><img style="width: 100%" src="p.png"/></div><p><img src="p.png"/></p></body>""",
+                "book/p.png" to png(800, 600),
+            ),
+        )
+        val marks = book.text.getStringAnnotations(IMAGE_TAG, 0, book.text.length).map { it.item }
+        assertEquals(listOf("book/p.png#w60", "book/p.png"), marks)
+        assertEquals(0.6f, book.images.getValue("book/p.png#w60").widthFraction, 1e-4f)
+        assertEquals(1f, book.images.getValue("book/p.png").widthFraction)
+    }
+
+    @Test
     fun opensABookOfPicturesOnly() {
         val book = parseEpub(
             epub(opf(item("a", "a.xhtml"), """<itemref idref="a"/>"""), "book/a.xhtml" to """<body><img src="p.png"/></body>""", "book/p.png" to png(10, 10)),
